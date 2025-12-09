@@ -11,6 +11,7 @@ from flask import Flask, render_template, request, jsonify, Response, stream_wit
 
 from ..pipeline import LocalRAGPipeline
 from ..core.image import ImageGenerator
+from ..core.metadata import MetadataManager
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +34,9 @@ class FlaskChatbotUI:
 
         # Initialize image generator
         self._image_generator = ImageGenerator(pipeline._settings)
+
+        # Initialize metadata manager
+        self._metadata_manager = MetadataManager(config_dir="data/config")
 
         # Ensure directories exist
         self._data_dir.mkdir(parents=True, exist_ok=True)
@@ -371,6 +375,11 @@ High quality, business presentation style"""
             if not files or files[0].filename == "":
                 return jsonify({"success": False, "error": "No files selected"})
 
+            # Get metadata from form
+            it_practice = request.form.get("it_practice", "")
+            offering_name = request.form.get("offering_name", "")
+            offering_id = request.form.get("offering_id", "")
+
             uploaded_files = []
             try:
                 for file in files:
@@ -379,24 +388,34 @@ High quality, business presentation style"""
                         filepath = self._upload_dir / file.filename
                         file.save(str(filepath))
                         uploaded_files.append(str(filepath))
-                        logger.info(f"Uploaded: {file.filename}")
+                        logger.info(f"Uploaded: {file.filename} [Practice: {it_practice}, Offering: {offering_name}]")
 
-                # Process documents
+                # Process documents with metadata
                 if uploaded_files:
-                    self._pipeline.store_nodes(input_files=uploaded_files)
+                    self._pipeline.store_nodes(
+                        input_files=uploaded_files,
+                        it_practice=it_practice if it_practice else None,
+                        offering_name=offering_name if offering_name else None,
+                        offering_id=offering_id if offering_id else None
+                    )
                     self._pipeline.set_chat_mode()
                     # Track processed files
                     for f in uploaded_files:
                         filename = os.path.basename(f)
                         if filename not in self._processed_files:
                             self._processed_files.append(filename)
-                    logger.info(f"Processed {len(uploaded_files)} documents")
+                    logger.info(f"Processed {len(uploaded_files)} documents with metadata")
 
                 return jsonify({
                     "success": True,
                     "count": len(uploaded_files),
                     "files": [os.path.basename(f) for f in uploaded_files],
-                    "all_files": self._processed_files
+                    "all_files": self._processed_files,
+                    "metadata": {
+                        "it_practice": it_practice,
+                        "offering_name": offering_name,
+                        "offering_id": offering_id
+                    }
                 })
 
             except Exception as e:
@@ -561,6 +580,138 @@ High quality, business presentation style"""
 
             except Exception as e:
                 logger.error(f"Error clearing images: {e}")
+                return jsonify({"success": False, "error": str(e)})
+
+        # === Sales Enablement Metadata Endpoints ===
+
+        @self._app.route("/api/practices", methods=["GET"])
+        def get_practices():
+            """Get all IT practices."""
+            try:
+                practices = self._metadata_manager.get_all_practices()
+                return jsonify({
+                    "success": True,
+                    "practices": practices,
+                    "count": len(practices)
+                })
+            except Exception as e:
+                logger.error(f"Error getting practices: {e}")
+                return jsonify({"success": False, "error": str(e)})
+
+        @self._app.route("/api/offerings", methods=["GET"])
+        def get_offerings():
+            """Get all offerings grouped by practice."""
+            try:
+                all_offerings = self._metadata_manager.get_all_offerings()
+                practices = self._metadata_manager.get_all_practices()
+
+                # Group offerings by practice
+                grouped = {}
+                for practice in practices:
+                    practice_offerings = self._metadata_manager.get_offerings_by_practice(practice)
+                    grouped[practice] = practice_offerings
+
+                return jsonify({
+                    "success": True,
+                    "offerings": all_offerings,
+                    "grouped": grouped,
+                    "count": len(all_offerings)
+                })
+            except Exception as e:
+                logger.error(f"Error getting offerings: {e}")
+                return jsonify({"success": False, "error": str(e)})
+
+        @self._app.route("/api/practices/<practice_name>/offerings", methods=["GET"])
+        def get_practice_offerings(practice_name):
+            """Get offerings for a specific practice."""
+            try:
+                offerings = self._metadata_manager.get_offerings_by_practice(practice_name)
+                return jsonify({
+                    "success": True,
+                    "practice": practice_name,
+                    "offerings": offerings,
+                    "count": len(offerings)
+                })
+            except Exception as e:
+                logger.error(f"Error getting practice offerings: {e}")
+                return jsonify({"success": False, "error": str(e)})
+
+        @self._app.route("/api/practices", methods=["POST"])
+        def add_practice():
+            """Add a new IT practice."""
+            try:
+                data = request.json
+                practice_name = data.get("name", "")
+
+                if not practice_name:
+                    return jsonify({"success": False, "error": "Practice name required"})
+
+                success = self._metadata_manager.add_practice(practice_name)
+
+                if success:
+                    return jsonify({
+                        "success": True,
+                        "practice": practice_name
+                    })
+                else:
+                    return jsonify({
+                        "success": False,
+                        "error": "Practice already exists or invalid name"
+                    })
+
+            except Exception as e:
+                logger.error(f"Error adding practice: {e}")
+                return jsonify({"success": False, "error": str(e)})
+
+        @self._app.route("/api/offerings", methods=["POST"])
+        def add_offering():
+            """Add a new offering."""
+            try:
+                data = request.json
+                practice = data.get("practice", "")
+                offering_name = data.get("name", "")
+                description = data.get("description", "")
+
+                if not practice or not offering_name:
+                    return jsonify({
+                        "success": False,
+                        "error": "Practice and offering name required"
+                    })
+
+                offering_id = self._metadata_manager.add_offering(
+                    practice=practice,
+                    offering_name=offering_name,
+                    description=description
+                )
+
+                if offering_id:
+                    return jsonify({
+                        "success": True,
+                        "offering_id": offering_id,
+                        "offering_name": offering_name,
+                        "practice": practice
+                    })
+                else:
+                    return jsonify({
+                        "success": False,
+                        "error": "Failed to add offering (practice may not exist or offering already exists)"
+                    })
+
+            except Exception as e:
+                logger.error(f"Error adding offering: {e}")
+                return jsonify({"success": False, "error": str(e)})
+
+        @self._app.route("/api/metadata/stats", methods=["GET"])
+        def get_metadata_stats():
+            """Get metadata statistics."""
+            try:
+                stats = self._metadata_manager.get_statistics()
+                return jsonify({
+                    "success": True,
+                    "stats": stats
+                })
+            except Exception as e:
+                logger.error(f"Error getting stats: {e}")
                 return jsonify({"success": False, "error": str(e)})
 
     def run(self, host: str = "0.0.0.0", port: int = 5000, debug: bool = False):
