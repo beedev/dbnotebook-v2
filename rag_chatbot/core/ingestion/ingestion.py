@@ -3,6 +3,7 @@ import re
 import logging
 import hashlib
 import pickle
+from datetime import datetime
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, List, Optional
@@ -247,14 +248,42 @@ class LocalDataIngestion:
             secondary_chunking_regex=self._setting.ingestion.chunking_regex
         )
 
+    def _calculate_file_hash(self, file_path: str) -> str:
+        """Calculate MD5 hash of file contents for duplicate detection."""
+        try:
+            hash_md5 = hashlib.md5()
+            with open(file_path, "rb") as f:
+                for chunk in iter(lambda: f.read(4096), b""):
+                    hash_md5.update(chunk)
+            return hash_md5.hexdigest()
+        except Exception as e:
+            logger.warning(f"Error calculating hash for {file_path}: {e}")
+            return ""
+
     def _process_single_file(
         self,
         input_file: str,
         embed_nodes: bool = True,
-        embed_model: Any | None = None
+        embed_model: Any | None = None,
+        it_practice: Optional[str] = None,
+        offering_name: Optional[str] = None,
+        offering_id: Optional[str] = None
     ) -> tuple[str, List[BaseNode]]:
-        """Process a single file and return (filename, nodes)."""
+        """Process a single file and return (filename, nodes).
+
+        Args:
+            input_file: Path to the file
+            embed_nodes: Whether to embed nodes
+            embed_model: Embedding model to use
+            it_practice: IT Practice classification
+            offering_name: Offering name
+            offering_id: Unique offering ID
+
+        Returns:
+            Tuple of (filename, nodes)
+        """
         file_name = Path(input_file).name
+        file_path = Path(input_file)
 
         # Check memory cache first
         if file_name in self._node_store:
@@ -275,10 +304,31 @@ class LocalDataIngestion:
 
         filtered_text = self._processor.filter_text(raw_text)
 
+        # Calculate file metadata
+        file_hash = self._calculate_file_hash(input_file)
+        file_size = file_path.stat().st_size if file_path.exists() else 0
+        upload_timestamp = datetime.now().isoformat()
+
+        # Create enhanced metadata
+        metadata = {
+            "file_name": file_name,
+            "file_hash": file_hash,
+            "file_size": file_size,
+            "upload_timestamp": upload_timestamp,
+        }
+
+        # Add Sales Enablement metadata if provided
+        if it_practice:
+            metadata["it_practice"] = it_practice
+        if offering_name:
+            metadata["offering_name"] = offering_name
+        if offering_id:
+            metadata["offering_id"] = offering_id
+
         # Create document and split into nodes
         document = Document(
             text=filtered_text.strip(),
-            metadata={"file_name": file_name}
+            metadata=metadata
         )
 
         nodes = self._splitter([document], show_progress=False)
@@ -302,9 +352,24 @@ class LocalDataIngestion:
         self,
         input_files: list[str],
         embed_nodes: bool = True,
-        embed_model: Any | None = None
+        embed_model: Any | None = None,
+        it_practice: Optional[str] = None,
+        offering_name: Optional[str] = None,
+        offering_id: Optional[str] = None
     ) -> List[BaseNode]:
-        """Process multiple files with parallel execution."""
+        """Process multiple files with parallel execution and enhanced metadata.
+
+        Args:
+            input_files: List of file paths to process
+            embed_nodes: Whether to embed nodes
+            embed_model: Embedding model to use
+            it_practice: IT Practice classification for all files
+            offering_name: Offering name for all files
+            offering_id: Unique offering ID for all files
+
+        Returns:
+            List of processed nodes with enhanced metadata
+        """
         return_nodes: List[BaseNode] = []
         self._ingested_file = []
 
@@ -314,6 +379,13 @@ class LocalDataIngestion:
         if embed_nodes:
             Settings.embed_model = embed_model or Settings.embed_model
 
+        # Log metadata info
+        if it_practice or offering_name:
+            logger.info(
+                f"Processing {len(input_files)} files with metadata: "
+                f"IT Practice='{it_practice}', Offering='{offering_name}'"
+            )
+
         # Process files in parallel
         with ThreadPoolExecutor(max_workers=self._max_workers) as executor:
             futures = {
@@ -321,7 +393,10 @@ class LocalDataIngestion:
                     self._process_single_file,
                     input_file,
                     embed_nodes,
-                    embed_model
+                    embed_model,
+                    it_practice,
+                    offering_name,
+                    offering_id
                 ): input_file
                 for input_file in input_files
             }
@@ -338,10 +413,18 @@ class LocalDataIngestion:
                         self._node_store[file_name] = nodes
                         self._ingested_file.append(file_name)
                         return_nodes.extend(nodes)
+
+                        # Log node count with metadata
+                        chunk_count = len(nodes)
+                        logger.debug(
+                            f"Processed {file_name}: {chunk_count} chunks, "
+                            f"Practice='{it_practice}', Offering='{offering_name}'"
+                        )
                 except Exception as e:
                     input_file = futures[future]
                     logger.error(f"Error processing {input_file}: {e}")
 
+        logger.info(f"Total nodes created: {len(return_nodes)}")
         return return_nodes
 
     def reset(self) -> None:
