@@ -1,9 +1,10 @@
 import logging
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 
 from llama_index.core import VectorStoreIndex, StorageContext
 from llama_index.core.schema import BaseNode
+from llama_index.core.vector_stores import MetadataFilters, MetadataFilter, FilterOperator
 from llama_index.vector_stores.chroma import ChromaVectorStore
 from dotenv import load_dotenv
 import chromadb
@@ -108,6 +109,106 @@ class LocalVectorStore:
             self._index_cache = index
             self._cached_node_count = len(nodes)
             return index
+
+    def get_index_with_filter(
+        self,
+        nodes: List[BaseNode],
+        offering_ids: Optional[List[str]] = None,
+        practice_names: Optional[List[str]] = None,
+        force_rebuild: bool = False
+    ) -> Optional[VectorStoreIndex]:
+        """
+        Get or create filtered vector index based on offerings or practices.
+
+        Args:
+            nodes: List of all available nodes
+            offering_ids: List of offering IDs to filter by (OR operation)
+            practice_names: List of practice names to filter by (OR operation)
+            force_rebuild: Force rebuild even if cached
+
+        Returns:
+            VectorStoreIndex with filtered nodes, or None if no matching nodes
+        """
+        if not nodes:
+            return None
+
+        # Filter nodes based on metadata
+        filtered_nodes = nodes
+
+        if offering_ids or practice_names:
+            filtered_nodes = []
+
+            for node in nodes:
+                metadata = node.metadata or {}
+
+                # Check offering_id filter
+                if offering_ids:
+                    node_offering_id = metadata.get("offering_id")
+                    if node_offering_id and node_offering_id in offering_ids:
+                        filtered_nodes.append(node)
+                        continue
+
+                # Check practice filter
+                if practice_names:
+                    node_practice = metadata.get("it_practice")
+                    if node_practice and node_practice in practice_names:
+                        filtered_nodes.append(node)
+                        continue
+
+            if not filtered_nodes:
+                logger.warning(
+                    f"No nodes found matching filters: "
+                    f"offerings={offering_ids}, practices={practice_names}"
+                )
+                return None
+
+            logger.info(
+                f"Filtered {len(filtered_nodes)} nodes from {len(nodes)} total "
+                f"(offerings={offering_ids}, practices={practice_names})"
+            )
+
+        # Create index with filtered nodes
+        return self.get_index(filtered_nodes, force_rebuild=force_rebuild)
+
+    def get_nodes_by_metadata(
+        self,
+        nodes: List[BaseNode],
+        metadata_filters: Dict[str, Any]
+    ) -> List[BaseNode]:
+        """
+        Filter nodes by arbitrary metadata key-value pairs.
+
+        Args:
+            nodes: List of nodes to filter
+            metadata_filters: Dictionary of metadata key-value pairs to match
+
+        Returns:
+            List of nodes matching all specified metadata filters
+        """
+        if not metadata_filters:
+            return nodes
+
+        filtered_nodes = []
+
+        for node in nodes:
+            metadata = node.metadata or {}
+
+            # Check if all filter conditions are met (AND operation)
+            matches_all = True
+            for key, value in metadata_filters.items():
+                if metadata.get(key) != value:
+                    matches_all = False
+                    break
+
+            if matches_all:
+                filtered_nodes.append(node)
+
+        logger.debug(
+            f"Filtered {len(filtered_nodes)} nodes from {len(nodes)} "
+            f"using metadata filters: {metadata_filters}"
+        )
+
+        return filtered_nodes
 
     def clear_collection(self) -> None:
         """Clear the current collection."""

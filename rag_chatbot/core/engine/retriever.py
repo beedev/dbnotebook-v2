@@ -227,25 +227,91 @@ class LocalRetriever:
         llm: LLM,
         language: str,
         nodes: List[BaseNode],
+        offering_filter: Optional[List[str]] = None,
+        practice_filter: Optional[List[str]] = None,
+        vector_store=None
     ) -> BaseRetriever:
         """
-        Get appropriate retriever based on collection size.
+        Get appropriate retriever based on collection size with optional filtering.
 
         Args:
             llm: Language model for query generation
             language: Language code for prompts
             nodes: Document nodes to index
+            offering_filter: List of offering IDs to filter by (OR operation)
+            practice_filter: List of practice names to filter by (OR operation)
+            vector_store: Optional LocalVectorStore instance for metadata filtering
 
         Returns:
             Configured retriever instance
         """
-        vector_index = self._get_or_create_index(nodes)
+        # Apply metadata filtering if requested
+        filtered_nodes = nodes
 
-        if len(nodes) > self._setting.retriever.top_k_rerank:
-            logger.debug(f"Using router retriever for {len(nodes)} nodes")
+        if (offering_filter or practice_filter) and vector_store:
+            # Use vector store's filtering capability
+            filtered_index = vector_store.get_index_with_filter(
+                nodes=nodes,
+                offering_ids=offering_filter,
+                practice_names=practice_filter
+            )
+
+            if filtered_index is None:
+                logger.warning("No nodes matched the filters, using unfiltered retriever")
+                vector_index = self._get_or_create_index(nodes)
+            else:
+                vector_index = filtered_index
+                # Update filtered_nodes count for retriever selection
+                if offering_filter or practice_filter:
+                    # Estimate filtered node count
+                    filtered_nodes = vector_store.get_nodes_by_metadata(
+                        nodes,
+                        {"offering_id": offering_filter[0]} if offering_filter else {"it_practice": practice_filter[0]}
+                    ) if (offering_filter or practice_filter) else nodes
+        elif offering_filter or practice_filter:
+            # Manual filtering without vector store
+            logger.debug("Filtering nodes manually without vector store")
+            filtered_nodes = []
+
+            for node in nodes:
+                metadata = node.metadata or {}
+
+                # Check offering_id filter
+                if offering_filter:
+                    node_offering_id = metadata.get("offering_id")
+                    if node_offering_id and node_offering_id in offering_filter:
+                        filtered_nodes.append(node)
+                        continue
+
+                # Check practice filter
+                if practice_filter:
+                    node_practice = metadata.get("it_practice")
+                    if node_practice and node_practice in practice_filter:
+                        filtered_nodes.append(node)
+                        continue
+
+            if not filtered_nodes:
+                logger.warning("No nodes matched the filters, using all nodes")
+                filtered_nodes = nodes
+
+            logger.info(
+                f"Filtered {len(filtered_nodes)} nodes from {len(nodes)} "
+                f"(offerings={offering_filter}, practices={practice_filter})"
+            )
+
+            vector_index = self._get_or_create_index(filtered_nodes)
+        else:
+            # No filtering
+            vector_index = self._get_or_create_index(nodes)
+
+        # Select retriever strategy based on node count
+        node_count = len(filtered_nodes)
+
+        if node_count > self._setting.retriever.top_k_rerank:
+            logger.debug(f"Using router retriever for {node_count} nodes")
             return self._get_router_retriever(vector_index, llm, language)
         else:
-            logger.debug(f"Using simple retriever for {len(nodes)} nodes")
+            logger.debug(f"Using simple retriever for {node_count} nodes")
             return self._get_normal_retriever(vector_index, llm, language)
 
     def clear_cache(self) -> None:
