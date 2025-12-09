@@ -165,3 +165,5 @@ mlx_model
 .idea
 test
 junit.xml
+# Generated images
+outputs/

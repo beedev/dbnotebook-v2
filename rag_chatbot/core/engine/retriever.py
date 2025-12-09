@@ -1,4 +1,6 @@
-from typing import List
+import logging
+from typing import List, Optional
+
 from dotenv import load_dotenv
 from llama_index.core.retrievers import (
     BaseRetriever,
@@ -15,38 +17,49 @@ from llama_index.core.schema import BaseNode, NodeWithScore, QueryBundle, IndexN
 from llama_index.core.llms.llm import LLM
 from llama_index.retrievers.bm25 import BM25Retriever
 from llama_index.core import Settings, VectorStoreIndex
+
 from ..prompt import get_query_gen_prompt
-from ...setting import RAGSettings
+from ...setting import get_settings, RAGSettings
 
 load_dotenv()
 
+logger = logging.getLogger(__name__)
+
 
 class TwoStageRetriever(QueryFusionRetriever):
+    """
+    Two-stage retriever that combines fusion retrieval with reranking.
+
+    Stage 1: BM25 + Vector retrieval with query fusion
+    Stage 2: Rerank results using cross-encoder model
+    """
+
     def __init__(
         self,
         retrievers: List[BaseRetriever],
         setting: RAGSettings | None = None,
-        llm: str | None = None,
-        query_gen_prompt: str | None = None,
+        llm: Optional[LLM] = None,
+        query_gen_prompt: Optional[str] = None,
         mode: FUSION_MODES = FUSION_MODES.SIMPLE,
-        similarity_top_k: int = ...,
+        similarity_top_k: int = 20,
         num_queries: int = 4,
         use_async: bool = True,
         verbose: bool = False,
-        callback_manager: CallbackManager | None = None,
-        objects: List[IndexNode] | None = None,
-        object_map: dict | None = None,
-        retriever_weights: List[float] | None = None
+        callback_manager: Optional[CallbackManager] = None,
+        objects: Optional[List[IndexNode]] = None,
+        object_map: Optional[dict] = None,
+        retriever_weights: Optional[List[float]] = None
     ) -> None:
         super().__init__(
             retrievers, llm, query_gen_prompt, mode, similarity_top_k, num_queries,
             use_async, verbose, callback_manager, objects, object_map, retriever_weights
         )
-        self._setting = setting or RAGSettings()
+        self._setting = setting or get_settings()
         self._rerank_model = SentenceTransformerRerank(
             top_n=self._setting.retriever.top_k_rerank,
             model=self._setting.retriever.rerank_llm,
         )
+        logger.debug(f"TwoStageRetriever initialized with rerank model: {self._setting.retriever.rerank_llm}")
 
     def _retrieve(self, query_bundle: QueryBundle) -> List[NodeWithScore]:
         queries: List[QueryBundle] = [query_bundle]
@@ -57,6 +70,7 @@ class TwoStageRetriever(QueryFusionRetriever):
             results = self._run_nested_async_queries(queries)
         else:
             results = self._run_sync_queries(queries)
+
         results = self._simple_fusion(results)
         return self._rerank_model.postprocess_nodes(results, query_bundle)
 
@@ -71,82 +85,121 @@ class TwoStageRetriever(QueryFusionRetriever):
 
 
 class LocalRetriever:
+    """
+    Factory for creating optimized retrievers based on document count.
+
+    Strategies:
+    - Small collections (≤ top_k_rerank): Simple vector retriever
+    - Large collections: Router with fusion and two-stage options
+    """
+
     def __init__(
         self,
         setting: RAGSettings | None = None,
         host: str = "host.docker.internal"
     ):
-        super().__init__()
-        self._setting = setting or RAGSettings()
+        self._setting = setting or get_settings()
         self._host = host
+        self._index_cache: Optional[VectorStoreIndex] = None
+        self._cached_node_count: int = 0
+        logger.debug("LocalRetriever initialized")
+
+    def _get_or_create_index(
+        self,
+        nodes: List[BaseNode],
+        force_rebuild: bool = False
+    ) -> VectorStoreIndex:
+        """Get cached index or create new one."""
+        if (
+            not force_rebuild and
+            self._index_cache is not None and
+            len(nodes) == self._cached_node_count
+        ):
+            logger.debug("Using cached vector index")
+            return self._index_cache
+
+        logger.debug(f"Creating new vector index with {len(nodes)} nodes")
+        self._index_cache = VectorStoreIndex(nodes=nodes)
+        self._cached_node_count = len(nodes)
+        return self._index_cache
 
     def _get_normal_retriever(
         self,
         vector_index: VectorStoreIndex,
-        llm: LLM | None = None,
+        llm: Optional[LLM] = None,
         language: str = "eng",
-    ):
-        llm = llm or Settings.llm
+    ) -> VectorIndexRetriever:
+        """Create simple vector retriever for small collections."""
         return VectorIndexRetriever(
             index=vector_index,
             similarity_top_k=self._setting.retriever.similarity_top_k,
             embed_model=Settings.embed_model,
-            verbose=True
+            verbose=False
         )
 
     def _get_hybrid_retriever(
         self,
         vector_index: VectorStoreIndex,
-        llm: LLM | None = None,
+        llm: Optional[LLM] = None,
         language: str = "eng",
         gen_query: bool = True
-    ):
-        # VECTOR INDEX RETRIEVER
+    ) -> BaseRetriever:
+        """Create hybrid BM25 + vector retriever."""
+        llm = llm or Settings.llm
+
+        # Vector retriever
         vector_retriever = VectorIndexRetriever(
             index=vector_index,
             similarity_top_k=self._setting.retriever.similarity_top_k,
             embed_model=Settings.embed_model,
-            verbose=True
+            verbose=False
         )
 
+        # BM25 retriever
         bm25_retriever = BM25Retriever.from_defaults(
             index=vector_index,
             similarity_top_k=self._setting.retriever.similarity_top_k,
-            verbose=True
+            verbose=False
         )
 
-        # FUSION RETRIEVER
+        retrievers = [bm25_retriever, vector_retriever]
+        weights = self._setting.retriever.retriever_weights
+
         if gen_query:
-            hybrid_retriever = QueryFusionRetriever(
-                retrievers=[bm25_retriever, vector_retriever],
-                retriever_weights=self._setting.retriever.retriever_weights,
+            # Fusion retriever with query generation
+            return QueryFusionRetriever(
+                retrievers=retrievers,
+                retriever_weights=weights,
                 llm=llm,
                 query_gen_prompt=get_query_gen_prompt(language),
                 similarity_top_k=self._setting.retriever.top_k_rerank,
                 num_queries=self._setting.retriever.num_queries,
                 mode=self._setting.retriever.fusion_mode,
-                verbose=True
+                verbose=False
             )
         else:
-            hybrid_retriever = TwoStageRetriever(
-                retrievers=[bm25_retriever, vector_retriever],
-                retriever_weights=self._setting.retriever.retriever_weights,
+            # Two-stage retriever with reranking
+            return TwoStageRetriever(
+                retrievers=retrievers,
+                retriever_weights=weights,
+                setting=self._setting,
                 llm=llm,
                 query_gen_prompt=None,
                 similarity_top_k=self._setting.retriever.similarity_top_k,
                 num_queries=1,
                 mode=self._setting.retriever.fusion_mode,
-                verbose=True
+                verbose=False
             )
-
-        return hybrid_retriever
 
     def _get_router_retriever(
         self,
         vector_index: VectorStoreIndex,
-        llm: LLM | None = None,
+        llm: Optional[LLM] = None,
         language: str = "eng",
-    ):
+    ) -> RouterRetriever:
+        """Create router retriever that selects between fusion and two-stage."""
+        llm = llm or Settings.llm
+
         fusion_tool = RetrieverTool.from_defaults(
             retriever=self._get_hybrid_retriever(
                 vector_index, llm, language, gen_query=True
@@ -154,6 +207,7 @@ class LocalRetriever:
             description="Use this tool when the user's query is ambiguous or unclear.",
             name="Fusion Retriever with BM25 and Vector Retriever and LLM Query Generation."
         )
+
         two_stage_tool = RetrieverTool.from_defaults(
             retriever=self._get_hybrid_retriever(
                 vector_index, llm, language, gen_query=False
@@ -173,11 +227,29 @@ class LocalRetriever:
         llm: LLM,
         language: str,
         nodes: List[BaseNode],
-    ):
-        vector_index = VectorStoreIndex(nodes=nodes)
-        if len(nodes) > self._setting.retriever.top_k_rerank:
-            retriever = self._get_router_retriever(vector_index, llm, language)
-        else:
-            retriever = self._get_normal_retriever(vector_index, llm, language)
+    ) -> BaseRetriever:
+        """
+        Get appropriate retriever based on collection size.
 
-        return retriever
+        Args:
+            llm: Language model for query generation
+            language: Language code for prompts
+            nodes: Document nodes to index
+
+        Returns:
+            Configured retriever instance
+        """
+        vector_index = self._get_or_create_index(nodes)
+
+        if len(nodes) > self._setting.retriever.top_k_rerank:
+            logger.debug(f"Using router retriever for {len(nodes)} nodes")
+            return self._get_router_retriever(vector_index, llm, language)
+        else:
+            logger.debug(f"Using simple retriever for {len(nodes)} nodes")
+            return self._get_normal_retriever(vector_index, llm, language)
+
+    def clear_cache(self) -> None:
+        """Clear the index cache."""
+        self._index_cache = None
+        self._cached_node_count = 0
+        logger.debug("Retriever cache cleared")

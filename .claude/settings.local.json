@@ -1,0 +1,24 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -m:*)",
+      "Bash(source:*)",
+      "Bash(pip install:*)",
+      "Bash(pkill:*)",
+      "Bash(lsof:*)",
+      "Bash(xargs kill:*)",
+      "Bash(curl:*)",
+      "Bash(grep:*)",
+      "Bash(./venv/bin/pip install:*)",
+      "Bash(./venv/bin/pip:*)",
+      "Bash(./venv/bin/python:*)",
+      "Bash(./start.sh:*)",
+      "Bash(cat:*)",
+      "Bash(kill:*)",
+      "Bash(find:*)",
+      "Bash(git add:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

@@ -3,119 +3,159 @@ import shutil
 import json
 import sys
 import time
-import gradio as gr
+import logging
 from dataclasses import dataclass
 from typing import ClassVar
+
+import gradio as gr
 from llama_index.core.chat_engine.types import StreamingAgentChatResponse
+
 from .theme import JS_LIGHT_THEME, CSS
 from ..pipeline import LocalRAGPipeline
 from ..logger import Logger
 
+logger = logging.getLogger(__name__)
+
 
 @dataclass
 class DefaultElement:
+    """Default UI element values."""
     DEFAULT_MESSAGE: ClassVar[dict] = {"text": ""}
     DEFAULT_MODEL: str = ""
     DEFAULT_HISTORY: ClassVar[list] = []
     DEFAULT_DOCUMENT: ClassVar[list] = []
 
-    HELLO_MESSAGE: str = "Hi 👋, how can I help you today?"
-    SET_MODEL_MESSAGE: str = "You need to choose LLM model 🤖 first!"
+    HELLO_MESSAGE: str = "Hi, how can I help you today?"
+    SET_MODEL_MESSAGE: str = "You need to choose LLM model first!"
     EMPTY_MESSAGE: str = "You need to enter your message!"
     DEFAULT_STATUS: str = "Ready!"
     CONFIRM_PULL_MODEL_STATUS: str = "Confirm Pull Model!"
-    PULL_MODEL_SCUCCESS_STATUS: str = "Pulling model 🤖 completed!"
-    PULL_MODEL_FAIL_STATUS: str = "Pulling model 🤖 failed!"
+    PULL_MODEL_SCUCCESS_STATUS: str = "Pulling model completed!"
+    PULL_MODEL_FAIL_STATUS: str = "Pulling model failed!"
     MODEL_NOT_EXIST_STATUS: str = "Model doesn't exist!"
-    PROCESS_DOCUMENT_SUCCESS_STATUS: str = "Processing documents 📄 completed!"
+    PROCESS_DOCUMENT_SUCCESS_STATUS: str = "Processing documents completed!"
     PROCESS_DOCUMENT_EMPTY_STATUS: str = "Empty documents!"
     ANSWERING_STATUS: str = "Answering!"
     COMPLETED_STATUS: str = "Completed!"
 
 
 class LLMResponse:
-    def __init__(self) -> None:
-        pass
+    """Handles streaming responses from the LLM."""
 
     def _yield_string(self, message: str):
+        """Yield characters with animation effect."""
         for i in range(len(message)):
             time.sleep(0.01)
             yield (
                 DefaultElement.DEFAULT_MESSAGE,
-                [[None, message[:i+1]]],
+                [(None, message[:i+1])],
                 DefaultElement.DEFAULT_STATUS
             )
 
     def welcome(self):
+        """Yield welcome message."""
         yield from self._yield_string(DefaultElement.HELLO_MESSAGE)
 
     def set_model(self):
+        """Yield model selection prompt."""
         yield from self._yield_string(DefaultElement.SET_MODEL_MESSAGE)
 
     def empty_message(self):
+        """Yield empty message prompt."""
         yield from self._yield_string(DefaultElement.EMPTY_MESSAGE)
 
     def stream_response(
         self,
         message: str,
-        history: list[list[str]],
+        history: list,
         response: StreamingAgentChatResponse
     ):
+        """Stream LLM response with real-time updates."""
         answer = []
         for text in response.response_gen:
             answer.append(text)
             yield (
                 DefaultElement.DEFAULT_MESSAGE,
-                history + [[message, "".join(answer)]],
+                history + [(message, "".join(answer))],
                 DefaultElement.ANSWERING_STATUS
             )
         yield (
             DefaultElement.DEFAULT_MESSAGE,
-            history + [[message, "".join(answer)]],
+            history + [(message, "".join(answer))],
             DefaultElement.COMPLETED_STATUS
         )
 
 
 class LocalChatbotUI:
+    """Gradio-based UI for the RAG chatbot."""
+
     def __init__(
         self,
         pipeline: LocalRAGPipeline,
-        logger: Logger,
+        logger_instance: Logger,
         host: str = "host.docker.internal",
         data_dir: str = "data/data",
-        avatar_images: list[str] = ["./assets/user.png", "./assets/bot.png"]
+        avatar_images: list[str] = None
     ):
         self._pipeline = pipeline
-        self._logger = logger
+        self._logger = logger_instance
         self._host = host
         self._data_dir = os.path.join(os.getcwd(), data_dir)
-        self._avatar_images = [os.path.join(os.getcwd(), image) for image in avatar_images]
+        self._avatar_images = [
+            os.path.join(os.getcwd(), img)
+            for img in (avatar_images or ["./assets/user.png", "./assets/bot.png"])
+        ]
         self._variant = "panel"
         self._llm_response = LLMResponse()
+
+        logger.debug(f"UI initialized - Data dir: {self._data_dir}")
 
     def _get_respone(
         self,
         chat_mode: str,
         message: dict[str, str],
-        chatbot: list[list[str, str]],
+        chatbot: list,
         progress=gr.Progress(track_tqdm=True)
     ):
+        """Handle user message and generate response."""
         if self._pipeline.get_model_name() in [None, ""]:
-            for m in self._llm_response.set_model():
-                yield m
-        elif message['text'] in [None, ""]:
-            for m in self._llm_response.empty_message():
-                yield m
-        else:
-            console = sys.stdout
-            sys.stdout = self._logger
-            response = self._pipeline.query(chat_mode, message['text'], chatbot)
-            for m in self._llm_response.stream_response(message['text'], chatbot, response):
-                yield m
+            yield from self._llm_response.set_model()
+            return
+
+        # Extract text from multimodal input
+        message_text = message.get('text', '') if isinstance(message, dict) else str(message)
+
+        if not message_text or message_text.strip() == "":
+            yield from self._llm_response.empty_message()
+            return
+
+        # Redirect stdout to logger during query
+        console = sys.stdout
+        sys.stdout = self._logger
+
+        try:
+            response = self._pipeline.query(chat_mode, message_text, chatbot)
+            yield from self._llm_response.stream_response(message_text, chatbot, response)
+        except Exception as e:
+            logger.error(f"Error during query: {e}")
+            yield (
+                DefaultElement.DEFAULT_MESSAGE,
+                chatbot + [(message_text, f"Error: {str(e)}")],
+                "Error!"
+            )
+        finally:
             sys.stdout = console
 
     def _get_confirm_pull_model(self, model: str):
-        if (model in ["gpt-3.5-turbo", "gpt-4"]) or (self._pipeline.check_exist(model)):
+        """Check if model exists or needs to be pulled."""
+        # Skip pull for API models (OpenAI, Claude, Gemini)
+        is_api_model = (
+            model.startswith("gpt-") or
+            model.startswith("claude-") or
+            model.startswith("gemini-")
+        )
+
+        if is_api_model or self._pipeline.check_exist(model):
             self._change_model(model)
             return (
                 gr.update(visible=False),
@@ -129,18 +169,36 @@ class LocalChatbotUI:
         )
 
     def _pull_model(self, model: str, progress=gr.Progress(track_tqdm=True)):
-        if (model not in ["gpt-3.5-turbo", "gpt-4"]) and not (self._pipeline.check_exist(model)):
-            response = self._pipeline.pull_model(model)
-            if response.status_code == 200:
-                gr.Info(f"Pulling {model}!")
-                for data in response.iter_lines(chunk_size=1):
-                    data = json.loads(data)
-                    if 'completed' in data.keys() and 'total' in data.keys():
-                        progress(data['completed'] / data['total'], desc="Downloading")
-                    else:
-                        progress(0.)
-            else:
-                gr.Warning(f"Model {model} doesn't exist!")
+        """Pull model from Ollama."""
+        # Skip pull for API models (OpenAI, Claude, Gemini)
+        is_api_model = (
+            model.startswith("gpt-") or
+            model.startswith("claude-") or
+            model.startswith("gemini-")
+        )
+
+        if not is_api_model and not self._pipeline.check_exist(model):
+            try:
+                response = self._pipeline.pull_model(model)
+                if response.status_code == 200:
+                    gr.Info(f"Pulling {model}!")
+                    for data in response.iter_lines(chunk_size=1):
+                        data = json.loads(data)
+                        if 'completed' in data and 'total' in data:
+                            progress(data['completed'] / data['total'], desc="Downloading")
+                        else:
+                            progress(0.)
+                else:
+                    gr.Warning(f"Model {model} doesn't exist!")
+                    return (
+                        DefaultElement.DEFAULT_MESSAGE,
+                        DefaultElement.DEFAULT_HISTORY,
+                        DefaultElement.PULL_MODEL_FAIL_STATUS,
+                        DefaultElement.DEFAULT_MODEL
+                    )
+            except Exception as e:
+                logger.error(f"Error pulling model {model}: {e}")
+                gr.Warning(f"Error pulling model: {e}")
                 return (
                     DefaultElement.DEFAULT_MESSAGE,
                     DefaultElement.DEFAULT_HISTORY,
@@ -156,38 +214,35 @@ class LocalChatbotUI:
         )
 
     def _change_model(self, model: str):
+        """Change the active LLM model."""
         if model not in [None, ""]:
             self._pipeline.set_model_name(model)
             self._pipeline.set_model()
             self._pipeline.set_engine()
             gr.Info(f"Change model to {model}!")
+            logger.info(f"Model changed to: {model}")
         return DefaultElement.DEFAULT_STATUS
 
     def _upload_document(self, document: list[str], list_files: list[str] | dict):
+        """Handle document uploads."""
         if document in [None, []]:
             if isinstance(list_files, list):
-                return (
-                    list_files,
-                    DefaultElement.DEFAULT_DOCUMENT
-                )
-            else:
-                if list_files.get("files", None):
-                    return list_files.get("files")
-                return document
-        else:
-            if isinstance(list_files, list):
-                return (
-                    document + list_files,
-                    DefaultElement.DEFAULT_DOCUMENT
-                )
-            else:
-                if list_files.get("files", None):
-                    return document + list_files.get("files")
-                return document
+                return (list_files, DefaultElement.DEFAULT_DOCUMENT)
+            elif list_files and list_files.get("files"):
+                return list_files.get("files")
+            return document
+
+        if isinstance(list_files, list):
+            return (document + list_files, DefaultElement.DEFAULT_DOCUMENT)
+        elif list_files and list_files.get("files"):
+            return document + list_files.get("files")
+        return document
 
     def _reset_document(self):
+        """Reset all uploaded documents."""
         self._pipeline.reset_documents()
         gr.Info("Reset all documents!")
+        logger.info("Documents reset")
         return (
             DefaultElement.DEFAULT_DOCUMENT,
             gr.update(visible=False),
@@ -195,53 +250,96 @@ class LocalChatbotUI:
         )
 
     def _show_document_btn(self, document: list[str]):
-        visible = False if document in [None, []] else True
-        return (
-            gr.update(visible=visible),
-            gr.update(visible=visible)
-        )
+        """Show/hide document action buttons."""
+        visible = document not in [None, []]
+        return (gr.update(visible=visible), gr.update(visible=visible))
 
     def _processing_document(
         self,
         document: list[str],
         progress=gr.Progress(track_tqdm=True)
     ):
+        """Process uploaded documents."""
         document = document or []
-        if self._host == "host.docker.internal":
-            input_files = []
-            for file_path in document:
-                dest = os.path.join(self._data_dir, file_path.split("/")[-1])
-                shutil.move(src=file_path, dst=dest)
-                input_files.append(dest)
-            self._pipeline.store_nodes(input_files=input_files)
-        else:
-            self._pipeline.store_nodes(input_files=document)
-        self._pipeline.set_chat_mode()
-        gr.Info("Processing Completed!")
-        return (
+        if not document:
+            return (
+                self._pipeline.get_system_prompt(),
+                DefaultElement.PROCESS_DOCUMENT_EMPTY_STATUS
+            )
+
+        yield (
             self._pipeline.get_system_prompt(),
-            DefaultElement.COMPLETED_STATUS
+            "Processing documents..."
         )
 
+        try:
+            if self._host == "host.docker.internal":
+                # Move files to data directory for Docker
+                input_files = []
+                for i, file_path in enumerate(document):
+                    progress((i + 1) / len(document), f"Moving file {i+1}/{len(document)}")
+                    dest = os.path.join(self._data_dir, os.path.basename(file_path))
+                    shutil.move(src=file_path, dst=dest)
+                    input_files.append(dest)
+                    yield (
+                        self._pipeline.get_system_prompt(),
+                        f"Moved {i+1}/{len(document)} files..."
+                    )
+
+                yield (
+                    self._pipeline.get_system_prompt(),
+                    "Extracting text and generating embeddings..."
+                )
+                self._pipeline.store_nodes(input_files=input_files)
+            else:
+                yield (
+                    self._pipeline.get_system_prompt(),
+                    "Extracting text and generating embeddings..."
+                )
+                self._pipeline.store_nodes(input_files=document)
+
+            self._pipeline.set_chat_mode()
+            gr.Info("Processing Completed!")
+            logger.info(f"Processed {len(document)} documents")
+
+            yield (
+                self._pipeline.get_system_prompt(),
+                DefaultElement.COMPLETED_STATUS
+            )
+        except Exception as e:
+            logger.error(f"Error processing documents: {e}")
+            gr.Warning(f"Error processing documents: {str(e)}")
+            yield (
+                self._pipeline.get_system_prompt(),
+                f"Error: {str(e)}"
+            )
+
     def _change_system_prompt(self, sys_prompt: str):
+        """Update system prompt."""
         self._pipeline.set_system_prompt(sys_prompt)
         self._pipeline.set_chat_mode()
         gr.Info("System prompt updated!")
+        logger.debug("System prompt updated")
 
     def _change_language(self, language: str):
+        """Change UI language."""
         self._pipeline.set_language(language)
         self._pipeline.set_chat_mode()
         gr.Info(f"Change language to {language}")
+        logger.debug(f"Language changed to: {language}")
 
-    def _undo_chat(self, history: list[list[str, str]]):
-        if len(history) > 0:
-            history.pop(-1)
+    def _undo_chat(self, history: list):
+        """Undo last chat exchange."""
+        if len(history) >= 1:
+            history.pop(-1)  # Remove last (user, assistant) tuple
             return history
         return DefaultElement.DEFAULT_HISTORY
 
     def _reset_chat(self):
+        """Reset entire chat session."""
         self._pipeline.reset_conversation()
         gr.Info("Reset chat!")
+        logger.info("Chat reset")
         return (
             DefaultElement.DEFAULT_MESSAGE,
             DefaultElement.DEFAULT_HISTORY,
@@ -250,8 +348,10 @@ class LocalChatbotUI:
         )
 
     def _clear_chat(self):
+        """Clear chat history without resetting documents."""
         self._pipeline.clear_conversation()
         gr.Info("Clear chat!")
+        logger.debug("Chat cleared")
         return (
             DefaultElement.DEFAULT_MESSAGE,
             DefaultElement.DEFAULT_HISTORY,
@@ -259,27 +359,27 @@ class LocalChatbotUI:
         )
 
     def _show_hide_setting(self, state):
+        """Toggle settings panel visibility."""
         state = not state
         label = "Hide Setting" if state else "Show Setting"
-        return (
-            label,
-            gr.update(visible=state),
-            state
-        )
+        return (label, gr.update(visible=state), state)
 
     def _welcome(self):
-        for m in self._llm_response.welcome():
-            yield m
+        """Display welcome message."""
+        yield from self._llm_response.welcome()
 
     def build(self):
+        """Build and return the Gradio interface."""
         with gr.Blocks(
             theme=gr.themes.Soft(primary_hue="slate"),
             js=JS_LIGHT_THEME,
             css=CSS,
         ) as demo:
-            gr.Markdown("## Local RAG Chatbot 🤖")
+            gr.Markdown("## AI Driven Expert")
+
             with gr.Tab("Interface"):
                 sidebar_state = gr.State(True)
+
                 with gr.Row(variant=self._variant, equal_height=False):
                     with gr.Column(
                         variant=self._variant,
@@ -292,22 +392,23 @@ class LocalChatbotUI:
                                 value="Ready!",
                                 interactive=False
                             )
-                            language = gr.Radio(
-                                label="Language",
-                                choices=["vi", "eng"],
-                                value="eng",
-                                interactive=True
-                            )
+                            language = "eng"
                             model = gr.Dropdown(
                                 label="Choose Model:",
                                 choices=[
-                                    "llama3-chatqa:8b-v1.5-q8_0",
-                                    "llama3-chatqa:8b-v1.5-q6_K",
-                                    "llama3:8b-instruct-q8_0",
-                                    "starling-lm:7b-beta-q8_0",
-                                    "mixtral:instruct",
-                                    "nous-hermes2:10.7b-solar-q4_K_M",
-                                    "codeqwen:7b-chat-v1.5-q5_1",
+                                    "llama3.1:latest",
+                                    "deepseek-r1:32b",
+                                    "THUDM_GLM-4-32B-0414-Q4_K_M.gguf:latest",
+                                    "gpt-3.5-turbo",
+                                    "gpt-4",
+                                    "gpt-4-turbo",
+                                    "gpt-4o",
+                                    "claude-3-5-sonnet-20241022",
+                                    "claude-3-5-haiku-20241022",
+                                    "claude-3-opus-20240229",
+                                    "gemini-2.0-flash-exp",
+                                    "gemini-1.5-pro",
+                                    "gemini-1.5-flash"
                                 ],
                                 value=None,
                                 interactive=True,
@@ -328,7 +429,10 @@ class LocalChatbotUI:
                             documents = gr.Files(
                                 label="Add Documents",
                                 value=[],
-                                file_types=[".txt", ".pdf", ".csv"],
+                                file_types=[
+                                    ".txt", ".pdf", ".epub", ".docx", ".pptx",
+                                    ".jpg", ".jpeg", ".tiff", ".png"
+                                ],
                                 file_count="multiple",
                                 height=150,
                                 interactive=True
@@ -337,7 +441,10 @@ class LocalChatbotUI:
                                 upload_doc_btn = gr.UploadButton(
                                     label="Upload",
                                     value=[],
-                                    file_types=[".txt", ".pdf", ".csv"],
+                                    file_types=[
+                                        ".txt", ".pdf", ".epub", ".docx", ".pptx",
+                                        ".jpg", ".jpeg", ".tiff", ".png"
+                                    ],
                                     file_count="multiple",
                                     min_width=20,
                                     visible=False
@@ -350,7 +457,6 @@ class LocalChatbotUI:
 
                     with gr.Column(scale=30, variant=self._variant):
                         chatbot = gr.Chatbot(
-                            layout='bubble',
                             value=[],
                             height=550,
                             scale=2,
@@ -368,31 +474,22 @@ class LocalChatbotUI:
                                 interactive=True,
                                 allow_custom_value=False
                             )
-                            message = gr.MultimodalTextbox(
-                                value=DefaultElement.DEFAULT_MESSAGE,
-                                placeholder="Enter you message:",
-                                file_types=[".txt", ".pdf", ".csv"],
+                            message = gr.Textbox(
+                                value="",
+                                placeholder="Enter your message:",
                                 show_label=False,
                                 scale=6,
                                 lines=1
                             )
+
                         with gr.Row(variant=self._variant):
                             ui_btn = gr.Button(
                                 value="Hide Setting" if sidebar_state.value else "Show Setting",
                                 min_width=20
                             )
-                            undo_btn = gr.Button(
-                                value="Undo",
-                                min_width=20
-                            )
-                            clear_btn = gr.Button(
-                                value="Clear",
-                                min_width=20
-                            )
-                            reset_btn = gr.Button(
-                                value="Reset",
-                                min_width=20
-                            )
+                            undo_btn = gr.Button(value="Undo", min_width=20)
+                            clear_btn = gr.Button(value="Clear", min_width=20)
+                            reset_btn = gr.Button(value="Reset", min_width=20)
 
             with gr.Tab("Setting"):
                 with gr.Row(variant=self._variant, equal_height=False):
@@ -408,15 +505,19 @@ class LocalChatbotUI:
 
             with gr.Tab("Output"):
                 with gr.Row(variant=self._variant):
-                    log = gr.Code(label="", language="markdown", interactive=False, lines=30)
-                    demo.load(
+                    log = gr.Code(
+                        label="",
+                        language="markdown",
+                        interactive=False,
+                        lines=30
+                    )
+                    refresh_btn = gr.Button("Refresh Logs", min_width=100)
+                    refresh_btn.click(
                         self._logger.read_logs,
-                        outputs=[log],
-                        every=1,
-                        show_progress="hidden",
-                        scroll_to_output=True
+                        outputs=[log]
                     )
 
+            # Event handlers
             clear_btn.click(
                 self._clear_chat,
                 outputs=[message, chatbot, status]
@@ -435,10 +536,7 @@ class LocalChatbotUI:
                 outputs=[message, chatbot, documents, status]
             )
             pull_btn.click(
-                lambda: (
-                    gr.update(visible=False),
-                    gr.update(visible=False)
-                ),
+                lambda: (gr.update(visible=False), gr.update(visible=False)),
                 outputs=[pull_btn, cancel_btn]
             ).then(
                 self._pull_model,
@@ -458,10 +556,6 @@ class LocalChatbotUI:
                 inputs=[chat_mode, message, chatbot],
                 outputs=[message, chatbot, status]
             )
-            language.change(
-                self._change_language,
-                inputs=[language]
-            )
             model.change(
                 self._get_confirm_pull_model,
                 inputs=[model],
@@ -476,7 +570,6 @@ class LocalChatbotUI:
                 inputs=[documents],
                 outputs=[upload_doc_btn, reset_doc_btn]
             )
-
             sys_prompt_btn.click(
                 self._change_system_prompt,
                 inputs=[system_prompt]

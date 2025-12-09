@@ -1,54 +1,107 @@
 import argparse
-import llama_index
-from .ui import LocalChatbotUI
+import logging
+import sys
+from pathlib import Path
+
+import llama_index.core
+
+from .ui import FlaskChatbotUI
 from .pipeline import LocalRAGPipeline
-from .logger import Logger
 from .ollama import run_ollama_server, is_port_open
 
-# CONSTANTS
-LOG_FILE = "logging.log"
+
+def setup_logging(log_level: str = "INFO") -> None:
+    """Configure application logging."""
+    logging.basicConfig(
+        level=getattr(logging, log_level.upper()),
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        handlers=[
+            logging.StreamHandler(sys.stdout)
+        ]
+    )
+    # Reduce noise from third-party libraries
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
+    logging.getLogger("chromadb").setLevel(logging.WARNING)
+    logging.getLogger("werkzeug").setLevel(logging.WARNING)
+
+
+logger = logging.getLogger(__name__)
+
+# Constants
 DATA_DIR = "data/data"
-AVATAR_IMAGES = ["./assets/user.png", "./assets/bot.png"]
+UPLOAD_DIR = "uploads"
 
-# PARSER
-parser = argparse.ArgumentParser()
-parser.add_argument(
-    "--host", type=str, default="host.docker.internal",
-    help="Set host to local or in docker container"
-)
-parser.add_argument(
-    "--share", action='store_true',
-    help="Share gradio app"
-)
-args = parser.parse_args()
 
-# OLLAMA SERVER
-if args.host != "host.docker.internal":
-    port_number = 11434
-    if not is_port_open(port_number):
-        run_ollama_server()
+def main():
+    """Main entry point for the RAG chatbot application."""
+    # Parse arguments
+    parser = argparse.ArgumentParser(description="RAG Chatbot Application")
+    parser.add_argument(
+        "--host",
+        type=str,
+        default="localhost",
+        help="Host for Ollama server (localhost or host.docker.internal)"
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=5000,
+        help="Port for the web server"
+    )
+    parser.add_argument(
+        "--log-level",
+        type=str,
+        default="INFO",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR"],
+        help="Logging level"
+    )
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Run in debug mode"
+    )
+    args = parser.parse_args()
 
-# LOGGER
+    # Setup logging
+    setup_logging(args.log_level)
+    logger.info(f"Starting RAG Chatbot - Host: {args.host}")
 
-llama_index.core.set_global_handler("simple")
-logger = Logger(LOG_FILE)
-logger.reset_logs()
+    # Ensure directories exist
+    data_path = Path(DATA_DIR)
+    data_path.mkdir(parents=True, exist_ok=True)
+    upload_path = Path(UPLOAD_DIR)
+    upload_path.mkdir(parents=True, exist_ok=True)
+    logger.debug(f"Data directory: {data_path.absolute()}")
 
-# PIPELINE
-pipeline = LocalRAGPipeline(host=args.host)
+    # Start Ollama server if running locally
+    if args.host != "host.docker.internal":
+        port_number = 11434
+        if not is_port_open(port_number):
+            logger.info("Starting Ollama server...")
+            run_ollama_server()
 
-# UI
-ui = LocalChatbotUI(
-    pipeline=pipeline,
-    logger=logger,
-    host=args.host,
-    data_dir=DATA_DIR,
-    avatar_images=AVATAR_IMAGES
-)
+    # Configure LlamaIndex logging
+    llama_index.core.set_global_handler("simple")
 
-ui.build().queue().launch(
-    share=args.share,
-    server_name="0.0.0.0",
-    debug=False,
-    show_api=False
-)
+    # Initialize pipeline
+    logger.info("Initializing RAG pipeline...")
+    pipeline = LocalRAGPipeline(host=args.host)
+
+    # Initialize Flask UI
+    logger.info("Building Flask UI...")
+    ui = FlaskChatbotUI(
+        pipeline=pipeline,
+        host=args.host,
+        data_dir=DATA_DIR,
+        upload_dir=UPLOAD_DIR
+    )
+
+    # Launch application
+    logger.info(f"Starting server on http://0.0.0.0:{args.port}")
+    print(f"\n  RAG Chatbot is running at: http://localhost:{args.port}\n")
+    ui.run(host="0.0.0.0", port=args.port, debug=args.debug)
+
+
+if __name__ == "__main__":
+    main()
