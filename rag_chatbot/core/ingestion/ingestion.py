@@ -12,10 +12,12 @@ import pymupdf
 from llama_index.core import Document, Settings
 from llama_index.core.schema import BaseNode
 from llama_index.core.node_parser import SentenceSplitter
+from llama_index.core.llms.llm import LLM
 from dotenv import load_dotenv
 from tqdm import tqdm
 
 from ...setting import get_settings, RAGSettings
+from .synopsis_manager import SynopsisManager
 
 load_dotenv()
 
@@ -239,6 +241,7 @@ class LocalDataIngestion:
         self._reader = DocumentReader()
         self._processor = TextProcessor()
         self._cache = NodeCache() if use_cache else None
+        self._synopsis_manager = SynopsisManager()
 
         # Create splitter once
         self._splitter = SentenceSplitter.from_defaults(
@@ -293,7 +296,16 @@ class LocalDataIngestion:
         if self._cache:
             cached_nodes = self._cache.get(input_file)
             if cached_nodes:
-                logger.debug(f"Using cached nodes for {file_name}")
+                logger.debug(f"Using cached nodes for {file_name}, updating metadata")
+                # Update metadata on cached nodes with new offering information
+                for node in cached_nodes:
+                    if hasattr(node, 'metadata'):
+                        if it_practice:
+                            node.metadata["it_practice"] = it_practice
+                        if offering_name:
+                            node.metadata["offering_name"] = offering_name
+                        if offering_id:
+                            node.metadata["offering_id"] = offering_id
                 return file_name, cached_nodes
 
         # Read and process document
@@ -371,7 +383,8 @@ class LocalDataIngestion:
             List of processed nodes with enhanced metadata
         """
         return_nodes: List[BaseNode] = []
-        self._ingested_file = []
+        # Don't clear _ingested_file to allow multiple offerings to accumulate
+        # self._ingested_file = []
 
         if not input_files:
             return return_nodes
@@ -456,3 +469,64 @@ class LocalDataIngestion:
             if file in self._node_store:
                 return_nodes.extend(self._node_store[file])
         return return_nodes
+
+    def generate_synopsis_for_offering(
+        self,
+        offering_id: str,
+        offering_name: str,
+        llm: LLM,
+        file_list: Optional[List[str]] = None
+    ) -> Optional[str]:
+        """
+        Generate and store synopsis for an offering from its ingested nodes.
+
+        This method should be called after `store_nodes()` to create a synopsis
+        that can be used for faster problem-solving queries.
+
+        Args:
+            offering_id: Unique offering identifier
+            offering_name: Name of the offering
+            llm: Language model for synopsis generation
+            file_list: List of files associated with this offering
+
+        Returns:
+            Generated synopsis text or None if generation fails
+        """
+        # Get all nodes for this offering
+        offering_nodes = [
+            node for node in self.get_all_nodes()
+            if node.metadata.get("offering_id") == offering_id
+        ]
+
+        if not offering_nodes:
+            logger.warning(f"No nodes found for offering {offering_name} ({offering_id})")
+            return None
+
+        logger.info(f"Generating synopsis for {offering_name} with {len(offering_nodes)} nodes")
+
+        # Generate and store synopsis using SynopsisManager
+        synopsis = self._synopsis_manager.generate_synopsis(
+            offering_id=offering_id,
+            offering_name=offering_name,
+            nodes=offering_nodes,
+            llm=llm,
+            file_list=file_list
+        )
+
+        return synopsis
+
+    def get_synopsis(self, offering_id: str) -> Optional[dict]:
+        """
+        Get stored synopsis for an offering.
+
+        Args:
+            offering_id: Unique offering identifier
+
+        Returns:
+            Synopsis data dictionary or None if not found
+        """
+        return self._synopsis_manager.get_synopsis(offering_id)
+
+    def get_all_synopses(self) -> dict:
+        """Get all stored synopses."""
+        return self._synopsis_manager.get_all_synopses()

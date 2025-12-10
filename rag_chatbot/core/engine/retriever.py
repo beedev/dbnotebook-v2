@@ -271,17 +271,31 @@ class LocalRetriever:
         elif offering_filter or practice_filter:
             # Manual filtering without vector store
             logger.debug("Filtering nodes manually without vector store")
+            logger.info(f"=== OFFERING FILTER DEBUG ===")
+            logger.info(f"Offering filter: {offering_filter}")
+            logger.info(f"Practice filter: {practice_filter}")
+            logger.info(f"Total nodes to filter: {len(nodes)}")
+
             filtered_nodes = []
 
             for node in nodes:
                 metadata = node.metadata or {}
 
-                # Check offering_id filter
+                # Debug: Log metadata for each node
+                logger.info(f"Node metadata: {metadata.get('file_name', 'unknown')}: offering_name={metadata.get('offering_name')}, offering_id={metadata.get('offering_id')}, it_practice={metadata.get('it_practice')}")
+
+                # Check offering filter (by name or id)
                 if offering_filter:
                     node_offering_id = metadata.get("offering_id")
-                    if node_offering_id and node_offering_id in offering_filter:
+                    node_offering_name = metadata.get("offering_name")
+
+                    if (node_offering_id and node_offering_id in offering_filter) or \
+                       (node_offering_name and node_offering_name in offering_filter):
+                        logger.info(f"✓ Node MATCHED offering filter: {metadata.get('file_name')}")
                         filtered_nodes.append(node)
                         continue
+                    else:
+                        logger.info(f"✗ Node REJECTED (offering mismatch): {metadata.get('file_name')}")
 
                 # Check practice filter
                 if practice_filter:
@@ -313,6 +327,45 @@ class LocalRetriever:
         else:
             logger.debug(f"Using simple retriever for {node_count} nodes")
             return self._get_normal_retriever(vector_index, llm, language)
+
+    def get_all_nodes_for_offering(
+        self,
+        nodes: List[BaseNode],
+        offering_filter: List[str]
+    ) -> List[BaseNode]:
+        """
+        Retrieve ALL nodes for specific offerings (no top-k limit).
+
+        Useful for comprehensive queries like "summarize Nexus offering"
+        where we need full context, not just top-k similar chunks.
+
+        Args:
+            nodes: All available nodes
+            offering_filter: List of offering names/IDs to retrieve
+
+        Returns:
+            All nodes matching the offering filter
+        """
+        if not offering_filter:
+            logger.warning("No offering filter provided for comprehensive retrieval")
+            return []
+
+        filtered_nodes = []
+
+        for node in nodes:
+            metadata = node.metadata or {}
+            node_offering_id = metadata.get("offering_id")
+            node_offering_name = metadata.get("offering_name")
+
+            if (node_offering_id and node_offering_id in offering_filter) or \
+               (node_offering_name and node_offering_name in offering_filter):
+                filtered_nodes.append(node)
+
+        logger.info(
+            f"Comprehensive retrieval: {len(filtered_nodes)} nodes for offerings {offering_filter}"
+        )
+
+        return filtered_nodes
 
     def clear_cache(self) -> None:
         """Clear the index cache."""

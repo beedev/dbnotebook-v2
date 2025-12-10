@@ -19,9 +19,15 @@ _llm_cache: dict = {}
 class LocalRAGModel:
     """Manages LLM model initialization and caching."""
 
-    OPENAI_MODELS = {"gpt-3.5-turbo", "gpt-4", "gpt-4-turbo", "gpt-4o"}
+    OPENAI_MODELS = {
+        "gpt-3.5-turbo", "gpt-4", "gpt-4-turbo", "gpt-4o", "gpt-4.1",
+        "gpt-4o-mini", "gpt-4-turbo-preview",
+        "gpt-4-0125-preview", "gpt-4-1106-preview",  # GPT-4 Turbo versions
+        "gpt-4o-2024-11-20", "gpt-4o-2024-08-06",     # GPT-4o versions
+        "o1", "o1-mini", "o1-preview"                  # O1 reasoning models
+    }
     CLAUDE_MODELS = {"claude-3-5-sonnet-20241022", "claude-3-5-haiku-20241022", "claude-3-opus-20240229"}
-    GEMINI_MODELS = {"gemini-2.0-flash-exp", "gemini-1.5-pro", "gemini-1.5-flash"}
+    GEMINI_MODELS = {"gemini-3-pro-preview", "gemini-2.0-flash-exp", "gemini-1.5-pro", "gemini-1.5-flash"}
 
     @staticmethod
     def set(
@@ -80,8 +86,10 @@ class LocalRAGModel:
             )
         elif provider == "gemini":
             from llama_index.llms.gemini import Gemini
+            # Gemini API requires model names to be prefixed with "models/"
+            gemini_model_name = f"models/{model_name}" if not model_name.startswith("models/") else model_name
             model = Gemini(
-                model=model_name,
+                model=gemini_model_name,
                 api_key=setting.gemini.api_key,
                 temperature=setting.gemini.temperature,
                 max_tokens=setting.gemini.max_output_tokens

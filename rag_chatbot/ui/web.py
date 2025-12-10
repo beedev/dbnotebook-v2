@@ -38,6 +38,10 @@ class FlaskChatbotUI:
         # Initialize metadata manager
         self._metadata_manager = MetadataManager(config_dir="data/config")
 
+        # Document metadata file
+        self._doc_metadata_file = Path("data/config/documents_metadata.json")
+        self._doc_metadata_file.parent.mkdir(parents=True, exist_ok=True)
+
         # Ensure directories exist
         self._data_dir.mkdir(parents=True, exist_ok=True)
         self._upload_dir.mkdir(parents=True, exist_ok=True)
@@ -50,7 +54,122 @@ class FlaskChatbotUI:
         )
 
         self._setup_routes()
+
+        # Auto-reload documents with metadata on startup
+        self._reload_documents_with_metadata()
+
         logger.info("Flask UI initialized")
+
+    def _reload_documents_with_metadata(self) -> None:
+        """Reload all documents from data and uploads directories with metadata from JSON."""
+        try:
+            # Load document metadata
+            doc_metadata = self._load_document_metadata()
+
+            if not doc_metadata:
+                logger.info("No document metadata found")
+                return
+
+            # Find all documents in data and uploads directories
+            doc_files = []
+            for directory in [self._data_dir, self._upload_dir]:
+                if directory.exists():
+                    for file_path in directory.iterdir():
+                        if file_path.is_file() and file_path.name in doc_metadata:
+                            doc_files.append(str(file_path))
+
+            if not doc_files:
+                logger.info("No documents found in data or uploads directories")
+                return
+
+            logger.info(f"Reloading {len(doc_files)} documents with metadata")
+
+            # Process each document with its metadata
+            for doc_path in doc_files:
+                filename = os.path.basename(doc_path)
+                metadata = doc_metadata[filename]
+
+                it_practice = metadata.get("it_practice")
+                offering_name = metadata.get("offering_name")
+                offering_id = metadata.get("offering_id", "")
+
+                # Auto-generate offering_id from offering_name if empty
+                if not offering_id and offering_name and offering_name != "N/A":
+                    offering_id = offering_name.lower().replace(" ", "-").replace("_", "-")
+
+                # Store nodes with metadata
+                self._pipeline.store_nodes(
+                    input_files=[doc_path],
+                    it_practice=it_practice if it_practice != "N/A" else None,
+                    offering_name=offering_name if offering_name != "N/A" else None,
+                    offering_id=offering_id if offering_id else None
+                )
+
+                # Track processed file
+                if filename not in self._processed_files:
+                    self._processed_files.append(filename)
+
+                logger.info(f"Reloaded {filename} with Practice='{it_practice}', Offering='{offering_name}'")
+
+            # Set chat mode after loading documents
+            self._pipeline.set_chat_mode()
+            logger.info(f"Successfully reloaded {len(doc_files)} documents with metadata")
+
+        except Exception as e:
+            logger.error(f"Error reloading documents with metadata: {e}")
+
+    def _format_file_size(self, size_bytes: int) -> str:
+        """Format file size in human-readable format."""
+        for unit in ['B', 'KB', 'MB', 'GB']:
+            if size_bytes < 1024.0:
+                return f"{size_bytes:.1f} {unit}"
+            size_bytes /= 1024.0
+        return f"{size_bytes:.1f} TB"
+
+    def _load_document_metadata(self) -> dict:
+        """Load document metadata from JSON file."""
+        if self._doc_metadata_file.exists():
+            try:
+                with open(self._doc_metadata_file, 'r') as f:
+                    return json.load(f)
+            except Exception as e:
+                logger.error(f"Error loading document metadata: {e}")
+                return {}
+        return {}
+
+    def _save_document_metadata(self, metadata: dict) -> None:
+        """Save document metadata to JSON file."""
+        try:
+            with open(self._doc_metadata_file, 'w') as f:
+                json.dump(metadata, f, indent=2)
+        except Exception as e:
+            logger.error(f"Error saving document metadata: {e}")
+
+    def _add_document_metadata(self, filename: str, it_practice: str, offering_name: str, offering_id: str) -> None:
+        """Add metadata for a document."""
+        metadata = self._load_document_metadata()
+        metadata[filename] = {
+            "it_practice": it_practice or "N/A",
+            "offering_name": offering_name or "N/A",
+            "offering_id": offering_id or ""
+        }
+        self._save_document_metadata(metadata)
+
+    def _remove_document_metadata(self, filename: str) -> None:
+        """Remove metadata for a document."""
+        metadata = self._load_document_metadata()
+        if filename in metadata:
+            del metadata[filename]
+            self._save_document_metadata(metadata)
+
+    def _get_document_metadata(self, filename: str) -> dict:
+        """Get metadata for a document."""
+        metadata = self._load_document_metadata()
+        return metadata.get(filename, {
+            "it_practice": "N/A",
+            "offering_name": "N/A",
+            "offering_id": ""
+        })
 
     def _is_image_generation_request(self, message: str) -> bool:
         """Use LLM to intelligently detect if message is requesting image generation."""
@@ -92,6 +211,7 @@ Response:"""
             # Fallback to simple keyword matching
             creation_words = ["generate", "create", "make", "draw", "design", "produce"]
             return any(word in message_lower for word in creation_words)
+
 
     def _create_image_prompt_with_context(self, user_message: str, document_content: str) -> str:
         """Create detailed image generation prompt using document content and user request.
@@ -247,16 +367,23 @@ Output ONLY valid JSON, nothing else."""
             history = data.get("history", [])
             model = data.get("model", "")
             mode = data.get("mode", "chat")
+            selected_offerings = data.get("selected_offerings", [])
 
             if not message:
                 return jsonify({"error": "No message provided"}), 400
+
+            logger.info(f"Received query with {len(selected_offerings)} selected offerings: {selected_offerings}")
 
             # Set model if provided and different
             if model and model != self._pipeline.get_model_name():
                 try:
                     self._pipeline.set_model_name(model)
                     self._pipeline.set_model()
-                    self._pipeline.set_engine()
+                    # Set engine with offering filter
+                    if selected_offerings:
+                        self._pipeline.set_engine(offering_filter=selected_offerings)
+                    else:
+                        self._pipeline.set_engine()
                 except Exception as e:
                     logger.error(f"Error setting model: {e}")
 
@@ -264,18 +391,33 @@ Output ONLY valid JSON, nothing else."""
             if not self._pipeline.get_model_name():
                 self._pipeline.set_model_name("")
                 self._pipeline.set_model()
-                self._pipeline.set_engine()
+
+            # Engine management is now handled automatically by query_sales_mode()
+            # which preserves conversation history when offerings change
 
             # STEP 1: Always query documents first to get context
             def process_request() -> Generator[str, None, None]:
                 try:
                     # Query RAG pipeline to get relevant document content
-                    yield f"data: {json.dumps({'token': 'Analyzing documents...'})}\n\n"
+                    yield f"data: {json.dumps({'token': ''})}\n\n"
 
-                    rag_response = self._pipeline.query(mode, message, history)
+                    # SALES MODE: Use query_sales_mode for intelligent classification
+                    rag_response = self._pipeline.query_sales_mode(
+                        message=message,
+                        selected_offerings=selected_offerings,
+                        chatbot=history
+                    )
 
                     # Get the full response text from RAG
                     document_context = ""
+
+                    # Check if there's a response prefix from sales mode
+                    response_prefix = getattr(rag_response, 'response_prefix', '')
+                    if response_prefix:
+                        # Stream the prefix first
+                        for token in response_prefix:
+                            yield f"data: {json.dumps({'token': token})}\n\n"
+
                     for token in rag_response.response_gen:
                         document_context += token
 
@@ -378,7 +520,12 @@ High quality, business presentation style"""
             # Get metadata from form
             it_practice = request.form.get("it_practice", "")
             offering_name = request.form.get("offering_name", "")
-            offering_id = request.form.get("offering_id", "")
+
+            # Auto-generate offering_id from offering_name if not empty
+            offering_id = ""
+            if offering_name:
+                # Convert offering name to lowercase, replace spaces with hyphens
+                offering_id = offering_name.lower().replace(" ", "-").replace("_", "-")
 
             uploaded_files = []
             try:
@@ -399,11 +546,13 @@ High quality, business presentation style"""
                         offering_id=offering_id if offering_id else None
                     )
                     self._pipeline.set_chat_mode()
-                    # Track processed files
+                    # Track processed files and save metadata
                     for f in uploaded_files:
                         filename = os.path.basename(f)
                         if filename not in self._processed_files:
                             self._processed_files.append(filename)
+                        # Save document metadata
+                        self._add_document_metadata(filename, it_practice, offering_name, offering_id)
                     logger.info(f"Processed {len(uploaded_files)} documents with metadata")
 
                 return jsonify({
@@ -486,12 +635,74 @@ High quality, business presentation style"""
                 logger.error(f"Error setting model: {e}")
                 return jsonify({"success": False, "error": str(e)})
 
-        @self._app.route("/documents", methods=["GET"])
+        @self._app.route("/documents")
+        def documents_page():
+            """Serve the documents management page."""
+            return render_template("documents.html")
+
+        @self._app.route("/api/documents/list", methods=["GET"])
         def list_documents():
-            return jsonify({
-                "files": self._processed_files,
-                "count": len(self._processed_files)
-            })
+            """Get list of uploaded documents with metadata."""
+            try:
+                documents = []
+                # Get all files from upload directory
+                if self._upload_dir.exists():
+                    for file_path in self._upload_dir.iterdir():
+                        if file_path.is_file():
+                            # Get file size
+                            file_size = file_path.stat().st_size
+                            size_str = self._format_file_size(file_size)
+
+                            # Get document metadata
+                            doc_metadata = self._get_document_metadata(file_path.name)
+                            documents.append({
+                                "name": file_path.name,
+                                "size": size_str,
+                                "it_practice": doc_metadata.get("it_practice", "N/A"),
+                                "offering_name": doc_metadata.get("offering_name", "N/A")
+                            })
+
+                return jsonify({
+                    "success": True,
+                    "documents": documents,
+                    "count": len(documents)
+                })
+            except Exception as e:
+                logger.error(f"Error listing documents: {e}")
+                return jsonify({"success": False, "error": str(e)})
+
+        @self._app.route("/api/documents/<filename>", methods=["DELETE"])
+        def delete_document(filename):
+            """Delete a document."""
+            try:
+                file_path = self._upload_dir / filename
+
+                if not file_path.exists():
+                    return jsonify({
+                        "success": False,
+                        "error": "File not found"
+                    }), 404
+
+                # Delete the file
+                file_path.unlink()
+
+                # Remove from processed files list
+                if filename in self._processed_files:
+                    self._processed_files.remove(filename)
+
+                # Remove document metadata
+                self._remove_document_metadata(filename)
+
+                logger.info(f"Deleted document: {filename}")
+
+                return jsonify({
+                    "success": True,
+                    "message": f"Document '{filename}' deleted successfully"
+                })
+
+            except Exception as e:
+                logger.error(f"Error deleting document: {e}")
+                return jsonify({"success": False, "error": str(e)}), 500
 
         @self._app.route("/health", methods=["GET"])
         def health():
@@ -600,27 +811,110 @@ High quality, business presentation style"""
 
         @self._app.route("/api/offerings", methods=["GET"])
         def get_offerings():
-            """Get all offerings grouped by practice."""
+            """Get all unique offerings from uploaded documents."""
             try:
-                all_offerings = self._metadata_manager.get_all_offerings()
-                practices = self._metadata_manager.get_all_practices()
+                # Load document metadata
+                metadata = self._load_document_metadata()
 
-                # Group offerings by practice
-                grouped = {}
-                for practice in practices:
-                    practice_offerings = self._metadata_manager.get_offerings_by_practice(practice)
-                    grouped[practice] = practice_offerings
+                # Extract unique offerings with their IT practices
+                offerings_map = {}
+                for filename, doc_meta in metadata.items():
+                    offering_name = doc_meta.get("offering_name", "")
+                    it_practice = doc_meta.get("it_practice", "")
+
+                    # Skip N/A or empty offerings
+                    if offering_name and offering_name != "N/A":
+                        if offering_name not in offerings_map:
+                            offerings_map[offering_name] = {
+                                "name": offering_name,
+                                "it_practice": it_practice,
+                                "document_count": 0
+                            }
+                        offerings_map[offering_name]["document_count"] += 1
+
+                # Convert to list sorted by name
+                offerings = sorted(offerings_map.values(), key=lambda x: x["name"])
 
                 return jsonify({
                     "success": True,
-                    "offerings": all_offerings,
-                    "grouped": grouped,
-                    "count": len(all_offerings)
+                    "offerings": offerings,
+                    "count": len(offerings)
                 })
             except Exception as e:
                 logger.error(f"Error getting offerings: {e}")
                 return jsonify({"success": False, "error": str(e)})
 
+        @self._app.route("/api/models", methods=["GET"])
+        def get_available_models():
+            """Get all available LLM models from Ollama and configured API providers."""
+            try:
+                import os
+                from rag_chatbot.core.model import LocalRAGModel
+
+                models = []
+
+                # Get Ollama models
+                ollama_models = LocalRAGModel.list_available_models(self._host)
+                for model in ollama_models:
+                    models.append({
+                        "name": model,
+                        "provider": "Ollama",
+                        "type": "local"
+                    })
+
+                # Get OpenAI models if API key is configured
+                openai_key = os.getenv("OPENAI_API_KEY", "")
+                if openai_key and openai_key != "your_openai_api_key_here":
+                    # Use the OPENAI_MODELS set from LocalRAGModel
+                    for model in sorted(LocalRAGModel.OPENAI_MODELS):
+                        if model not in [m["name"] for m in models]:
+                            models.append({
+                                "name": model,
+                                "provider": "OpenAI",
+                                "type": "api"
+                            })
+
+                # Get Anthropic (Claude) models if API key is configured
+                anthropic_key = os.getenv("ANTHROPIC_API_KEY", "")
+                if anthropic_key and anthropic_key != "your_anthropic_api_key_here":
+                    # Use the CLAUDE_MODELS set from LocalRAGModel
+                    for model in sorted(LocalRAGModel.CLAUDE_MODELS):
+                        if model not in [m["name"] for m in models]:
+                            models.append({
+                                "name": model,
+                                "provider": "Anthropic",
+                                "type": "api"
+                            })
+
+                # Get Google (Gemini) models if API key is configured
+                google_key = os.getenv("GOOGLE_API_KEY", "")
+                if google_key and google_key != "your_google_api_key_here":
+                    # Use the GEMINI_MODELS set from LocalRAGModel
+                    for model in sorted(LocalRAGModel.GEMINI_MODELS):
+                        if model not in [m["name"] for m in models]:
+                            models.append({
+                                "name": model,
+                                "provider": "Google",
+                                "type": "api"
+                            })
+
+                # Remove duplicates while preserving order
+                seen = set()
+                unique_models = []
+                for model in models:
+                    if model["name"] not in seen:
+                        seen.add(model["name"])
+                        unique_models.append(model)
+
+                return jsonify({
+                    "success": True,
+                    "models": unique_models,
+                    "count": len(unique_models)
+                })
+
+            except Exception as e:
+                logger.error(f"Error getting models: {e}")
+                return jsonify({"success": False, "error": str(e), "models": []})
         @self._app.route("/api/practices/<practice_name>/offerings", methods=["GET"])
         def get_practice_offerings(practice_name):
             """Get offerings for a specific practice."""

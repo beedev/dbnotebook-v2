@@ -8,8 +8,36 @@ A comprehensive Sales Enablement System built on a multimodal RAG (Retrieval-Aug
 
 ---
 
+## 🚀 Quick Start
+
+Get started in 3 simple steps:
+
+```bash
+# 1. Clone the repository
+git clone https://github.com/beedev/multimodal-rag.git
+cd multimodal-rag
+
+# 2. Run the startup script (handles everything automatically)
+./start.sh
+
+# 3. Open your browser
+# → http://localhost:7860
+```
+
+That's it! The script will automatically:
+- ✓ Create virtual environment if needed
+- ✓ Install all dependencies
+- ✓ Check and start Ollama server
+- ✓ Configure environment files
+- ✓ Launch the application
+
+For detailed setup and configuration, see the [full setup guide](#-setup) below.
+
+---
+
 ## 📖 Table of Contents
 
+- [🚀 Quick Start](#-quick-start)
 - [⭐️ Key Features](#️-key-features)
 - [🎯 Sales Enablement Capabilities](#-sales-enablement-capabilities)
 - [💡 Architecture](#-architecture)
@@ -207,26 +235,59 @@ For detailed configuration options, see `.env.example`.
 
 ### Running the Application
 
-#### Local Development
+#### Method 1: One-Command Startup (Recommended)
 ```bash
-# Using Python
-python -m rag_chatbot --host localhost
+# Simple - handles everything automatically
+./start.sh
 
-# Using script
-source ./scripts/run.sh
+# Custom port and host
+./start.sh 8080 localhost
 ```
 
-#### With Ngrok (External Access)
+The startup script automatically:
+- Validates Python installation
+- Creates/activates virtual environment
+- Installs dependencies if needed
+- Checks and starts Ollama server
+- Cleans up existing processes
+- Launches the application
+
+**Access at:** `http://localhost:7860`
+
+---
+
+#### Method 2: Manual Python Execution
 ```bash
+# Activate virtual environment
+source venv/bin/activate
+
+# Run the application
+python -m rag_chatbot --host localhost --port 7860
+```
+
+---
+
+#### Method 3: External Access with Ngrok
+```bash
+# Install ngrok first: https://ngrok.com/download
 source ./scripts/run.sh --ngrok
 ```
 
-#### Docker
+---
+
+#### Method 4: Docker
 ```bash
 docker compose up --build
+
+# Access at: http://0.0.0.0:7860
 ```
 
-**Access the application at:** `http://0.0.0.0:7860/`
+---
+
+**Troubleshooting:**
+- **Port already in use**: Run `lsof -ti:7860 | xargs kill -9` to free the port
+- **Ollama not found**: Install from https://ollama.com/ for local model support
+- **Dependencies missing**: Run `pip install -e .` to reinstall dependencies
 
 ---
 

@@ -1,0 +1,1008 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RAG Chatbot</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            min-height: 100vh;
+            color: #e4e4e4;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            display: grid;
+            grid-template-columns: 300px 1fr;
+            gap: 20px;
+            height: 100vh;
+        }
+
+        /* Sidebar */
+        .sidebar {
+            background: rgba(255,255,255,0.05);
+            border-radius: 12px;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        .sidebar h2 {
+            color: #00d9ff;
+            font-size: 1.2rem;
+            margin-bottom: 10px;
+        }
+
+        .sidebar label {
+            display: block;
+            margin-bottom: 5px;
+            font-size: 0.9rem;
+            color: #aaa;
+        }
+
+        .sidebar select, .sidebar input[type="text"] {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 8px;
+            background: rgba(0,0,0,0.3);
+            color: #fff;
+            font-size: 0.9rem;
+        }
+
+        .sidebar select:focus, .sidebar input:focus {
+            outline: none;
+            border-color: #00d9ff;
+        }
+
+        .file-upload {
+            border: 2px dashed rgba(255,255,255,0.2);
+            border-radius: 8px;
+            padding: 20px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .file-upload:hover {
+            border-color: #00d9ff;
+            background: rgba(0,217,255,0.05);
+        }
+
+        .file-upload input {
+            display: none;
+        }
+
+        .file-list {
+            max-height: 150px;
+            overflow-y: auto;
+            font-size: 0.85rem;
+        }
+
+        .file-item {
+            padding: 5px 10px;
+            background: rgba(0,0,0,0.2);
+            border-radius: 4px;
+            margin-bottom: 5px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .file-item .remove {
+            color: #ff6b6b;
+            cursor: pointer;
+        }
+
+        .btn {
+            padding: 12px 20px;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 0.9rem;
+            font-weight: 600;
+            transition: all 0.3s;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #00d9ff, #0099cc);
+            color: #000;
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 20px rgba(0,217,255,0.3);
+        }
+
+        .btn-secondary {
+            background: rgba(255,255,255,0.1);
+            color: #fff;
+        }
+
+        .btn-secondary:hover {
+            background: rgba(255,255,255,0.2);
+        }
+
+        .btn-danger {
+            background: rgba(255,107,107,0.2);
+            color: #ff6b6b;
+        }
+
+        .btn-danger:hover {
+            background: rgba(255,107,107,0.3);
+        }
+
+        /* Mode Toggle */
+        .mode-toggle {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+
+        .mode-toggle button {
+            flex: 1;
+            padding: 10px;
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 8px;
+            background: rgba(0,0,0,0.3);
+            color: #aaa;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .mode-toggle button.active {
+            background: #00d9ff;
+            color: #000;
+            border-color: #00d9ff;
+        }
+
+        .mode-toggle button:hover {
+            border-color: #00d9ff;
+        }
+
+        /* Image Generation */
+        .image-gen-container {
+            display: none;
+            flex-direction: column;
+            height: 100%;
+        }
+
+        .image-gen-container.active {
+            display: flex;
+        }
+
+        .image-prompt-area {
+            padding: 20px;
+            background: rgba(0,0,0,0.2);
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+        }
+
+        .image-prompt-area textarea {
+            width: 100%;
+            padding: 15px;
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 8px;
+            background: rgba(0,0,0,0.3);
+            color: #fff;
+            font-size: 1rem;
+            resize: vertical;
+            min-height: 80px;
+        }
+
+        .image-controls {
+            display: flex;
+            gap: 10px;
+            margin-top: 10px;
+            align-items: center;
+        }
+
+        .image-controls label {
+            color: #aaa;
+            font-size: 0.9rem;
+        }
+
+        .image-controls select {
+            padding: 8px;
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 6px;
+            background: rgba(0,0,0,0.3);
+            color: #fff;
+        }
+
+        .image-gallery {
+            flex: 1;
+            overflow-y: auto;
+            padding: 20px;
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+            gap: 20px;
+            align-content: start;
+        }
+
+        .image-card {
+            background: rgba(255,255,255,0.05);
+            border-radius: 12px;
+            overflow: hidden;
+            transition: transform 0.3s;
+        }
+
+        .image-card:hover {
+            transform: translateY(-5px);
+        }
+
+        .image-card img {
+            width: 100%;
+            height: 250px;
+            object-fit: cover;
+        }
+
+        .image-card-info {
+            padding: 10px;
+            font-size: 0.8rem;
+            color: #aaa;
+        }
+
+        /* Main Chat Area */
+        .main {
+            display: flex;
+            flex-direction: column;
+            background: rgba(255,255,255,0.02);
+            border-radius: 12px;
+            overflow: hidden;
+        }
+
+        .chat-header {
+            padding: 20px;
+            background: rgba(0,0,0,0.2);
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+        }
+
+        .chat-header h1 {
+            font-size: 1.5rem;
+            color: #00d9ff;
+        }
+
+        .chat-header p {
+            color: #888;
+            font-size: 0.9rem;
+        }
+
+        .chat-messages {
+            flex: 1;
+            overflow-y: auto;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+
+        .message {
+            max-width: 80%;
+            padding: 15px 20px;
+            border-radius: 15px;
+            line-height: 1.5;
+        }
+
+        .message.user {
+            align-self: flex-end;
+            background: linear-gradient(135deg, #00d9ff, #0099cc);
+            color: #000;
+            border-bottom-right-radius: 5px;
+        }
+
+        .message.assistant {
+            align-self: flex-start;
+            background: rgba(255,255,255,0.1);
+            border-bottom-left-radius: 5px;
+        }
+
+        .message.assistant pre {
+            background: rgba(0,0,0,0.3);
+            padding: 10px;
+            border-radius: 5px;
+            overflow-x: auto;
+            margin: 10px 0;
+        }
+
+        .message.assistant code {
+            font-family: 'Monaco', 'Menlo', monospace;
+            font-size: 0.85rem;
+        }
+
+        .generated-image-container {
+            margin: 10px 0;
+            text-align: center;
+        }
+
+        .generated-image {
+            max-width: 100%;
+            max-height: 400px;
+            border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+            margin-bottom: 10px;
+        }
+
+        .generated-image-container p {
+            color: #00D9FF;
+            font-size: 0.9rem;
+            margin: 5px 0;
+        }
+
+        .chat-input {
+            padding: 20px;
+            background: rgba(0,0,0,0.2);
+            border-top: 1px solid rgba(255,255,255,0.1);
+            display: flex;
+            gap: 10px;
+        }
+
+        .chat-input textarea {
+            flex: 1;
+            padding: 15px;
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 12px;
+            background: rgba(0,0,0,0.3);
+            color: #fff;
+            font-size: 1rem;
+            resize: none;
+            min-height: 50px;
+            max-height: 150px;
+        }
+
+        .chat-input textarea:focus {
+            outline: none;
+            border-color: #00d9ff;
+        }
+
+        .chat-input button {
+            padding: 15px 30px;
+        }
+
+        /* Status indicator */
+        .status {
+            padding: 10px 20px;
+            background: rgba(0,0,0,0.3);
+            font-size: 0.85rem;
+            color: #888;
+        }
+
+        .status.loading {
+            color: #00d9ff;
+        }
+
+        .status.error {
+            color: #ff6b6b;
+        }
+
+        .status.success {
+            color: #4ecdc4;
+        }
+
+        /* Typing indicator */
+        .typing-indicator {
+            display: none;
+            padding: 15px 20px;
+            background: rgba(255,255,255,0.1);
+            border-radius: 15px;
+            align-self: flex-start;
+        }
+
+        .typing-indicator.active {
+            display: flex;
+            gap: 5px;
+        }
+
+        .typing-indicator span {
+            width: 8px;
+            height: 8px;
+            background: #00d9ff;
+            border-radius: 50%;
+            animation: bounce 1.4s infinite ease-in-out;
+        }
+
+        .typing-indicator span:nth-child(1) { animation-delay: -0.32s; }
+        .typing-indicator span:nth-child(2) { animation-delay: -0.16s; }
+
+        @keyframes bounce {
+            0%, 80%, 100% { transform: scale(0); }
+            40% { transform: scale(1); }
+        }
+
+        /* Mobile responsive */
+        @media (max-width: 768px) {
+            .container {
+                grid-template-columns: 1fr;
+                height: auto;
+            }
+
+            .sidebar {
+                order: 2;
+            }
+
+            .main {
+                order: 1;
+                height: 70vh;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <aside class="sidebar">
+            <div class="mode-toggle">
+                <button id="chat-mode-btn" class="active">Chat</button>
+                <button id="image-mode-btn">Images</button>
+            </div>
+
+            <div>
+                <h2>Settings</h2>
+                <label for="model">LLM Model</label>
+                <select id="model">
+                    <option value="">Default (llama3.1)</option>
+                    <optgroup label="Ollama Models">
+                        <option value="llama3.1:latest">llama3.1:latest</option>
+                        <option value="deepseek-r1:32b">deepseek-r1:32b</option>
+                        <option value="qwen2:7b">qwen2:7b</option>
+                    </optgroup>
+                    <optgroup label="OpenAI Models">
+                        <option value="gpt-3.5-turbo">gpt-3.5-turbo</option>
+                        <option value="gpt-4">gpt-4</option>
+                        <option value="gpt-4-turbo">gpt-4-turbo</option>
+                        <option value="gpt-4o">gpt-4o</option>
+                    </optgroup>
+                    <optgroup label="Claude Models">
+                        <option value="claude-3-5-sonnet-20241022">claude-3-5-sonnet-20241022</option>
+                        <option value="claude-3-5-haiku-20241022">claude-3-5-haiku-20241022</option>
+                        <option value="claude-3-opus-20240229">claude-3-opus-20240229</option>
+                    </optgroup>
+                    <optgroup label="Gemini Models">
+                        <option value="gemini-2.0-flash-exp">gemini-2.0-flash-exp</option>
+                        <option value="gemini-1.5-pro">gemini-1.5-pro</option>
+                        <option value="gemini-1.5-flash">gemini-1.5-flash</option>
+                    </optgroup>
+                </select>
+            </div>
+
+            <div>
+                <label for="chat-mode">Chat Mode</label>
+                <select id="chat-mode">
+                    <option value="chat">Conversational</option>
+                    <option value="qa">Single Q&A</option>
+                </select>
+            </div>
+
+            <div>
+                <h2>Documents</h2>
+                <div class="file-upload" id="file-drop">
+                    <input type="file" id="file-input" multiple accept=".pdf,.txt,.md,.markdown,.epub,.docx,.pptx">
+                    <p>Drop files here or click to upload</p>
+                    <p style="font-size: 0.8rem; color: #666; margin-top: 5px;">PDF, TXT, MD, EPUB, DOCX, PPTX</p>
+                </div>
+                <div class="file-list" id="file-list"></div>
+                <button class="btn btn-primary" id="upload-btn" style="width: 100%; margin-top: 10px;" disabled>
+                    Process Documents
+                </button>
+
+                <div id="processed-docs" style="margin-top: 15px; display: none;">
+                    <h3 style="color: #4ecdc4; font-size: 0.9rem; margin-bottom: 8px;">Processed Documents</h3>
+                    <div class="file-list" id="processed-list"></div>
+                </div>
+            </div>
+
+            <div style="margin-top: auto;">
+                <button class="btn btn-secondary" id="clear-chat" style="width: 100%; margin-bottom: 10px;">
+                    Clear Chat
+                </button>
+                <button class="btn btn-danger" id="reset-docs" style="width: 100%;">
+                    Reset Documents
+                </button>
+            </div>
+        </aside>
+
+        <main class="main">
+            <div class="chat-header">
+                <h1>RAG Chatbot</h1>
+                <p>Chat with your documents using AI</p>
+            </div>
+
+            <div class="status" id="status">Ready</div>
+
+            <div class="chat-messages" id="chat-messages">
+                <div class="message assistant">
+                    Hello! I'm your RAG assistant. Upload some documents and ask me questions about them, or just chat with me directly.
+                </div>
+            </div>
+
+            <div class="typing-indicator" id="typing">
+                <span></span>
+                <span></span>
+                <span></span>
+            </div>
+
+            <div class="chat-input">
+                <textarea id="message-input" placeholder="Type your message..." rows="1"></textarea>
+                <button class="btn btn-primary" id="send-btn">Send</button>
+            </div>
+
+            <!-- Image Generation Container -->
+            <div class="image-gen-container" id="image-gen-container">
+                <div class="chat-header">
+                    <h1>Image Generation</h1>
+                    <p>Generate images using Imagen (Google Gemini)</p>
+                </div>
+
+                <div class="image-prompt-area">
+                    <textarea id="image-prompt" placeholder="Describe the image you want to generate..."></textarea>
+                    <div class="image-controls">
+                        <label>Number of Images:</label>
+                        <select id="num-images">
+                            <option value="1">1</option>
+                            <option value="2">2</option>
+                            <option value="3">3</option>
+                            <option value="4">4</option>
+                        </select>
+
+                        <label style="margin-left: 20px;">Aspect Ratio:</label>
+                        <select id="aspect-ratio">
+                            <option value="1:1">1:1 (Square)</option>
+                            <option value="3:4">3:4 (Portrait)</option>
+                            <option value="4:3">4:3 (Landscape)</option>
+                            <option value="9:16">9:16 (Mobile)</option>
+                            <option value="16:9">16:9 (Wide)</option>
+                        </select>
+
+                        <button class="btn btn-primary" id="generate-image-btn" style="margin-left: auto;">
+                            Generate Images
+                        </button>
+                        <button class="btn btn-danger" id="clear-images-btn">
+                            Clear All
+                        </button>
+                    </div>
+                </div>
+
+                <div class="status" id="image-status">Ready to generate images</div>
+
+                <div class="image-gallery" id="image-gallery">
+                    <!-- Generated images will appear here -->
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script>
+        // State
+        let selectedFiles = [];
+        let chatHistory = [];
+        let processedFiles = [];
+
+        // Elements
+        const chatMessages = document.getElementById('chat-messages');
+        const messageInput = document.getElementById('message-input');
+        const sendBtn = document.getElementById('send-btn');
+        const fileInput = document.getElementById('file-input');
+        const fileDrop = document.getElementById('file-drop');
+        const fileList = document.getElementById('file-list');
+        const uploadBtn = document.getElementById('upload-btn');
+        const clearChatBtn = document.getElementById('clear-chat');
+        const resetDocsBtn = document.getElementById('reset-docs');
+        const modelSelect = document.getElementById('model');
+        const chatModeSelect = document.getElementById('chat-mode');
+        const statusEl = document.getElementById('status');
+        const typingIndicator = document.getElementById('typing');
+        const processedDocsSection = document.getElementById('processed-docs');
+        const processedList = document.getElementById('processed-list');
+
+        // Auto-resize textarea
+        messageInput.addEventListener('input', function() {
+            this.style.height = 'auto';
+            this.style.height = Math.min(this.scrollHeight, 150) + 'px';
+        });
+
+        // Send message on Enter (Shift+Enter for new line)
+        messageInput.addEventListener('keydown', function(e) {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                sendMessage();
+            }
+        });
+
+        sendBtn.addEventListener('click', sendMessage);
+
+        // File handling
+        fileDrop.addEventListener('click', () => fileInput.click());
+        fileDrop.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            fileDrop.style.borderColor = '#00d9ff';
+        });
+        fileDrop.addEventListener('dragleave', () => {
+            fileDrop.style.borderColor = 'rgba(255,255,255,0.2)';
+        });
+        fileDrop.addEventListener('drop', (e) => {
+            e.preventDefault();
+            fileDrop.style.borderColor = 'rgba(255,255,255,0.2)';
+            handleFiles(e.dataTransfer.files);
+        });
+        fileInput.addEventListener('change', (e) => handleFiles(e.target.files));
+
+        function handleFiles(files) {
+            for (let file of files) {
+                if (!selectedFiles.find(f => f.name === file.name)) {
+                    selectedFiles.push(file);
+                }
+            }
+            updateFileList();
+        }
+
+        function updateFileList() {
+            fileList.innerHTML = selectedFiles.map((file, index) => `
+                <div class="file-item">
+                    <span>${file.name}</span>
+                    <span class="remove" onclick="removeFile(${index})">x</span>
+                </div>
+            `).join('');
+            uploadBtn.disabled = selectedFiles.length === 0;
+        }
+
+        function removeFile(index) {
+            selectedFiles.splice(index, 1);
+            updateFileList();
+        }
+
+        // Fetch and display processed documents
+        async function updateProcessedDocs() {
+            try {
+                const response = await fetch('/documents');
+                const data = await response.json();
+                processedFiles = data.files || [];
+
+                if (processedFiles.length > 0) {
+                    processedDocsSection.style.display = 'block';
+                    processedList.innerHTML = processedFiles.map(file => `
+                        <div class="file-item">
+                            <span title="${file}">${file}</span>
+                        </div>
+                    `).join('');
+                } else {
+                    processedDocsSection.style.display = 'none';
+                    processedList.innerHTML = '';
+                }
+            } catch (error) {
+                console.error('Failed to fetch documents:', error);
+            }
+        }
+
+        // Load processed docs on page load
+        updateProcessedDocs();
+
+        // Upload documents
+        uploadBtn.addEventListener('click', async () => {
+            if (selectedFiles.length === 0) return;
+
+            setStatus('Uploading documents...', 'loading');
+            uploadBtn.disabled = true;
+
+            const formData = new FormData();
+            selectedFiles.forEach(file => formData.append('files', file));
+
+            try {
+                const response = await fetch('/upload', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const data = await response.json();
+                if (data.success) {
+                    setStatus(`Processed ${data.count} documents`, 'success');
+                    selectedFiles = [];
+                    updateFileList();
+                    updateProcessedDocs();  // Refresh processed docs list
+                    addMessage('assistant', `I've processed ${data.count} document(s). You can now ask me questions about them!`);
+                } else {
+                    setStatus('Error: ' + data.error, 'error');
+                }
+            } catch (error) {
+                setStatus('Upload failed: ' + error.message, 'error');
+            }
+
+            uploadBtn.disabled = selectedFiles.length === 0;
+        });
+
+        // Send message
+        async function sendMessage() {
+            const message = messageInput.value.trim();
+            if (!message) return;
+
+            // Add user message
+            addMessage('user', message);
+            messageInput.value = '';
+            messageInput.style.height = 'auto';
+
+            // Show typing indicator
+            typingIndicator.classList.add('active');
+            setStatus('Thinking...', 'loading');
+            sendBtn.disabled = true;
+
+            try {
+                const response = await fetch('/chat', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        message: message,
+                        history: chatHistory,
+                        model: modelSelect.value,
+                        mode: chatModeSelect.value
+                    })
+                });
+
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+
+                // Create assistant message element
+                const assistantMsg = addMessage('assistant', '');
+                let fullResponse = '';
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+
+                    const chunk = decoder.decode(value);
+                    const lines = chunk.split('\n');
+
+                    for (const line of lines) {
+                        if (line.startsWith('data: ')) {
+                            try {
+                                const data = JSON.parse(line.slice(6));
+                                if (data.token) {
+                                    fullResponse += data.token;
+                                    assistantMsg.innerHTML = formatMessage(fullResponse);
+                                    chatMessages.scrollTop = chatMessages.scrollHeight;
+                                }
+                                if (data.image) {
+                                    // Display generated image
+                                    const imageHtml = `<div class="generated-image-container"><img src="${data.image}" alt="Generated image" class="generated-image" /><p>${data.message || 'Image generated'}</p></div>`;
+                                    fullResponse = imageHtml;
+                                    assistantMsg.innerHTML = fullResponse;
+                                    chatMessages.scrollTop = chatMessages.scrollHeight;
+                                }
+                                if (data.error) {
+                                    fullResponse = `Error: ${data.error}`;
+                                    assistantMsg.innerHTML = formatMessage(fullResponse);
+                                    chatMessages.scrollTop = chatMessages.scrollHeight;
+                                }
+                                if (data.done) {
+                                    chatHistory.push(
+                                        { role: 'user', content: message },
+                                        { role: 'assistant', content: fullResponse }
+                                    );
+                                }
+                            } catch (e) {}
+                        }
+                    }
+                }
+
+                setStatus('Ready', '');
+            } catch (error) {
+                addMessage('assistant', 'Sorry, there was an error: ' + error.message);
+                setStatus('Error occurred', 'error');
+            }
+
+            typingIndicator.classList.remove('active');
+            sendBtn.disabled = false;
+            messageInput.focus();
+        }
+
+        function addMessage(role, content) {
+            const div = document.createElement('div');
+            div.className = `message ${role}`;
+            div.innerHTML = formatMessage(content);
+            chatMessages.appendChild(div);
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+            return div;
+        }
+
+        function formatMessage(text) {
+            // Basic markdown-like formatting
+            return text
+                .replace(/```(\w*)\n([\s\S]*?)```/g, '<pre><code>$2</code></pre>')
+                .replace(/`([^`]+)`/g, '<code>$1</code>')
+                .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+                .replace(/\*([^*]+)\*/g, '<em>$1</em>')
+                .replace(/\n/g, '<br>');
+        }
+
+        function setStatus(text, type) {
+            statusEl.textContent = text;
+            statusEl.className = 'status ' + type;
+        }
+
+        // Clear chat
+        clearChatBtn.addEventListener('click', async () => {
+            chatMessages.innerHTML = '';
+            chatHistory = [];
+            addMessage('assistant', 'Chat cleared. How can I help you?');
+
+            try {
+                await fetch('/clear', { method: 'POST' });
+            } catch (e) {}
+        });
+
+        // Reset documents
+        resetDocsBtn.addEventListener('click', async () => {
+            if (!confirm('Reset all documents? This cannot be undone.')) return;
+
+            setStatus('Resetting documents...', 'loading');
+            try {
+                const response = await fetch('/reset', { method: 'POST' });
+                const data = await response.json();
+                if (data.success) {
+                    setStatus('Documents reset', 'success');
+                    updateProcessedDocs();  // Clear processed docs list
+                    addMessage('assistant', 'All documents have been reset. Upload new documents to continue.');
+                }
+            } catch (error) {
+                setStatus('Reset failed', 'error');
+            }
+        });
+
+        // Model change
+        modelSelect.addEventListener('change', async () => {
+            const model = modelSelect.value;
+            if (model) {
+                setStatus(`Switching to ${model}...`, 'loading');
+                try {
+                    const response = await fetch('/model', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ model: model })
+                    });
+                    const data = await response.json();
+                    if (data.success) {
+                        setStatus(`Using ${model}`, 'success');
+                    } else {
+                        setStatus('Model change failed: ' + data.error, 'error');
+                    }
+                } catch (error) {
+                    setStatus('Model change failed', 'error');
+                }
+            }
+        });
+
+        // ===== IMAGE GENERATION FUNCTIONALITY =====
+
+        const chatModeBtn = document.getElementById('chat-mode-btn');
+        const imageModeBtn = document.getElementById('image-mode-btn');
+        const chatContainer = document.querySelector('.main > .chat-header').parentElement;
+        const imageGenContainer = document.getElementById('image-gen-container');
+        const imagePromptInput = document.getElementById('image-prompt');
+        const numImagesSelect = document.getElementById('num-images');
+        const aspectRatioSelect = document.getElementById('aspect-ratio');
+        const generateImageBtn = document.getElementById('generate-image-btn');
+        const clearImagesBtn = document.getElementById('clear-images-btn');
+        const imageGallery = document.getElementById('image-gallery');
+        const imageStatusEl = document.getElementById('image-status');
+
+        // Mode switching
+        chatModeBtn.addEventListener('click', () => {
+            chatModeBtn.classList.add('active');
+            imageModeBtn.classList.remove('active');
+            imageGenContainer.classList.remove('active');
+        });
+
+        imageModeBtn.addEventListener('click', () => {
+            imageModeBtn.classList.add('active');
+            chatModeBtn.classList.remove('active');
+            imageGenContainer.classList.add('active');
+            loadImages();  // Load existing images when switching to image mode
+        });
+
+        // Generate images
+        generateImageBtn.addEventListener('click', async () => {
+            const prompt = imagePromptInput.value.trim();
+            if (!prompt) {
+                setImageStatus('Please enter a prompt', 'error');
+                return;
+            }
+
+            const numImages = parseInt(numImagesSelect.value);
+            const aspectRatio = aspectRatioSelect.value;
+
+            generateImageBtn.disabled = true;
+            setImageStatus(`Generating ${numImages} image(s)...`, 'loading');
+
+            try {
+                const response = await fetch('/generate-image', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        prompt: prompt,
+                        num_images: numImages,
+                        aspect_ratio: aspectRatio
+                    })
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    setImageStatus(`Generated ${data.count} image(s) successfully!`, 'success');
+                    displayImages(data.images);
+                } else {
+                    setImageStatus('Generation failed: ' + data.error, 'error');
+                }
+            } catch (error) {
+                setImageStatus('Generation failed: ' + error.message, 'error');
+            }
+
+            generateImageBtn.disabled = false;
+        });
+
+        // Load existing images
+        async function loadImages() {
+            try {
+                const response = await fetch('/images');
+                const data = await response.json();
+
+                if (data.success && data.images.length > 0) {
+                    displayImages(data.images);
+                    setImageStatus(`Showing ${data.count} image(s)`, '');
+                } else {
+                    imageGallery.innerHTML = '<p style="text-align: center; color: #666; padding: 40px;">No images generated yet. Create your first image above!</p>';
+                }
+            } catch (error) {
+                console.error('Failed to load images:', error);
+            }
+        }
+
+        // Display images in gallery
+        function displayImages(images) {
+            // Append new images to gallery (don't clear existing)
+            images.forEach(img => {
+                const card = document.createElement('div');
+                card.className = 'image-card';
+                card.innerHTML = `
+                    <img src="${img.url}" alt="Generated image">
+                    <div class="image-card-info">
+                        <div>${img.filename}</div>
+                        <div>${img.size_mb} MB</div>
+                    </div>
+                `;
+                imageGallery.insertBefore(card, imageGallery.firstChild);
+            });
+        }
+
+        // Clear all images
+        clearImagesBtn.addEventListener('click', async () => {
+            if (!confirm('Delete all generated images? This cannot be undone.')) return;
+
+            setImageStatus('Clearing images...', 'loading');
+            try {
+                const response = await fetch('/clear-images', { method: 'POST' });
+                const data = await response.json();
+
+                if (data.success) {
+                    imageGallery.innerHTML = '<p style="text-align: center; color: #666; padding: 40px;">No images generated yet. Create your first image above!</p>';
+                    setImageStatus(`Cleared ${data.deleted_count} image(s)`, 'success');
+                }
+            } catch (error) {
+                setImageStatus('Failed to clear images', 'error');
+            }
+        });
+
+        // Set image status
+        function setImageStatus(text, type) {
+            imageStatusEl.textContent = text;
+            imageStatusEl.className = 'status ' + type;
+        }
+    </script>
+</body>
+</html>

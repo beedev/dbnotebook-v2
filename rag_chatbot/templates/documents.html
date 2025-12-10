@@ -1,0 +1,455 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Document Management - Sales Enablement System</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            min-height: 100vh;
+            color: #e4e4e4;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 30px;
+            padding-bottom: 20px;
+            border-bottom: 2px solid rgba(0,217,255,0.3);
+        }
+
+        .header h1 {
+            color: #00d9ff;
+            font-size: 1.8rem;
+        }
+
+        .nav-buttons {
+            display: flex;
+            gap: 10px;
+        }
+
+        .btn {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 0.9rem;
+            font-weight: 600;
+            transition: all 0.3s;
+            text-decoration: none;
+            display: inline-block;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #00d9ff, #0099cc);
+            color: #000;
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 20px rgba(0,217,255,0.3);
+        }
+
+        .btn-secondary {
+            background: rgba(255,255,255,0.1);
+            color: #fff;
+        }
+
+        .btn-secondary:hover {
+            background: rgba(255,255,255,0.2);
+        }
+
+        .btn-danger {
+            background: rgba(255,107,107,0.2);
+            color: #ff6b6b;
+            padding: 6px 12px;
+            font-size: 0.85rem;
+        }
+
+        .btn-danger:hover {
+            background: rgba(255,107,107,0.3);
+        }
+
+        .content-grid {
+            display: grid;
+            grid-template-columns: 400px 1fr;
+            gap: 20px;
+        }
+
+        .card {
+            background: rgba(255,255,255,0.05);
+            border-radius: 12px;
+            padding: 20px;
+        }
+
+        .card h2 {
+            color: #00d9ff;
+            font-size: 1.3rem;
+            margin-bottom: 20px;
+        }
+
+        .form-group {
+            margin-bottom: 15px;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 5px;
+            font-size: 0.9rem;
+            color: #aaa;
+        }
+
+        .form-group select,
+        .form-group input[type="text"] {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 8px;
+            background: rgba(0,0,0,0.3);
+            color: #fff;
+            font-size: 0.9rem;
+        }
+
+        .file-upload {
+            border: 2px dashed rgba(255,255,255,0.2);
+            border-radius: 8px;
+            padding: 30px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .file-upload:hover {
+            border-color: #00d9ff;
+            background: rgba(0,217,255,0.05);
+        }
+
+        .file-upload input {
+            display: none;
+        }
+
+        .documents-table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        .documents-table th,
+        .documents-table td {
+            padding: 12px;
+            text-align: left;
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+        }
+
+        .documents-table th {
+            background: rgba(0,217,255,0.1);
+            color: #00d9ff;
+            font-weight: 600;
+        }
+
+        .documents-table tr:hover {
+            background: rgba(255,255,255,0.02);
+        }
+
+        .meta-tag {
+            font-size: 0.8rem;
+            padding: 3px 8px;
+            background: rgba(0,217,255,0.25);
+            color: #00d9ff;
+            border-radius: 4px;
+            margin-right: 5px;
+            display: inline-block;
+        }
+
+        .status-message {
+            padding: 10px;
+            border-radius: 6px;
+            font-size: 0.85rem;
+            margin-top: 10px;
+        }
+
+        .status-success {
+            background: rgba(0,255,100,0.1);
+            color: #00ff64;
+            border: 1px solid rgba(0,255,100,0.3);
+        }
+
+        .status-error {
+            background: rgba(255,107,107,0.1);
+            color: #ff6b6b;
+            border: 1px solid rgba(255,107,107,0.3);
+        }
+
+        .status-info {
+            background: rgba(0,217,255,0.1);
+            color: #00d9ff;
+            border: 1px solid rgba(0,217,255,0.3);
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 40px;
+            color: #888;
+        }
+
+        .actions {
+            display: flex;
+            gap: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>📄 Document Management</h1>
+            <div class="nav-buttons">
+                <a href="/" class="btn btn-secondary">← Back to Chat</a>
+            </div>
+        </div>
+
+        <div class="content-grid">
+            <!-- Upload Section -->
+            <div class="card">
+                <h2>Upload Documents</h2>
+
+                <div class="form-group">
+                    <label>IT Practice <span style="color: #ff6b6b;">*</span></label>
+                    <select id="itPractice" required>
+                        <option value="">-- Select IT Practice --</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label>Offering Name <span style="color: #ff6b6b;">*</span></label>
+                    <input type="text" id="offeringName" placeholder="Enter offering name" required>
+                </div>
+
+                <div class="form-group">
+                    <label>Offering ID (optional)</label>
+                    <input type="text" id="offeringId" placeholder="Auto-generated if empty">
+                </div>
+
+                <div class="file-upload" onclick="document.getElementById('fileInput').click()">
+                    <div style="font-size: 2rem;">📁</div>
+                    <div style="margin-top: 10px; font-weight: 600;">Click to select files</div>
+                    <div style="font-size: 0.85rem; color: #888; margin-top: 5px;">PDF, DOCX, TXT, etc.</div>
+                    <input type="file" id="fileInput" multiple>
+                </div>
+
+                <button class="btn btn-primary" style="width: 100%; margin-top: 15px;" onclick="uploadDocuments()">
+                    Upload Documents
+                </button>
+
+                <div id="uploadStatus"></div>
+            </div>
+
+            <!-- Documents List -->
+            <div class="card">
+                <h2>Uploaded Documents</h2>
+
+                <div id="documentsTableContainer">
+                    <table class="documents-table" id="documentsTable" style="display: none;">
+                        <thead>
+                            <tr>
+                                <th>Document</th>
+                                <th>IT Practice</th>
+                                <th>Offering</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="documentsBody">
+                        </tbody>
+                    </table>
+                    <div class="empty-state" id="emptyState">
+                        <div style="font-size: 3rem; margin-bottom: 10px;">📂</div>
+                        <div>No documents uploaded yet</div>
+                        <div style="font-size: 0.85rem; color: #666; margin-top: 5px;">
+                            Upload your first document to get started
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Load IT Practices on page load
+        document.addEventListener('DOMContentLoaded', () => {
+            loadPractices();
+            loadDocuments();
+        });
+
+        // Load IT Practices
+        async function loadPractices() {
+            try {
+                const response = await fetch('/api/practices');
+                const data = await response.json();
+
+                const select = document.getElementById('itPractice');
+                select.innerHTML = '<option value="">-- Select IT Practice --</option>';
+
+                data.practices.forEach(practice => {
+                    const option = document.createElement('option');
+                    option.value = practice;
+                    option.textContent = practice;
+                    select.appendChild(option);
+                });
+            } catch (error) {
+                console.error('Error loading practices:', error);
+            }
+        }
+
+        // Upload Documents
+        async function uploadDocuments() {
+            const fileInput = document.getElementById('fileInput');
+            const itPractice = document.getElementById('itPractice').value;
+            const offeringName = document.getElementById('offeringName').value;
+            const offeringId = document.getElementById('offeringId').value;
+
+            if (fileInput.files.length === 0) {
+                showStatus('uploadStatus', 'Please select files to upload', 'error');
+                return;
+            }
+
+            if (!itPractice) {
+                showStatus('uploadStatus', 'Please select an IT Practice', 'error');
+                return;
+            }
+
+            if (!offeringName) {
+                showStatus('uploadStatus', 'Please enter an Offering Name', 'error');
+                return;
+            }
+
+            const formData = new FormData();
+            for (let file of fileInput.files) {
+                formData.append('files', file);
+            }
+            formData.append('it_practice', itPractice);
+            formData.append('offering_name', offeringName);
+            formData.append('offering_id', offeringId);
+
+            showStatus('uploadStatus', 'Uploading...', 'info');
+
+            try {
+                const response = await fetch('/upload', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    showStatus('uploadStatus', `✓ Uploaded ${data.count} file(s) successfully`, 'success');
+                    fileInput.value = '';
+                    loadDocuments();
+                } else {
+                    showStatus('uploadStatus', `✗ Error: ${data.error}`, 'error');
+                }
+            } catch (error) {
+                showStatus('uploadStatus', `✗ Error: ${error.message}`, 'error');
+            }
+        }
+
+        // Load Documents
+        async function loadDocuments() {
+            try {
+                const response = await fetch('/api/documents/list');
+                const data = await response.json();
+
+                const table = document.getElementById('documentsTable');
+                const emptyState = document.getElementById('emptyState');
+                const tbody = document.getElementById('documentsBody');
+
+                if (!data.documents || data.documents.length === 0) {
+                    table.style.display = 'none';
+                    emptyState.style.display = 'block';
+                    return;
+                }
+
+                table.style.display = 'table';
+                emptyState.style.display = 'none';
+                tbody.innerHTML = '';
+
+                data.documents.forEach(doc => {
+                    const row = document.createElement('tr');
+                    row.innerHTML = `
+                        <td>
+                            <div style="font-weight: 600;">${doc.name}</div>
+                            <div style="font-size: 0.8rem; color: #888;">${doc.size || 'Unknown size'}</div>
+                        </td>
+                        <td>
+                            <span class="meta-tag">${doc.it_practice || 'N/A'}</span>
+                        </td>
+                        <td>
+                            <span class="meta-tag">${doc.offering_name || 'N/A'}</span>
+                        </td>
+                        <td>
+                            <div class="actions">
+                                <button class="btn btn-danger" onclick="deleteDocument('${doc.name}')">
+                                    Delete
+                                </button>
+                            </div>
+                        </td>
+                    `;
+                    tbody.appendChild(row);
+                });
+            } catch (error) {
+                console.error('Error loading documents:', error);
+            }
+        }
+
+        // Delete Document
+        async function deleteDocument(filename) {
+            if (!confirm(`Are you sure you want to delete "${filename}"?`)) {
+                return;
+            }
+
+            try {
+                const response = await fetch(`/api/documents/${encodeURIComponent(filename)}`, {
+                    method: 'DELETE'
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    loadDocuments();
+                    alert('✓ Document deleted successfully');
+                } else {
+                    alert(`✗ Error: ${data.error}`);
+                }
+            } catch (error) {
+                alert(`✗ Error: ${error.message}`);
+            }
+        }
+
+        // Show status message
+        function showStatus(elementId, message, type) {
+            const element = document.getElementById(elementId);
+            element.className = `status-message status-${type}`;
+            element.textContent = message;
+
+            if (type === 'success') {
+                setTimeout(() => {
+                    element.textContent = '';
+                    element.className = '';
+                }, 3000);
+            }
+        }
+    </script>
+</body>
+</html>

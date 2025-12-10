@@ -1,14 +1,197 @@
 #!/bin/bash
-# RAG Chatbot Server Control Script
+# =============================================================================
+# RAG Chatbot - Sales Enablement System
+# Startup Script with Environment Validation
+# =============================================================================
 
+set -e  # Exit on error
+
+# Color codes for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+# Default configuration
 PORT=${1:-7860}
 HOST=${2:-localhost}
 
-echo "Stopping any existing RAG chatbot processes..."
-pkill -f "python -m rag_chatbot" 2>/dev/null
-lsof -ti:$PORT | xargs kill -9 2>/dev/null
-sleep 1
+# =============================================================================
+# Helper Functions
+# =============================================================================
 
-echo "Starting RAG Chatbot on http://localhost:$PORT"
-source venv/bin/activate
-python -m rag_chatbot --host $HOST --port $PORT
+print_header() {
+    echo -e "${BLUE}========================================${NC}"
+    echo -e "${BLUE}RAG Chatbot - Sales Enablement System${NC}"
+    echo -e "${BLUE}========================================${NC}"
+}
+
+print_success() {
+    echo -e "${GREEN}✓ $1${NC}"
+}
+
+print_error() {
+    echo -e "${RED}✗ $1${NC}"
+}
+
+print_warning() {
+    echo -e "${YELLOW}⚠ $1${NC}"
+}
+
+print_info() {
+    echo -e "${BLUE}→ $1${NC}"
+}
+
+# =============================================================================
+# Environment Validation
+# =============================================================================
+
+validate_environment() {
+    print_info "Validating environment..."
+
+    # Check if Python is available
+    if ! command -v python &> /dev/null && ! command -v python3 &> /dev/null; then
+        print_error "Python is not installed. Please install Python 3.9+ first."
+        exit 1
+    fi
+    print_success "Python found"
+
+    # Check if venv exists
+    if [ ! -d "venv" ]; then
+        print_warning "Virtual environment not found"
+        print_info "Creating virtual environment..."
+        python -m venv venv || python3 -m venv venv
+        print_success "Virtual environment created"
+
+        print_info "Installing dependencies..."
+        source venv/bin/activate
+        pip install -e . || pip install --upgrade pip && pip install -e .
+        print_success "Dependencies installed"
+    else
+        print_success "Virtual environment found"
+    fi
+
+    # Check if .env file exists
+    if [ ! -f ".env" ]; then
+        print_warning ".env file not found"
+        if [ -f ".env.example" ]; then
+            print_info "Copying .env.example to .env"
+            cp .env.example .env
+            print_success ".env file created"
+            print_warning "Please configure .env file with your API keys before running"
+        fi
+    else
+        print_success ".env configuration found"
+    fi
+}
+
+# =============================================================================
+# Process Management
+# =============================================================================
+
+cleanup_existing_processes() {
+    print_info "Checking for existing processes on port $PORT..."
+
+    # Kill any existing RAG chatbot processes
+    if pgrep -f "python -m rag_chatbot" > /dev/null; then
+        print_warning "Stopping existing RAG chatbot processes..."
+        pkill -f "python -m rag_chatbot" 2>/dev/null || true
+        sleep 1
+    fi
+
+    # Kill any process using the port
+    if lsof -ti:$PORT > /dev/null 2>&1; then
+        print_warning "Stopping process on port $PORT..."
+        lsof -ti:$PORT | xargs kill -9 2>/dev/null || true
+        sleep 1
+    fi
+
+    print_success "Port $PORT is available"
+}
+
+# =============================================================================
+# Ollama Management
+# =============================================================================
+
+check_ollama() {
+    if [ "$HOST" == "localhost" ]; then
+        print_info "Checking Ollama server..."
+
+        if ! curl -s http://localhost:11434/api/tags > /dev/null 2>&1; then
+            print_warning "Ollama server not responding"
+
+            if command -v ollama &> /dev/null; then
+                print_info "Starting Ollama server..."
+                ollama serve > /dev/null 2>&1 &
+                sleep 2
+
+                if curl -s http://localhost:11434/api/tags > /dev/null 2>&1; then
+                    print_success "Ollama server started"
+                else
+                    print_warning "Could not start Ollama server automatically"
+                    print_info "Please start Ollama manually: 'ollama serve'"
+                fi
+            else
+                print_warning "Ollama not found. For local models, install from: https://ollama.com"
+                print_info "Continuing without local model support..."
+            fi
+        else
+            print_success "Ollama server is running"
+        fi
+    fi
+}
+
+# =============================================================================
+# Server Startup
+# =============================================================================
+
+start_server() {
+    print_info "Activating virtual environment..."
+    source venv/bin/activate
+    print_success "Virtual environment activated"
+
+    echo ""
+    print_header
+    print_success "Starting RAG Chatbot Sales Enablement System"
+    echo ""
+    print_info "Configuration:"
+    echo "  • Host: $HOST"
+    echo "  • Port: $PORT"
+    echo "  • URL:  ${GREEN}http://localhost:$PORT${NC}"
+    echo ""
+    print_info "Press Ctrl+C to stop the server"
+    echo ""
+    echo -e "${BLUE}========================================${NC}"
+    echo ""
+
+    # Start the application
+    python -m rag_chatbot --host $HOST --port $PORT
+}
+
+# =============================================================================
+# Main Execution
+# =============================================================================
+
+main() {
+    print_header
+    echo ""
+
+    # Validate environment
+    validate_environment
+    echo ""
+
+    # Cleanup existing processes
+    cleanup_existing_processes
+    echo ""
+
+    # Check Ollama (if using localhost)
+    check_ollama
+    echo ""
+
+    # Start server
+    start_server
+}
+
+# Run main function
+main

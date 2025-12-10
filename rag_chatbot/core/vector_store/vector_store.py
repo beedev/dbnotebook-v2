@@ -141,10 +141,12 @@ class LocalVectorStore:
             for node in nodes:
                 metadata = node.metadata or {}
 
-                # Check offering_id filter
+                # Check offering filter (by name or id)
                 if offering_ids:
                     node_offering_id = metadata.get("offering_id")
-                    if node_offering_id and node_offering_id in offering_ids:
+                    node_offering_name = metadata.get("offering_name")
+                    if (node_offering_id and node_offering_id in offering_ids) or \
+                       (node_offering_name and node_offering_name in offering_ids):
                         filtered_nodes.append(node)
                         continue
 

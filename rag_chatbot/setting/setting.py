@@ -9,7 +9,7 @@ load_dotenv()
 
 class OllamaSettings(BaseModel):
     llm: str = Field(
-        default="llama3.1:latest", description="LLM model"
+        default="gpt-4.1", description="LLM model"
     )
     keep_alive: str = Field(
         default="1h", description="Keep alive time for the server"
@@ -51,7 +51,7 @@ class RetrieverSettings(BaseModel):
         default=5, description="Number of generated queries"
     )
     similarity_top_k: int = Field(
-        default=20, description="Top k documents"
+        default=10, description="Top k documents"
     )
     retriever_weights: List[float] = Field(
         default=[0.4, 0.6], description="Weights for retriever"
