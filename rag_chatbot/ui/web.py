@@ -10,7 +10,7 @@ from typing import Generator
 from flask import Flask, render_template, request, jsonify, Response, stream_with_context, send_file
 
 from ..pipeline import LocalRAGPipeline
-from ..core.image import ImageGenerator
+from ..core.plugins import get_configured_image_provider, register_default_plugins
 from ..core.metadata import MetadataManager
 from ..api.routes.chat import create_chat_routes
 
@@ -39,8 +39,14 @@ class FlaskChatbotUI:
         self._db_manager = db_manager
         self._notebook_manager = notebook_manager
 
-        # Initialize image generator
-        self._image_generator = ImageGenerator(pipeline._settings)
+        # Initialize image generation provider via plugin system
+        register_default_plugins()
+        try:
+            self._image_provider = get_configured_image_provider()
+            logger.info(f"Initialized image provider: {self._image_provider.name}")
+        except Exception as e:
+            logger.warning(f"Image generation not available: {e}")
+            self._image_provider = None
 
         # Initialize metadata manager
         self._metadata_manager = MetadataManager(config_dir="data/config")
@@ -208,9 +214,8 @@ Examples:
 Response:"""
 
         try:
-            # Use a simple, fast model for intent classification
-            from llama_index.llms.openai import OpenAI
-            llm = OpenAI(model="gpt-3.5-turbo", temperature=0, timeout=300.0)
+            # Use the pipeline's configured LLM for intent classification
+            llm = self._pipeline._default_model
             response = llm.complete(intent_prompt)
 
             # Check if response contains YES
@@ -223,82 +228,55 @@ Response:"""
 
 
     def _create_image_prompt_with_context(self, user_message: str, document_content: str) -> str:
-        """Create detailed image generation prompt using document content and user request.
+        """Create a crisp, summarized image prompt using LLM.
+
+        Flow: User request + Document context → LLM summarization → Clean image prompt
 
         Args:
             user_message: User's original request
             document_content: Retrieved content from RAG documents
 
         Returns:
-            Enhanced prompt optimized for image generation with document context
+            Crisp, summarized prompt optimized for image generation
         """
         try:
-            from llama_index.llms.openai import OpenAI
+            # Use the pipeline's configured LLM
+            llm = self._pipeline._default_model
 
-            expansion_prompt = f"""You are an expert at creating detailed image generation prompts for AI image models like Imagen.
+            # Truncate document content if too long (keep key info)
+            max_context = 2000
+            doc_summary = document_content[:max_context] if len(document_content) > max_context else document_content
 
-CRITICAL: Image generation models struggle with text accuracy. Be EXTREMELY explicit about text spelling.
+            summarization_prompt = f"""Analyze this request and context, then create a SHORT image generation prompt.
 
-User's request: "{user_message}"
+User wants: "{user_message}"
 
-Document content retrieved from knowledge base:
-\"\"\"
-{document_content}
-\"\"\"
+Context from documents:
+{doc_summary}
 
-Create a detailed image generation prompt with the following structure:
+Create a crisp image prompt (2-3 sentences max) that:
+1. Captures the main visual concept
+2. Describes style (infographic, diagram, illustration, etc.)
+3. Specifies key visual elements and colors
 
-1. **EXACT TEXT TO INCLUDE** - Spell out each word letter-by-letter:
-   - Extract key product names, features, and terms from the documents
-   - For each text element, write: "Text reads: [WORD]" and then spell it: "spelled: W-O-R-D"
-   - Be extremely explicit: "The word 'FRAMEWORK' must be spelled: F-R-A-M-E-W-O-R-K"
-   - List 5-7 key text elements that MUST appear correctly
+Output ONLY the image prompt, nothing else. Keep it under 100 words."""
 
-2. **Visual Design Elements** (NO TEXT):
-   - Professional infographic layout with clean sections
-   - Business-appropriate color scheme (blues, grays, whites)
-   - Icons and graphics representing concepts
-   - Clear visual hierarchy with distinct sections
-   - Modern, minimal design
+            response = llm.complete(summarization_prompt)
+            image_prompt = str(response).strip()
 
-3. **Text Placement Instructions**:
-   - Specify where each text element should appear
-   - "Main heading at top", "Feature bullets in left section", etc.
+            # Clean up - remove quotes if LLM wrapped the response
+            if image_prompt.startswith('"') and image_prompt.endswith('"'):
+                image_prompt = image_prompt[1:-1]
 
-4. **Style Guidelines**:
-   - Professional business presentation style
-   - High contrast for readability
-   - Balanced composition
-   - Clean, modern typography
+            logger.info(f"User request: {user_message[:100]}...")
+            logger.info(f"Generated image prompt: {image_prompt}")
 
-IMPORTANT CONSTRAINTS:
-- NO Lorem Ipsum or placeholder text
-- NO gibberish or random characters
-- EVERY text element must be spelled out letter-by-letter
-- Maximum 50 words total text across entire image
-- Prefer simple, short words when possible
-
-Output format:
-1. First list: "TEXT ELEMENTS (spelled out): [list each word with spelling]"
-2. Then: "VISUAL DESIGN: [describe the visual layout without text]"
-3. Then: "COMPLETE PROMPT: [combine everything into final prompt]"
-
-Output ONLY this structured prompt."""
-
-            llm = OpenAI(model="gpt-4-turbo", temperature=0.7, timeout=300.0)
-            response = llm.complete(expansion_prompt)
-            enhanced_prompt = str(response).strip()
-
-            logger.info(f"Original request: {user_message[:100]}...")
-            logger.info(f"Document context length: {len(document_content)} chars")
-            logger.info(f"Enhanced prompt: {enhanced_prompt[:200]}...")
-
-            return enhanced_prompt
+            return image_prompt
 
         except Exception as e:
-            logger.error(f"Error creating image prompt with context: {e}")
-            logger.info("Falling back to user message")
-            return user_message
+            logger.error(f"Error creating image prompt: {e}")
+            # Fallback: create simple prompt from user message
+            return f"Professional infographic showing: {user_message}"
 
     def _extract_text_structure(self, user_message: str, document_content: str) -> dict:
         """Extract structured text elements from document content for overlay.
@@ -311,7 +289,8 @@ Output ONLY this structured prompt."""
             Dictionary with structured text for overlay
         """
         try:
-            from llama_index.llms.openai import OpenAI
+            # Use the pipeline's configured LLM
+            llm = self._pipeline._default_model
 
             extraction_prompt = f"""Extract key information from the document for creating an infographic.
 
@@ -319,7 +298,7 @@ User wants: "{user_message}"
 
 Document content:
 \"\"\"
-{document_content}
+{document_content[:2000]}
 \"\"\"
 
 Extract and structure the information as follows:
@@ -342,7 +321,6 @@ Output format (JSON):
 
 Output ONLY valid JSON, nothing else."""
 
-            llm = OpenAI(model="gpt-4-turbo", temperature=0.3, timeout=300.0)
             response = llm.complete(extraction_prompt)
 
             # Parse JSON response
@@ -456,69 +434,50 @@ Output ONLY valid JSON, nothing else."""
                     logger.info(f"Retrieved document context: {document_context[:200]}...")
 
                     # STEP 2: Check if image generation is requested
-                    if self._is_image_generation_request(message):
-                        msg1 = "\n\n**APPROACH 1: Improved AI-Generated Text**\n"
-                        yield f"data: {json.dumps({'token': msg1})}\n\n"
-                        yield f"data: {json.dumps({'token': 'Creating explicit prompt with letter-by-letter spelling...'})}\n\n"
+                    if self._is_image_generation_request(message) and self._image_provider:
+                        msg = "\n\n**Generating image based on your request and document context...**\n"
+                        yield f"data: {json.dumps({'token': msg})}\n\n"
 
-                        # APPROACH 1: Generate with improved explicit prompt
+                        # Create enhanced prompt using document context
                         enhanced_prompt = self._create_image_prompt_with_context(
                             user_message=message,
                             document_content=document_context
                         )
 
-                        yield f"data: {json.dumps({'token': 'Generating image with AI text...'})}\n\n"
+                        yield f"data: {json.dumps({'token': 'Creating visual representation...'})}\n\n"
 
-                        image_paths_v1 = self._image_generator.generate_image(
-                            prompt=enhanced_prompt,
-                            num_images=1
-                        )
-
-                        if image_paths_v1:
-                            image_url_v1 = f"/image/{os.path.basename(image_paths_v1[0])}"
-                            msg2 = "\n✓ Approach 1 complete!\n"
-                            yield f"data: {json.dumps({'token': msg2})}\n\n"
-                            yield f"data: {json.dumps({'image': image_url_v1, 'message': '**Approach 1:** AI-generated text'})}\n\n"
-
-                        # APPROACH 2: Generate with hybrid text overlay
-                        msg3 = "\n\n**APPROACH 2: Hybrid (AI Design + Perfect Text Overlay)**\n"
-                        yield f"data: {json.dumps({'token': msg3})}\n\n"
-                        yield f"data: {json.dumps({'token': 'Extracting text structure from documents...'})}\n\n"
-
-                        text_structure = self._extract_text_structure(message, document_context)
-
-                        yield f"data: {json.dumps({'token': 'Generating base image design...'})}\n\n"
-
-                        # Generate base image with minimal/no text
-                        base_prompt = """Professional business infographic layout with clean design.
-Style: Modern, minimal, professional
-Color scheme: Blue gradients, white, gray accents
-Layout: Clear sections with visual hierarchy
-Elements: Icons, graphics, charts representing business concepts
-NO TEXT - text will be added separately
-High quality, business presentation style"""
-
-                        image_paths_v2 = self._image_generator.generate_image(
-                            prompt=base_prompt,
-                            num_images=1
-                        )
-
-                        if image_paths_v2:
-                            yield f"data: {json.dumps({'token': 'Adding perfect text overlay...'})}\n\n"
-
-                            # Add text overlay
-                            overlay_path = self._image_generator.add_text_overlay(
-                                image_path=image_paths_v2[0],
-                                text_elements=text_structure
+                        try:
+                            # Generate image using the plugin-based provider
+                            image_paths = self._image_provider.generate(
+                                prompt=enhanced_prompt,
+                                num_images=1,
+                                aspect_ratio="16:9"  # Default to landscape for infographics
                             )
 
-                            image_url_v2 = f"/image/{os.path.basename(overlay_path)}"
-                            msg4 = "\n✓ Approach 2 complete!\n\n"
-                            yield f"data: {json.dumps({'token': msg4})}\n\n"
-                            yield f"data: {json.dumps({'image': image_url_v2, 'message': '**Approach 2:** Perfect text overlay'})}\n\n"
+                            if image_paths:
+                                for idx, path in enumerate(image_paths):
+                                    image_url = f"/image/{os.path.basename(path)}"
+                                    success_msg = f"\n Image {idx + 1} generated!\n"
+                                    yield f"data: {json.dumps({'token': success_msg})}\n\n"
+                                    yield f"data: {json.dumps({'image': image_url, 'message': 'Generated image'})}\n\n"
+                            else:
+                                warn_msg = "\n No images were generated. Please try a different prompt.\n"
+                                yield f"data: {json.dumps({'token': warn_msg})}\n\n"
 
-                        msg5 = "\n\n**Compare both approaches and let me know which works better!**\n"
-                        yield f"data: {json.dumps({'token': msg5})}\n\n"
+                        except Exception as img_error:
+                            logger.error(f"Image generation failed: {img_error}")
+                            err_msg = f"\n Image generation failed: {str(img_error)}\n"
+                            yield f"data: {json.dumps({'token': err_msg})}\n\n"
+
+                        yield f"data: {json.dumps({'done': True})}\n\n"
+
+                    elif self._is_image_generation_request(message) and not self._image_provider:
+                        # Image generation requested but provider not available
+                        config_msg = "\n Image generation is not configured. Please set up GOOGLE_API_KEY in your environment.\n"
+                        yield f"data: {json.dumps({'token': config_msg})}\n\n"
+                        # Fall through to return the text response
+                        for token in document_context:
+                            yield f"data: {json.dumps({'token': token})}\n\n"
                         yield f"data: {json.dumps({'done': True})}\n\n"
 
                     else:
@@ -849,6 +808,12 @@ High quality, business presentation style"""
         @self._app.route("/generate-image", methods=["POST"])
         def generate_image():
             try:
+                if not self._image_provider:
+                    return jsonify({
+                        "success": False,
+                        "error": "Image generation not configured. Set GOOGLE_API_KEY."
+                    })
+
                 data = request.json
                 prompt = data.get("prompt", "")
                 num_images = data.get("num_images", 1)
@@ -857,8 +822,8 @@ High quality, business presentation style"""
                 if not prompt or not prompt.strip():
                     return jsonify({"success": False, "error": "Prompt cannot be empty"})
 
-                # Generate images
-                image_paths = self._image_generator.generate_image(
+                # Generate images using plugin provider
+                image_paths = self._image_provider.generate(
                     prompt=prompt,
                     num_images=num_images,
                     aspect_ratio=aspect_ratio
@@ -867,7 +832,7 @@ High quality, business presentation style"""
                 # Get image info
                 images_info = []
                 for path in image_paths:
-                    info = self._image_generator.get_image_info(path)
+                    info = self._image_provider.get_image_info(path)
                     info["path"] = path
                     info["url"] = f"/image/{Path(path).name}"
                     images_info.append(info)
@@ -885,7 +850,10 @@ High quality, business presentation style"""
         @self._app.route("/image/<filename>", methods=["GET"])
         def get_image(filename):
             try:
-                image_dir = Path(self._image_generator._output_dir)
+                if not self._image_provider:
+                    return jsonify({"error": "Image provider not configured"}), 503
+
+                image_dir = self._image_provider.output_dir
                 filepath = image_dir / filename
 
                 if not filepath.exists():
@@ -900,11 +868,19 @@ High quality, business presentation style"""
         @self._app.route("/images", methods=["GET"])
         def list_images():
             try:
-                image_paths = self._image_generator.list_generated_images()
+                if not self._image_provider:
+                    return jsonify({
+                        "success": True,
+                        "count": 0,
+                        "images": [],
+                        "message": "Image provider not configured"
+                    })
+
+                image_paths = self._image_provider.list_generated_images()
                 images_info = []
 
                 for path in image_paths:
-                    info = self._image_generator.get_image_info(path)
+                    info = self._image_provider.get_image_info(path)
                     info["url"] = f"/image/{Path(path).name}"
                     images_info.append(info)
 
@@ -921,7 +897,14 @@ High quality, business presentation style"""
         @self._app.route("/clear-images", methods=["POST"])
         def clear_images():
             try:
-                deleted_count = self._image_generator.clear_output_dir()
+                if not self._image_provider:
+                    return jsonify({
+                        "success": True,
+                        "deleted_count": 0,
+                        "message": "Image provider not configured"
+                    })
+
+                deleted_count = self._image_provider.clear_images()
                 return jsonify({
                     "success": True,
                     "deleted_count": deleted_count

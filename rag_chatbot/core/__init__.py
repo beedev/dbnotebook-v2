@@ -12,12 +12,14 @@ from .interfaces import (
     LLMProvider,
     EmbeddingProvider,
     ContentProcessor,
+    ImageGenerationProvider,
 )
 from .plugins import (
     register_default_plugins,
     get_configured_llm,
     get_configured_embedding,
     get_configured_strategy,
+    get_configured_image_provider,
     list_available_plugins,
     get_plugin_info,
 )
@@ -37,10 +39,12 @@ __all__ = [
     "LLMProvider",
     "EmbeddingProvider",
     "ContentProcessor",
+    "ImageGenerationProvider",
     "register_default_plugins",
     "get_configured_llm",
     "get_configured_embedding",
     "get_configured_strategy",
+    "get_configured_image_provider",
     "list_available_plugins",
     "get_plugin_info",
 ]

@@ -7,7 +7,12 @@ from typing import Optional
 from dotenv import load_dotenv
 
 from .registry import PluginRegistry
-from .interfaces import RetrievalStrategy, LLMProvider, EmbeddingProvider
+from .interfaces import (
+    RetrievalStrategy,
+    LLMProvider,
+    EmbeddingProvider,
+    ImageGenerationProvider,
+)
 from .strategies import (
     HybridRetrievalStrategy,
     SemanticRetrievalStrategy,
@@ -18,6 +23,7 @@ from .providers import (
     OpenAILLMProvider,
     AnthropicLLMProvider,
     HuggingFaceEmbeddingProvider,
+    GeminiImageProvider,
 )
 
 load_dotenv()
@@ -48,6 +54,9 @@ def register_default_plugins() -> None:
 
     # Register embedding providers
     PluginRegistry.register_embedding_provider("huggingface", HuggingFaceEmbeddingProvider)
+
+    # Register image generation providers
+    PluginRegistry.register_image_provider("gemini", GeminiImageProvider)
 
     _plugins_initialized = True
     logger.info(f"Registered plugins: {PluginRegistry.get_registry_stats()}")
@@ -117,6 +126,30 @@ def get_configured_strategy(**override_kwargs) -> RetrievalStrategy:
     return PluginRegistry.get_strategy(strategy, **override_kwargs)
 
 
+def get_configured_image_provider(**override_kwargs) -> ImageGenerationProvider:
+    """
+    Get image generation provider configured from environment.
+
+    Environment variables:
+        IMAGE_GENERATION_PROVIDER: Provider name (gemini)
+        GEMINI_IMAGE_MODEL: Model name
+
+    Returns:
+        Configured ImageGenerationProvider instance
+    """
+    register_default_plugins()
+
+    provider = os.getenv("IMAGE_GENERATION_PROVIDER", "gemini").lower()
+    model = os.getenv("GEMINI_IMAGE_MODEL")
+
+    kwargs = {}
+    if model:
+        kwargs["model"] = model
+    kwargs.update(override_kwargs)
+
+    return PluginRegistry.get_image_provider(provider, **kwargs)
+
+
 def list_available_plugins() -> dict:
     """
     List all available plugins.
@@ -144,6 +177,8 @@ def get_plugin_info() -> dict:
             "embedding_provider": os.getenv("EMBEDDING_PROVIDER", "huggingface"),
             "embedding_model": os.getenv("EMBEDDING_MODEL", "nomic-ai/nomic-embed-text-v1.5"),
             "retrieval_strategy": os.getenv("RETRIEVAL_STRATEGY", "hybrid"),
+            "image_provider": os.getenv("IMAGE_GENERATION_PROVIDER", "gemini"),
+            "image_model": os.getenv("GEMINI_IMAGE_MODEL", "gemini-2.0-flash-exp"),
         },
         "available_plugins": PluginRegistry.discover_plugins(),
         "registry_stats": PluginRegistry.get_registry_stats(),
