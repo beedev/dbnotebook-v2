@@ -12,6 +12,7 @@ from flask import Flask, render_template, request, jsonify, Response, stream_wit
 from ..pipeline import LocalRAGPipeline
 from ..core.image import ImageGenerator
 from ..core.metadata import MetadataManager
+from ..api.routes.chat import create_chat_routes
 
 logger = logging.getLogger(__name__)
 
@@ -24,13 +25,19 @@ class FlaskChatbotUI:
         pipeline: LocalRAGPipeline,
         host: str = "host.docker.internal",
         data_dir: str = "data/data",
-        upload_dir: str = "uploads"
+        upload_dir: str = "uploads",
+        db_manager=None,
+        notebook_manager=None
     ):
         self._pipeline = pipeline
         self._host = host
         self._data_dir = Path(data_dir)
         self._upload_dir = Path(upload_dir)
         self._processed_files: list[str] = []  # Track processed files
+
+        # Notebook feature
+        self._db_manager = db_manager
+        self._notebook_manager = notebook_manager
 
         # Initialize image generator
         self._image_generator = ImageGenerator(pipeline._settings)
@@ -55,10 +62,12 @@ class FlaskChatbotUI:
 
         self._setup_routes()
 
-        # Auto-reload documents with metadata on startup
-        self._reload_documents_with_metadata()
+        # ChromaDB Persistence: Load nodes from persistent storage instead of re-ingesting
+        # Documents are persisted to ChromaDB during upload, no need to reload from disk
+        # The pipeline will load nodes from ChromaDB when set_engine() is called
+        # self._reload_documents_with_metadata()  # DISABLED - using ChromaDB persistence
 
-        logger.info("Flask UI initialized")
+        logger.info("Flask UI initialized (using ChromaDB persistence)")
 
     def _reload_documents_with_metadata(self) -> None:
         """Reload all documents from data and uploads directories with metadata from JSON."""
@@ -367,21 +376,31 @@ Output ONLY valid JSON, nothing else."""
             history = data.get("history", [])
             model = data.get("model", "")
             mode = data.get("mode", "chat")
+            # Hybrid mode: support both offerings (traditional) and notebooks
             selected_offerings = data.get("selected_offerings", [])
+            selected_notebooks = data.get("selected_notebooks", [])
 
             if not message:
                 return jsonify({"error": "No message provided"}), 400
 
-            logger.info(f"Received query with {len(selected_offerings)} selected offerings: {selected_offerings}")
+            # Log hybrid selection
+            if selected_notebooks:
+                logger.info(f"Received query with {len(selected_notebooks)} selected notebooks: {selected_notebooks}")
+            elif selected_offerings:
+                logger.info(f"Received query with {len(selected_offerings)} selected offerings: {selected_offerings}")
+            else:
+                logger.info("Received query with no selections")
 
             # Set model if provided and different
             if model and model != self._pipeline.get_model_name():
                 try:
                     self._pipeline.set_model_name(model)
                     self._pipeline.set_model()
-                    # Set engine with offering filter
-                    if selected_offerings:
-                        self._pipeline.set_engine(offering_filter=selected_offerings)
+                    # Set engine with hybrid filter support (notebooks or offerings)
+                    # Note: query_sales_mode() will manage engine state during query execution
+                    offering_filter = selected_notebooks if selected_notebooks else selected_offerings
+                    if offering_filter:
+                        self._pipeline.set_engine(offering_filter=offering_filter)
                     else:
                         self._pipeline.set_engine()
                 except Exception as e:
@@ -401,12 +420,25 @@ Output ONLY valid JSON, nothing else."""
                     # Query RAG pipeline to get relevant document content
                     yield f"data: {json.dumps({'token': ''})}\n\n"
 
-                    # SALES MODE: Use query_sales_mode for intelligent classification
-                    rag_response = self._pipeline.query_sales_mode(
-                        message=message,
-                        selected_offerings=selected_offerings,
-                        chatbot=history
-                    )
+                    # Choose query method based on whether notebooks are selected
+                    if selected_notebooks:
+                        # NOTEBOOK MODE: Use simple query() method for direct Q&A with notebook documents
+                        # Set engine with notebook filter before querying
+                        self._pipeline.set_engine(offering_filter=selected_notebooks)
+                        rag_response = self._pipeline.query(
+                            mode=mode,
+                            message=message,
+                            chatbot=history
+                        )
+                    else:
+                        # SALES MODE: Use query_sales_mode for intelligent classification
+                        # Hybrid mode: pass both offerings and notebooks
+                        rag_response = self._pipeline.query_sales_mode(
+                            message=message,
+                            selected_offerings=selected_offerings,
+                            selected_notebooks=selected_notebooks,
+                            chatbot=history
+                        )
 
                     # Get the full response text from RAG
                     document_context = ""
@@ -634,6 +666,11 @@ High quality, business presentation style"""
             except Exception as e:
                 logger.error(f"Error setting model: {e}")
                 return jsonify({"success": False, "error": str(e)})
+
+        @self._app.route("/notebooks")
+        def notebooks_page():
+            """Serve the notebooks management page."""
+            return render_template("notebooks.html")
 
         @self._app.route("/documents")
         def documents_page():
@@ -1007,6 +1044,324 @@ High quality, business presentation style"""
             except Exception as e:
                 logger.error(f"Error getting stats: {e}")
                 return jsonify({"success": False, "error": str(e)})
+
+        # Register chat API routes
+        create_chat_routes(self._app, self._pipeline)
+
+        # === Query Logging & Observability Endpoints ===
+
+        @self._app.route("/api/usage-stats", methods=["GET"])
+        def get_usage_stats():
+            """Get usage statistics for current session."""
+            try:
+                if not self._pipeline._query_logger:
+                    return jsonify({
+                        "success": False,
+                        "error": "Query logger not initialized"
+                    })
+
+                stats = self._pipeline._query_logger.get_usage_stats()
+                return jsonify({
+                    "success": True,
+                    "stats": stats
+                })
+            except Exception as e:
+                logger.error(f"Error getting usage stats: {e}")
+                return jsonify({"success": False, "error": str(e)})
+
+        @self._app.route("/api/recent-queries", methods=["GET"])
+        def get_recent_queries():
+            """Get recent query history."""
+            try:
+                if not self._pipeline._query_logger:
+                    return jsonify({
+                        "success": False,
+                        "error": "Query logger not initialized"
+                    })
+
+                limit = request.args.get("limit", 50, type=int)
+                recent = self._pipeline._query_logger.get_recent_logs(limit=limit)
+
+                # Convert datetime objects to strings for JSON serialization
+                for log in recent:
+                    if "timestamp" in log:
+                        log["timestamp"] = log["timestamp"].isoformat()
+
+                return jsonify({
+                    "success": True,
+                    "queries": recent,
+                    "count": len(recent)
+                })
+            except Exception as e:
+                logger.error(f"Error getting recent queries: {e}")
+                return jsonify({"success": False, "error": str(e)})
+
+        @self._app.route("/api/model-pricing", methods=["GET"])
+        def get_model_pricing():
+            """Get pricing information for all supported models."""
+            try:
+                if not self._pipeline._query_logger:
+                    return jsonify({
+                        "success": False,
+                        "error": "Query logger not initialized"
+                    })
+
+                models = self._pipeline._query_logger.list_supported_models()
+                pricing = {}
+                for model in models:
+                    model_pricing = self._pipeline._query_logger.get_model_pricing(model)
+                    if model_pricing:
+                        pricing[model] = model_pricing
+
+                return jsonify({
+                    "success": True,
+                    "pricing": pricing,
+                    "count": len(pricing)
+                })
+            except Exception as e:
+                logger.error(f"Error getting model pricing: {e}")
+                return jsonify({"success": False, "error": str(e)})
+
+        # =============================================
+        # Notebook API Routes
+        # =============================================
+
+        @self._app.route("/api/notebooks", methods=["GET"])
+        def list_notebooks():
+            """List all notebooks for the default user."""
+            try:
+                if not self._notebook_manager:
+                    return jsonify({
+                        "success": False,
+                        "error": "Notebook feature not available"
+                    }), 503
+
+                # Use default user ID (UUID format)
+                user_id = "00000000-0000-0000-0000-000000000001"
+                notebooks = self._notebook_manager.list_notebooks(user_id)
+
+                return jsonify({
+                    "success": True,
+                    "notebooks": notebooks,
+                    "count": len(notebooks)
+                })
+            except Exception as e:
+                logger.error(f"Error listing notebooks: {e}")
+                return jsonify({"success": False, "error": str(e)}), 500
+
+        @self._app.route("/api/notebooks", methods=["POST"])
+        def create_notebook():
+            """Create a new notebook."""
+            try:
+                if not self._notebook_manager:
+                    return jsonify({
+                        "success": False,
+                        "error": "Notebook feature not available"
+                    }), 503
+
+                data = request.json
+                name = data.get("name")
+                description = data.get("description", "")
+
+                if not name:
+                    return jsonify({
+                        "success": False,
+                        "error": "Notebook name is required"
+                    }), 400
+
+                # Use default user ID
+                user_id = "00000000-0000-0000-0000-000000000001"
+
+                notebook_data = self._notebook_manager.create_notebook(
+                    user_id=user_id,
+                    name=name,
+                    description=description
+                )
+
+                return jsonify({
+                    "success": True,
+                    "notebook": {
+                        "id": notebook_data["id"],
+                        "name": notebook_data["name"]
+                    },
+                    "message": f"Notebook '{name}' created successfully"
+                })
+            except Exception as e:
+                logger.error(f"Error creating notebook: {e}")
+                return jsonify({"success": False, "error": str(e)}), 500
+
+        @self._app.route("/api/notebooks/<notebook_id>", methods=["DELETE"])
+        def delete_notebook(notebook_id):
+            """Delete a notebook."""
+            try:
+                if not self._notebook_manager:
+                    return jsonify({
+                        "success": False,
+                        "error": "Notebook feature not available"
+                    }), 503
+
+                success = self._notebook_manager.delete_notebook(notebook_id)
+
+                if success:
+                    return jsonify({
+                        "success": True,
+                        "message": f"Notebook deleted successfully"
+                    })
+                else:
+                    return jsonify({
+                        "success": False,
+                        "error": "Failed to delete notebook"
+                    }), 404
+            except Exception as e:
+                logger.error(f"Error deleting notebook: {e}")
+                return jsonify({"success": False, "error": str(e)}), 500
+
+        @self._app.route("/api/notebooks/<notebook_id>/documents", methods=["POST"])
+        def upload_to_notebook(notebook_id):
+            """Upload documents to a notebook."""
+            try:
+                if not self._notebook_manager:
+                    return jsonify({
+                        "success": False,
+                        "error": "Notebook feature not available"
+                    }), 503
+
+                # Get uploaded files
+                if 'files' not in request.files:
+                    return jsonify({
+                        "success": False,
+                        "error": "No files provided"
+                    }), 400
+
+                files = request.files.getlist('files')
+                if not files or files[0].filename == '':
+                    return jsonify({
+                        "success": False,
+                        "error": "No files selected"
+                    }), 400
+
+                uploaded_files = []
+
+                # Collect file paths for batch processing
+                file_paths = []
+                file_info = {}
+
+                for file in files:
+                    if file and file.filename:
+                        # Save file to data directory
+                        file_path = os.path.join(str(self._data_dir), file.filename)
+                        file.save(file_path)
+
+                        # Get file stats for response
+                        file_size = os.path.getsize(file_path)
+
+                        file_paths.append(file_path)
+                        file_info[file.filename] = file_size
+
+                # Process all files at once with notebook_id metadata
+                # store_nodes() handles:
+                # 1. Document registration in PostgreSQL with correct chunk_count
+                # 2. Node metadata (notebook_id, source_id, user_id)
+                # 3. ChromaDB persistence
+                logger.info(f"Processing {len(file_paths)} files for notebook {notebook_id}")
+                returned_nodes = self._pipeline.store_nodes(
+                    input_files=file_paths,
+                    notebook_id=notebook_id,
+                    user_id="00000000-0000-0000-0000-000000000001"  # Default user UUID
+                )
+
+                # Build response with file information
+                for filename, file_size in file_info.items():
+                    # Track processed file
+                    if filename not in self._processed_files:
+                        self._processed_files.append(filename)
+
+                    # Get source_id from database for this file
+                    docs = self._notebook_manager.get_documents(notebook_id)
+                    source_id = None
+                    for doc in docs:
+                        if doc['file_name'] == filename:
+                            source_id = doc['source_id']
+                            break
+
+                    uploaded_files.append({
+                        "filename": filename,
+                        "source_id": source_id,
+                        "size": file_size
+                    })
+
+                    logger.info(f"Uploaded {filename} to notebook {notebook_id} (source_id: {source_id})")
+
+                # Force rebuild chat engine after loading documents (load nodes from ChromaDB)
+                logger.info("Rebuilding chat engine with newly loaded documents from ChromaDB")
+                self._pipeline.set_chat_mode(force_reset=True)
+
+                return jsonify({
+                    "success": True,
+                    "uploaded": uploaded_files,
+                    "count": len(uploaded_files),
+                    "message": f"Successfully uploaded {len(uploaded_files)} document(s)"
+                })
+            except Exception as e:
+                logger.error(f"Error uploading to notebook: {e}")
+                return jsonify({"success": False, "error": str(e)}), 500
+
+        @self._app.route("/api/notebooks/<notebook_id>/documents", methods=["GET"])
+        def list_notebook_documents(notebook_id):
+            """List all documents in a notebook."""
+            try:
+                if not self._notebook_manager:
+                    return jsonify({
+                        "success": False,
+                        "error": "Notebook feature not available"
+                    }), 503
+
+                documents = self._notebook_manager.get_documents(notebook_id)
+
+                return jsonify({
+                    "success": True,
+                    "documents": documents,
+                    "count": len(documents)
+                })
+            except Exception as e:
+                logger.error(f"Error listing notebook documents: {e}")
+                return jsonify({"success": False, "error": str(e)}), 500
+
+        @self._app.route("/api/notebooks/<notebook_id>/documents/<source_id>", methods=["DELETE"])
+        def delete_notebook_document(notebook_id, source_id):
+            """Delete a document from a notebook."""
+            try:
+                if not self._notebook_manager:
+                    return jsonify({
+                        "success": False,
+                        "error": "Notebook feature not available"
+                    }), 503
+
+                # Delete from PostgreSQL database
+                success = self._notebook_manager.remove_document(notebook_id, source_id)
+
+                if not success:
+                    return jsonify({
+                        "success": False,
+                        "error": "Document not found or deletion failed"
+                    }), 404
+
+                # Delete from ChromaDB vector store
+                if self._pipeline and self._pipeline._vector_store:
+                    chromadb_success = self._pipeline._vector_store.delete_document_nodes(source_id)
+
+                    if not chromadb_success:
+                        logger.warning(f"ChromaDB deletion failed for document {source_id}, but PostgreSQL deletion succeeded")
+
+                logger.info(f"Deleted document {source_id} from notebook {notebook_id}")
+
+                return jsonify({
+                    "success": True,
+                    "message": f"Document deleted successfully"
+                })
+            except Exception as e:
+                logger.error(f"Error deleting notebook document: {e}")
+                return jsonify({"success": False, "error": str(e)}), 500
 
     def run(self, host: str = "0.0.0.0", port: int = 5000, debug: bool = False):
         """Run the Flask application."""

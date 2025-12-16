@@ -1,5 +1,6 @@
 import argparse
 import logging
+import os
 import sys
 from pathlib import Path
 
@@ -8,6 +9,8 @@ import llama_index.core
 from .ui import FlaskChatbotUI
 from .pipeline import LocalRAGPipeline
 from .ollama import run_ollama_server, is_port_open
+from .core.db.db import DatabaseManager
+from .core.notebook.notebook_manager import NotebookManager
 
 
 def setup_logging(log_level: str = "INFO") -> None:
@@ -81,12 +84,32 @@ def main():
             logger.info("Starting Ollama server...")
             run_ollama_server()
 
-    # Configure LlamaIndex logging
-    llama_index.core.set_global_handler("simple")
+    # Initialize settings
+    from .setting import get_settings
+    settings = get_settings()
 
-    # Initialize pipeline
+    # Use simple logging
+    llama_index.core.set_global_handler("simple")
+    logger.info("Using simple logging for observability")
+
+    # Initialize pipeline with database support
     logger.info("Initializing RAG pipeline...")
-    pipeline = LocalRAGPipeline(host=args.host)
+    database_url = os.getenv("DATABASE_URL")
+    pipeline = LocalRAGPipeline(host=args.host, database_url=database_url)
+
+    # Use the pipeline's database managers (already initialized if database_url is set)
+    db_manager = pipeline._db_manager
+    notebook_manager = pipeline._notebook_manager
+
+    # Ensure default user exists if notebook manager is available
+    if notebook_manager:
+        try:
+            notebook_manager.ensure_default_user()
+            logger.info("Notebook feature initialized successfully")
+        except Exception as e:
+            logger.error(f"Failed to ensure default user: {e}")
+    else:
+        logger.warning("DATABASE_URL not set. Notebook feature will be unavailable.")
 
     # Initialize Flask UI
     logger.info("Building Flask UI...")
@@ -94,7 +117,9 @@ def main():
         pipeline=pipeline,
         host=args.host,
         data_dir=DATA_DIR,
-        upload_dir=UPLOAD_DIR
+        upload_dir=UPLOAD_DIR,
+        db_manager=db_manager,
+        notebook_manager=notebook_manager
     )
 
     # Launch application

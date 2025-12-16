@@ -22,7 +22,13 @@
       "Bash(git push:*)",
       "Bash(tail:*)",
       "Bash(ps:*)",
-      "Bash(chmod:*)"
+      "Bash(chmod:*)",
+      "Bash(./start_gradio.sh)",
+      "Bash(sqlite3:*)",
+      "Bash(/Users/bharath/Desktop/rag-chatbot/venv/bin/python:*)",
+      "Bash(tee:*)",
+      "Bash(python /tmp/test_notebook_upload.py:*)",
+      "Bash(python:*)"
     ],
     "deny": [],
     "ask": []

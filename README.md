@@ -1,7 +1,5 @@
 # 🚀 Multimodal RAG - Sales Enablement System
 
-![alt text](assets/demo.png)
-
 A comprehensive Sales Enablement System built on a multimodal RAG (Retrieval-Augmented Generation) chatbot. Transform your document knowledge base into an intelligent sales assistant that generates elevator pitches, recommends offering bundles, and creates customer-specific use cases.
 
 **Orchestrated by Bharath D and Developed by Claude**
@@ -235,39 +233,70 @@ For detailed configuration options, see `.env.example`.
 
 ### Running the Application
 
-#### Method 1: One-Command Startup (Recommended)
+**Two UI Options Available:**
+- **Flask UI** (Modern Sales Enablement System) - `./start.sh`
+- **Gradio UI** (Original RAG Interface) - `./start_gradio.sh`
+
+---
+
+#### Method 1: Flask UI - Sales Enablement System (Recommended)
 ```bash
-# Simple - handles everything automatically
+# Modern Flask-based interface with Sales Enablement features
 ./start.sh
 
 # Custom port and host
 ./start.sh 8080 localhost
 ```
 
-The startup script automatically:
-- Validates Python installation
-- Creates/activates virtual environment
-- Installs dependencies if needed
-- Checks and starts Ollama server
-- Cleans up existing processes
-- Launches the application
+**Features:**
+- Sales mode with offering selection
+- Problem-solving vs. pitch query detection
+- Offering bundle recommendations
+- Automated pitch generation
+- Image generation via Imagen 3.0
 
 **Access at:** `http://localhost:7860`
 
 ---
 
-#### Method 2: Manual Python Execution
+#### Method 2: Gradio UI - Original RAG Interface
+```bash
+# Classic Gradio interface with original RAG features
+./start_gradio.sh
+
+# Custom port and host
+./start_gradio.sh 8080 localhost
+```
+
+**Features:**
+- Original document Q&A interface
+- Simple chat mode
+- Multi-LLM support (Ollama, OpenAI, Claude, Gemini)
+- Document upload and processing
+
+**Access at:** `http://localhost:7860`
+
+Both startup scripts automatically:
+- Validate Python installation
+- Create/activate virtual environment
+- Install dependencies if needed
+- Check and start Ollama server
+- Clean up existing processes
+
+---
+
+#### Method 3: Manual Python Execution
 ```bash
 # Activate virtual environment
 source venv/bin/activate
 
-# Run the application
+# Run Flask UI (Sales Enablement)
 python -m rag_chatbot --host localhost --port 7860
 ```
 
 ---
 
-#### Method 3: External Access with Ngrok
+#### Method 4: External Access with Ngrok
 ```bash
 # Install ngrok first: https://ngrok.com/download
 source ./scripts/run.sh --ngrok
@@ -275,7 +304,7 @@ source ./scripts/run.sh --ngrok
 
 ---
 
-#### Method 4: Docker
+#### Method 5: Docker
 ```bash
 docker compose up --build
 

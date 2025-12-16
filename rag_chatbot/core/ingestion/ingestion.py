@@ -18,6 +18,8 @@ from tqdm import tqdm
 
 from ...setting import get_settings, RAGSettings
 from .synopsis_manager import SynopsisManager
+from ..db import DatabaseManager
+from ..notebook import NotebookManager
 
 load_dotenv()
 
@@ -156,20 +158,22 @@ class DocumentReader:
 
 
 class TextProcessor:
-    """Handles text filtering and normalization."""
+    """Handles basic text cleanup and normalization."""
 
-    # Regex pattern for filtering text
-    FILTER_PATTERN = re.compile(r'[a-zA-Z0-9 `~!@#$%^&*()_\-+=\[\]{}|\\;:\'",.<>/?]+')
+    # Pattern for normalizing whitespace
     WHITESPACE_PATTERN = re.compile(r'\s+')
 
     @classmethod
     def filter_text(cls, text: str) -> str:
-        """Filter and normalize text."""
+        """Basic text cleanup - normalize whitespace only.
+
+        Preserves all characters including unicode, special characters, etc.
+        Only normalizes excessive whitespace to improve readability.
+        """
         if not text:
             return ""
-        matches = cls.FILTER_PATTERN.findall(text)
-        filtered_text = ' '.join(matches)
-        normalized_text = cls.WHITESPACE_PATTERN.sub(' ', filtered_text.strip())
+        # Just normalize whitespace - keep all characters including unicode
+        normalized_text = cls.WHITESPACE_PATTERN.sub(' ', text.strip())
         return normalized_text
 
 
@@ -230,7 +234,9 @@ class LocalDataIngestion:
         self,
         setting: RAGSettings | None = None,
         max_workers: int = 4,
-        use_cache: bool = True
+        use_cache: bool = True,
+        db_manager: Optional[DatabaseManager] = None,
+        vector_store = None
     ) -> None:
         self._setting = setting or get_settings()
         self._node_store: dict[str, List[BaseNode]] = {}
@@ -243,6 +249,13 @@ class LocalDataIngestion:
         self._cache = NodeCache() if use_cache else None
         self._synopsis_manager = SynopsisManager()
 
+        # Notebook integration
+        self._db_manager = db_manager
+        self._notebook_manager = NotebookManager(db_manager) if db_manager else None
+
+        # Vector store for ChromaDB persistence
+        self._vector_store = vector_store
+
         # Create splitter once
         self._splitter = SentenceSplitter.from_defaults(
             chunk_size=self._setting.ingestion.chunk_size,
@@ -252,13 +265,13 @@ class LocalDataIngestion:
         )
 
     def _calculate_file_hash(self, file_path: str) -> str:
-        """Calculate MD5 hash of file contents for duplicate detection."""
+        """Calculate SHA256 hash of file contents for duplicate detection."""
         try:
-            hash_md5 = hashlib.md5()
+            hash_sha256 = hashlib.sha256()
             with open(file_path, "rb") as f:
                 for chunk in iter(lambda: f.read(4096), b""):
-                    hash_md5.update(chunk)
-            return hash_md5.hexdigest()
+                    hash_sha256.update(chunk)
+            return hash_sha256.hexdigest()
         except Exception as e:
             logger.warning(f"Error calculating hash for {file_path}: {e}")
             return ""
@@ -267,10 +280,7 @@ class LocalDataIngestion:
         self,
         input_file: str,
         embed_nodes: bool = True,
-        embed_model: Any | None = None,
-        it_practice: Optional[str] = None,
-        offering_name: Optional[str] = None,
-        offering_id: Optional[str] = None
+        embed_model: Any | None = None
     ) -> tuple[str, List[BaseNode]]:
         """Process a single file and return (filename, nodes).
 
@@ -278,9 +288,6 @@ class LocalDataIngestion:
             input_file: Path to the file
             embed_nodes: Whether to embed nodes
             embed_model: Embedding model to use
-            it_practice: IT Practice classification
-            offering_name: Offering name
-            offering_id: Unique offering ID
 
         Returns:
             Tuple of (filename, nodes)
@@ -296,16 +303,7 @@ class LocalDataIngestion:
         if self._cache:
             cached_nodes = self._cache.get(input_file)
             if cached_nodes:
-                logger.debug(f"Using cached nodes for {file_name}, updating metadata")
-                # Update metadata on cached nodes with new offering information
-                for node in cached_nodes:
-                    if hasattr(node, 'metadata'):
-                        if it_practice:
-                            node.metadata["it_practice"] = it_practice
-                        if offering_name:
-                            node.metadata["offering_name"] = offering_name
-                        if offering_id:
-                            node.metadata["offering_id"] = offering_id
+                logger.debug(f"Using cached nodes for {file_name}")
                 return file_name, cached_nodes
 
         # Read and process document
@@ -321,21 +319,13 @@ class LocalDataIngestion:
         file_size = file_path.stat().st_size if file_path.exists() else 0
         upload_timestamp = datetime.now().isoformat()
 
-        # Create enhanced metadata
+        # Create metadata
         metadata = {
             "file_name": file_name,
             "file_hash": file_hash,
             "file_size": file_size,
             "upload_timestamp": upload_timestamp,
         }
-
-        # Add Sales Enablement metadata if provided
-        if it_practice:
-            metadata["it_practice"] = it_practice
-        if offering_name:
-            metadata["offering_name"] = offering_name
-        if offering_id:
-            metadata["offering_id"] = offering_id
 
         # Create document and split into nodes
         document = Document(
@@ -365,9 +355,8 @@ class LocalDataIngestion:
         input_files: list[str],
         embed_nodes: bool = True,
         embed_model: Any | None = None,
-        it_practice: Optional[str] = None,
-        offering_name: Optional[str] = None,
-        offering_id: Optional[str] = None
+        notebook_id: Optional[str] = None,
+        user_id: str = "default"
     ) -> List[BaseNode]:
         """Process multiple files with parallel execution and enhanced metadata.
 
@@ -375,9 +364,8 @@ class LocalDataIngestion:
             input_files: List of file paths to process
             embed_nodes: Whether to embed nodes
             embed_model: Embedding model to use
-            it_practice: IT Practice classification for all files
-            offering_name: Offering name for all files
-            offering_id: Unique offering ID for all files
+            notebook_id: Notebook ID for document organization
+            user_id: User ID for multi-user support (default: "default")
 
         Returns:
             List of processed nodes with enhanced metadata
@@ -393,10 +381,9 @@ class LocalDataIngestion:
             Settings.embed_model = embed_model or Settings.embed_model
 
         # Log metadata info
-        if it_practice or offering_name:
+        if notebook_id:
             logger.info(
-                f"Processing {len(input_files)} files with metadata: "
-                f"IT Practice='{it_practice}', Offering='{offering_name}'"
+                f"Processing {len(input_files)} files for notebook: {notebook_id}"
             )
 
         # Process files in parallel
@@ -406,10 +393,7 @@ class LocalDataIngestion:
                     self._process_single_file,
                     input_file,
                     embed_nodes,
-                    embed_model,
-                    it_practice,
-                    offering_name,
-                    offering_id
+                    embed_model
                 ): input_file
                 for input_file in input_files
             }
@@ -423,6 +407,44 @@ class LocalDataIngestion:
                 try:
                     file_name, nodes = future.result()
                     if nodes:
+                        # Register document in notebook database if notebook_id provided
+                        source_id = None
+                        if notebook_id and self._notebook_manager:
+                            try:
+                                # Read file content for hash calculation
+                                input_file = futures[future]
+                                with open(input_file, 'rb') as f:
+                                    file_content = f.read()
+
+                                # Determine file type
+                                file_type = Path(input_file).suffix.lstrip('.')
+
+                                # Register in database
+                                source_id = self._notebook_manager.add_document(
+                                    notebook_id=notebook_id,
+                                    file_name=file_name,
+                                    file_content=file_content,
+                                    file_type=file_type,
+                                    chunk_count=len(nodes)
+                                )
+                                logger.info(f"Registered {file_name} in notebook {notebook_id} (source_id: {source_id})")
+                            except ValueError as e:
+                                # Duplicate document detected
+                                logger.warning(f"Skipping {file_name}: {e}")
+                                continue
+                            except Exception as e:
+                                logger.error(f"Error registering {file_name} in database: {e}")
+                                raise
+
+                        # Add notebook metadata to all nodes
+                        if notebook_id:
+                            for node in nodes:
+                                if hasattr(node, 'metadata'):
+                                    node.metadata["notebook_id"] = notebook_id
+                                    node.metadata["user_id"] = user_id
+                                    if source_id:
+                                        node.metadata["source_id"] = source_id
+
                         self._node_store[file_name] = nodes
                         self._ingested_file.append(file_name)
                         return_nodes.extend(nodes)
@@ -431,11 +453,66 @@ class LocalDataIngestion:
                         chunk_count = len(nodes)
                         logger.debug(
                             f"Processed {file_name}: {chunk_count} chunks, "
-                            f"Practice='{it_practice}', Offering='{offering_name}'"
+                            f"Notebook='{notebook_id}', Source ID='{source_id}'"
                         )
                 except Exception as e:
                     input_file = futures[future]
                     logger.error(f"Error processing {input_file}: {e}")
+
+        # Persist all nodes to ChromaDB if vector store is available
+        # IMPORTANT: Load existing nodes first to preserve them when adding new files
+        if self._vector_store and notebook_id and return_nodes:
+            try:
+                # Load existing nodes from ChromaDB
+                logger.debug(f"Loading existing nodes from ChromaDB for notebook {notebook_id}")
+                existing_nodes = self._vector_store.load_all_nodes()
+
+                # Filter to get only THIS notebook's existing nodes
+                existing_notebook_nodes = self._vector_store.get_nodes_by_notebook(
+                    existing_nodes, notebook_id
+                )
+                logger.debug(f"Found {len(existing_notebook_nodes)} existing nodes for notebook {notebook_id}")
+
+                # Combine existing + new nodes
+                all_nodes = existing_notebook_nodes + return_nodes
+                logger.info(f"Persisting {len(all_nodes)} total nodes ({len(existing_notebook_nodes)} existing + {len(return_nodes)} new) to ChromaDB for notebook {notebook_id}")
+
+                # Persist ALL nodes together (forces rebuild to ensure all are stored)
+                self._vector_store.get_index(all_nodes, force_rebuild=True)
+
+                # CRITICAL: Verify nodes are persisted and readable from ChromaDB
+                # ChromaDB may have an internal write buffer that needs to flush
+                import time
+                max_retries = 10
+                retry_delay = 0.5  # 500ms
+
+                for attempt in range(max_retries):
+                    loaded_nodes = self._vector_store.load_all_nodes()
+                    notebook_loaded = self._vector_store.get_nodes_by_notebook(
+                        loaded_nodes, notebook_id
+                    )
+
+                    if len(notebook_loaded) >= len(all_nodes):
+                        logger.info(
+                            f"✓ Verified {len(notebook_loaded)} nodes persisted to ChromaDB "
+                            f"(attempt {attempt + 1}/{max_retries})"
+                        )
+                        break
+                    elif attempt < max_retries - 1:
+                        logger.debug(
+                            f"Waiting for ChromaDB flush... "
+                            f"(found {len(notebook_loaded)}/{len(all_nodes)} nodes, "
+                            f"attempt {attempt + 1}/{max_retries})"
+                        )
+                        time.sleep(retry_delay)
+                    else:
+                        logger.warning(
+                            f"ChromaDB verification timeout: "
+                            f"only {len(notebook_loaded)}/{len(all_nodes)} nodes readable "
+                            f"after {max_retries * retry_delay}s"
+                        )
+            except Exception as e:
+                logger.error(f"Error persisting nodes to ChromaDB: {e}")
 
         logger.info(f"Total nodes created: {len(return_nodes)}")
         return return_nodes
@@ -469,64 +546,3 @@ class LocalDataIngestion:
             if file in self._node_store:
                 return_nodes.extend(self._node_store[file])
         return return_nodes
-
-    def generate_synopsis_for_offering(
-        self,
-        offering_id: str,
-        offering_name: str,
-        llm: LLM,
-        file_list: Optional[List[str]] = None
-    ) -> Optional[str]:
-        """
-        Generate and store synopsis for an offering from its ingested nodes.
-
-        This method should be called after `store_nodes()` to create a synopsis
-        that can be used for faster problem-solving queries.
-
-        Args:
-            offering_id: Unique offering identifier
-            offering_name: Name of the offering
-            llm: Language model for synopsis generation
-            file_list: List of files associated with this offering
-
-        Returns:
-            Generated synopsis text or None if generation fails
-        """
-        # Get all nodes for this offering
-        offering_nodes = [
-            node for node in self.get_all_nodes()
-            if node.metadata.get("offering_id") == offering_id
-        ]
-
-        if not offering_nodes:
-            logger.warning(f"No nodes found for offering {offering_name} ({offering_id})")
-            return None
-
-        logger.info(f"Generating synopsis for {offering_name} with {len(offering_nodes)} nodes")
-
-        # Generate and store synopsis using SynopsisManager
-        synopsis = self._synopsis_manager.generate_synopsis(
-            offering_id=offering_id,
-            offering_name=offering_name,
-            nodes=offering_nodes,
-            llm=llm,
-            file_list=file_list
-        )
-
-        return synopsis
-
-    def get_synopsis(self, offering_id: str) -> Optional[dict]:
-        """
-        Get stored synopsis for an offering.
-
-        Args:
-            offering_id: Unique offering identifier
-
-        Returns:
-            Synopsis data dictionary or None if not found
-        """
-        return self._synopsis_manager.get_synopsis(offering_id)
-
-    def get_all_synopses(self) -> dict:
-        """Get all stored synopses."""
-        return self._synopsis_manager.get_all_synopses()

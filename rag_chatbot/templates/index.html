@@ -452,60 +452,28 @@
         <!-- Sidebar -->
         <div class="sidebar">
             <div class="sidebar-header">
-                <h2>🎯 Sales Enablement</h2>
+                <h2>📓 RAG Chatbot</h2>
                 <button class="btn btn-reset" onclick="clearChat()">Clear</button>
             </div>
 
-            <!-- Link to Documents Page -->
-            <a href="/documents" class="btn btn-secondary" style="text-decoration: none; text-align: center;">
-                📄 Manage Documents
+            <!-- Link to Notebooks Page -->
+            <a href="/notebooks" class="btn btn-secondary" style="text-decoration: none; text-align: center;">
+                📚 Manage Notebooks
             </a>
 
-            <!-- Mode Toggle -->
-            <h3>Query Mode</h3>
-            <div class="mode-toggle">
-                <button class="mode-btn active" data-mode="problem-solving" onclick="setMode('problem-solving')">
-                    🔍 Problem Solving
-                </button>
-                <button class="mode-btn" data-mode="sales-pitch" onclick="setMode('sales-pitch')">
-                    🎤 Sales Pitch
-                </button>
-            </div>
-            <div class="mode-description" id="modeDescription">
-                Analyze customer problems and recommend relevant offering bundles
+            <!-- Notebook Management -->
+            <h3>📓 Notebooks</h3>
+            <div class="form-group">
+                <label>Select Notebook</label>
+                <select id="notebookSelect" onchange="onNotebookChange()">
+                    <option value="">Loading notebooks...</option>
+                </select>
             </div>
 
-            <!-- Practice & Offering Filters (shown only in Sales Pitch mode) -->
-            <div id="filterSection" class="hidden">
-                <h3>Filter Context</h3>
-
-                <!-- IT Practice Selection -->
-                <div class="form-group">
-                    <label>IT Practice (optional)</label>
-                    <select id="itPracticeFilter">
-                        <option value="">All Practices</option>
-                    </select>
-                </div>
-
-                <!-- Offering Selection -->
-                <div class="form-group">
-                    <label>Offering (optional)</label>
-                    <select id="offeringFilter">
-                        <option value="">All Offerings</option>
-                    </select>
-                </div>
-            </div>
-
-            <!-- Offering Library for Multi-Select -->
-            <h3>📚 Available Offerings</h3>
-            <div class="offering-library" id="offeringLibrary">
-                <div class="status-info">Loading offerings...</div>
-            </div>
-
-            <!-- Documents List -->
-            <h3 id="documentsHeader">📄 Uploaded Documents</h3>
-            <div class="documents-list" id="documentsList">
-                <div class="status-info">Loading documents...</div>
+            <!-- Documents in Selected Notebook -->
+            <h3 id="documentsHeader" style="display: none;">📄 Documents</h3>
+            <div class="documents-list" id="documentsList" style="display: none;">
+                <div class="status-info">Select a notebook to view documents</div>
             </div>
 
             <!-- Model Selection -->
@@ -520,14 +488,14 @@
         <!-- Main Chat Area -->
         <div class="main-content">
             <div class="chat-header">
-                <h1>🤖 Sales Enablement Assistant</h1>
-                <p>Upload documents with IT Practice and Offering metadata, then ask questions!</p>
+                <h1>🤖 RAG Chatbot with Notebooks</h1>
+                <p>Create notebooks, upload documents, and ask questions about your content!</p>
             </div>
 
             <div class="chat-messages" id="chatMessages">
                 <div class="message assistant">
                     <strong>Assistant:</strong>
-                    <div class="message-content">Welcome to the Sales Enablement System! Upload your documents with IT Practice and Offering metadata to get started.</div>
+                    <div class="message-content">Welcome to the RAG Chatbot with Notebooks! Create a notebook, upload documents, and start asking questions.</div>
                 </div>
             </div>
 
@@ -548,55 +516,15 @@
 
     <script>
         // Global state
-        let selectedOfferings = new Set();
+        let currentNotebook = null;
         let selectedDocuments = new Set();
         let uploadedFiles = [];
-        let currentMode = 'problem-solving'; // Default mode
 
         // Initialize on page load
         document.addEventListener('DOMContentLoaded', () => {
-            loadOfferings();
-            loadPracticesFilter();
-            loadOfferingsFilter();
-            loadDocumentsList();
+            loadNotebooks();
             loadModels();
         });
-
-        // Mode Toggle Function
-        function setMode(mode) {
-            currentMode = mode;
-
-            // Update button states
-            document.querySelectorAll('.mode-btn').forEach(btn => {
-                btn.classList.remove('active');
-                if (btn.dataset.mode === mode) {
-                    btn.classList.add('active');
-                }
-            });
-
-            // Update description
-            const description = document.getElementById('modeDescription');
-            const filterSection = document.getElementById('filterSection');
-            const documentsHeader = document.getElementById('documentsHeader');
-            const documentsList = document.getElementById('documentsList');
-
-            if (mode === 'problem-solving') {
-                description.textContent = 'Analyze customer problems and recommend relevant offering bundles';
-                filterSection.classList.add('hidden');
-                // Show documents in Problem Solving mode
-                if (documentsHeader) documentsHeader.style.display = 'block';
-                if (documentsList) documentsList.style.display = 'block';
-            } else {
-                description.textContent = 'Generate pitch content for specific offerings';
-                filterSection.classList.remove('hidden');
-                // Hide documents in Sales Pitch mode
-                if (documentsHeader) documentsHeader.style.display = 'none';
-                if (documentsList) documentsList.style.display = 'none';
-            }
-
-            // Clear chat history when switching modes
-            clearChat();
-        }
 
         // Clear Chat Function
         async function clearChat() {
@@ -614,49 +542,113 @@
             }
         }
 
-        // Load IT Practices Filter
-        async function loadPracticesFilter() {
+        // Notebook Management Functions
+
+        // Load all notebooks
+        async function loadNotebooks() {
             try {
-                const response = await fetch('/api/practices');
+                const response = await fetch('/api/notebooks');
                 const data = await response.json();
 
-                const select = document.getElementById('itPracticeFilter');
+                const select = document.getElementById('notebookSelect');
                 if (!select) return;
 
-                select.innerHTML = '<option value="">All Practices</option>';
+                select.innerHTML = '<option value="">-- Select Notebook --</option>';
 
-                data.practices.forEach(practice => {
-                    const option = document.createElement('option');
-                    option.value = practice;
-                    option.textContent = practice;
-                    select.appendChild(option);
-                });
-            } catch (error) {
-                console.error('Error loading practices filter:', error);
-            }
-        }
-
-        // Load Offerings Filter
-        async function loadOfferingsFilter() {
-            try {
-                const response = await fetch('/api/offerings');
-                const data = await response.json();
-
-                const select = document.getElementById('offeringFilter');
-                if (!select) return;
-
-                select.innerHTML = '<option value="">All Offerings</option>';
-
-                if (data.offerings && data.offerings.length > 0) {
-                    data.offerings.forEach(offering => {
+                if (data.notebooks && data.notebooks.length > 0) {
+                    data.notebooks.forEach(notebook => {
                         const option = document.createElement('option');
-                        option.value = offering.id;
-                        option.textContent = `${offering.name} (${offering.practice})`;
+                        option.value = notebook.id;
+                        option.textContent = notebook.name;
                         select.appendChild(option);
                     });
                 }
             } catch (error) {
-                console.error('Error loading offerings filter:', error);
+                console.error('Error loading notebooks:', error);
+                alert('Failed to load notebooks');
+            }
+        }
+
+        // Handle notebook selection change
+        function onNotebookChange() {
+            const select = document.getElementById('notebookSelect');
+            const selectedNotebook = select.value;
+
+            currentNotebook = selectedNotebook;
+
+            const documentsHeader = document.getElementById('documentsHeader');
+            const documentsList = document.getElementById('documentsList');
+
+            if (selectedNotebook) {
+                // Show documents section and load documents for this notebook
+                documentsHeader.style.display = 'block';
+                documentsList.style.display = 'block';
+                loadNotebookDocuments(selectedNotebook);
+            } else {
+                // Hide documents section
+                documentsHeader.style.display = 'none';
+                documentsList.style.display = 'none';
+            }
+        }
+
+        // Load documents for the selected notebook
+        async function loadNotebookDocuments(notebookId) {
+            const container = document.getElementById('documentsList');
+            if (!container) return;
+
+            try {
+                container.innerHTML = '<div class="status-info">Loading documents...</div>';
+
+                const response = await fetch(`/api/notebooks/${notebookId}/documents`);
+                const data = await response.json();
+
+                if (data.documents && data.documents.length > 0) {
+                    container.innerHTML = '';
+
+                    data.documents.forEach(doc => {
+                        const docItem = document.createElement('div');
+                        docItem.className = 'doc-item';
+
+                        const docName = document.createElement('div');
+                        docName.style.fontWeight = '600';
+                        docName.style.marginBottom = '5px';
+                        docName.textContent = doc.file_name;
+
+                        const docMeta = document.createElement('div');
+                        docMeta.className = 'doc-meta';
+
+                        if (doc.file_type) {
+                            const typeTag = document.createElement('span');
+                            typeTag.className = 'meta-tag';
+                            typeTag.textContent = doc.file_type.toUpperCase();
+                            docMeta.appendChild(typeTag);
+                        }
+
+                        if (doc.file_size) {
+                            const sizeTag = document.createElement('span');
+                            sizeTag.className = 'meta-tag';
+                            const sizeMB = (doc.file_size / 1024 / 1024).toFixed(2);
+                            sizeTag.textContent = sizeMB + ' MB';
+                            docMeta.appendChild(sizeTag);
+                        }
+
+                        if (doc.chunk_count) {
+                            const chunksTag = document.createElement('span');
+                            chunksTag.className = 'meta-tag';
+                            chunksTag.textContent = doc.chunk_count + ' chunks';
+                            docMeta.appendChild(chunksTag);
+                        }
+
+                        docItem.appendChild(docName);
+                        docItem.appendChild(docMeta);
+                        container.appendChild(docItem);
+                    });
+                } else {
+                    container.innerHTML = '<div class="status-info">No documents in this notebook</div>';
+                }
+            } catch (error) {
+                console.error('Error loading documents:', error);
+                container.innerHTML = '<div class="status-error">Error loading documents</div>';
             }
         }
 
@@ -813,105 +805,6 @@
             }
         }
 
-        // Load Offering Library
-        async function loadOfferings() {
-            const library = document.getElementById('offeringLibrary');
-            if (!library) return;
-
-            try {
-                const response = await fetch('/api/offerings');
-                const data = await response.json();
-
-                library.innerHTML = '';
-
-                if (!data.success || !data.offerings || data.offerings.length === 0) {
-                    library.innerHTML = '<div class="status-info">No offerings available</div>';
-                    return;
-                }
-
-                // Group offerings by IT practice
-                const grouped = {};
-                data.offerings.forEach(offering => {
-                    const practice = offering.it_practice || 'Uncategorized';
-                    if (!grouped[practice]) {
-                        grouped[practice] = [];
-                    }
-                    grouped[practice].push(offering);
-                });
-
-                // Create UI for each practice group
-                Object.entries(grouped).forEach(([practice, offerings]) => {
-                    if (offerings.length > 0) {
-                        const practiceDiv = document.createElement('div');
-                        practiceDiv.className = 'practice-group';
-                        practiceDiv.style.marginBottom = '15px';
-
-                        const headerDiv = document.createElement('div');
-                        headerDiv.className = 'practice-header';
-                        headerDiv.style.fontWeight = '600';
-                        headerDiv.style.marginBottom = '8px';
-                        headerDiv.style.color = '#00d9ff';
-                        headerDiv.textContent = `${practice} (${offerings.length})`;
-                        practiceDiv.appendChild(headerDiv);
-
-                        offerings.forEach(offering => {
-                            const offeringDiv = document.createElement('div');
-                            offeringDiv.className = 'offering-item';
-                            offeringDiv.style.display = 'flex';
-                            offeringDiv.style.alignItems = 'center';
-                            offeringDiv.style.gap = '8px';
-                            offeringDiv.style.padding = '6px 0';
-                            offeringDiv.style.cursor = 'pointer';
-
-                            const checkbox = document.createElement('input');
-                            checkbox.type = 'checkbox';
-                            checkbox.id = `offering_${offering.name}`;
-                            checkbox.value = offering.name;
-                            checkbox.checked = selectedOfferings.has(offering.name);
-                            checkbox.style.cursor = 'pointer';
-                            checkbox.addEventListener('change', (e) => {
-                                if (e.target.checked) {
-                                    selectedOfferings.add(offering.name);
-                                } else {
-                                    selectedOfferings.delete(offering.name);
-                                }
-                                console.log('Selected offerings:', Array.from(selectedOfferings));
-                            });
-
-                            const label = document.createElement('label');
-                            label.htmlFor = `offering_${offering.name}`;
-                            label.textContent = offering.name;
-                            label.style.cursor = 'pointer';
-                            label.style.flex = '1';
-                            label.onclick = () => {
-                                checkbox.checked = !checkbox.checked;
-                                checkbox.dispatchEvent(new Event('change'));
-                            };
-
-                            offeringDiv.appendChild(checkbox);
-                            offeringDiv.appendChild(label);
-                            practiceDiv.appendChild(offeringDiv);
-                        });
-
-                        library.appendChild(practiceDiv);
-                    }
-                });
-            } catch (error) {
-                console.error('Error loading offerings:', error);
-                library.innerHTML = '<div class="status-info">Error loading offerings</div>';
-            }
-        }
-
-        // Toggle offering selection
-        function toggleOffering(id, name) {
-            if (selectedOfferings.has(id)) {
-                selectedOfferings.delete(id);
-            } else {
-                selectedOfferings.add(id);
-            }
-            console.log('Selected offerings:', Array.from(selectedOfferings));
-        }
-
         // Upload Documents
         async function uploadDocuments() {
             const fileInput = document.getElementById('fileInput');
@@ -1006,14 +899,12 @@
                 const modelSelect = document.getElementById('modelSelect');
                 const selectedModel = modelSelect ? modelSelect.value : 'gpt-4';
 
-                // Get selected offerings from checkboxes
-                const selectedOfferings = [];
-                const offeringCheckboxes = document.querySelectorAll('.offering-item input[type="checkbox"]:checked');
-                offeringCheckboxes.forEach(checkbox => {
-                    selectedOfferings.push(checkbox.value);
-                });
+                // Get selected notebook from dropdown
+                const notebookSelect = document.getElementById('notebookSelect');
+                const selectedNotebook = notebookSelect ? notebookSelect.value : '';
+                const selectedNotebooks = selectedNotebook ? [selectedNotebook] : [];
 
-                console.log('Selected offerings:', selectedOfferings);
+                console.log('Selected notebook:', selectedNotebook);
 
                 const response = await fetch('/chat', {
                     method: 'POST',
@@ -1025,7 +916,7 @@
                         history: [],
                         model: selectedModel,
                         mode: 'chat',
-                        selected_offerings: selectedOfferings
+                        selected_notebooks: selectedNotebooks
                     })
                 });
 

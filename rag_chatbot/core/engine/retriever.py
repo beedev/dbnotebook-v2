@@ -282,20 +282,23 @@ class LocalRetriever:
                 metadata = node.metadata or {}
 
                 # Debug: Log metadata for each node
-                logger.info(f"Node metadata: {metadata.get('file_name', 'unknown')}: offering_name={metadata.get('offering_name')}, offering_id={metadata.get('offering_id')}, it_practice={metadata.get('it_practice')}")
+                logger.info(f"Node metadata: {metadata.get('file_name', 'unknown')}: offering_name={metadata.get('offering_name')}, offering_id={metadata.get('offering_id')}, notebook_id={metadata.get('notebook_id')}, it_practice={metadata.get('it_practice')}")
 
-                # Check offering filter (by name or id)
+                # Check offering filter (by name, id, or notebook_id)
                 if offering_filter:
                     node_offering_id = metadata.get("offering_id")
                     node_offering_name = metadata.get("offering_name")
+                    node_notebook_id = metadata.get("notebook_id")
 
+                    # Match against offering_id, offering_name, OR notebook_id
                     if (node_offering_id and node_offering_id in offering_filter) or \
-                       (node_offering_name and node_offering_name in offering_filter):
-                        logger.info(f"✓ Node MATCHED offering filter: {metadata.get('file_name')}")
+                       (node_offering_name and node_offering_name in offering_filter) or \
+                       (node_notebook_id and node_notebook_id in offering_filter):
+                        logger.info(f"✓ Node MATCHED filter: {metadata.get('file_name')} (notebook_id={node_notebook_id})")
                         filtered_nodes.append(node)
                         continue
                     else:
-                        logger.info(f"✗ Node REJECTED (offering mismatch): {metadata.get('file_name')}")
+                        logger.info(f"✗ Node REJECTED (no match): {metadata.get('file_name')}")
 
                 # Check practice filter
                 if practice_filter:

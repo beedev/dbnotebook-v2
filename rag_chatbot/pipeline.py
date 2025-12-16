@@ -1,4 +1,5 @@
 import logging
+import time
 from typing import Optional
 
 from llama_index.core import Settings
@@ -13,7 +14,10 @@ from .core import (
     LocalVectorStore,
     get_system_prompt
 )
-from .core.sales import QueryClassifier, OfferingAnalyzer
+from .core.db import DatabaseManager
+from .core.notebook import NotebookManager
+from .core.conversation import ConversationStore
+from .core.observability import QueryLogger, get_token_counter
 from .setting import get_settings
 
 logger = logging.getLogger(__name__)
@@ -29,7 +33,11 @@ class LocalRAGPipeline:
     - Proper logging
     """
 
-    def __init__(self, host: str = "host.docker.internal") -> None:
+    def __init__(
+        self,
+        host: str = "host.docker.internal",
+        database_url: Optional[str] = None
+    ) -> None:
         self._host = host
         self._language = "eng"
         self._model_name = ""
@@ -38,10 +46,35 @@ class LocalRAGPipeline:
         self._settings = get_settings()
 
         # Engine state management for conversation history preservation
-        self._current_offering_filter: Optional[list[str]] = None
         self._engine_initialized: bool = False
 
+        # Notebook context tracking (NotebookLM architecture)
+        self._current_notebook_id: Optional[str] = None
+        self._current_user_id: str = "00000000-0000-0000-0000-000000000001"  # Default user UUID
+
+        # Database and conversation management (optional, only if database_url provided)
+        self._db_manager: Optional[DatabaseManager] = None
+        self._notebook_manager: Optional[NotebookManager] = None
+        self._conversation_store: Optional[ConversationStore] = None
+        self._query_logger: Optional[QueryLogger] = None
+        if database_url:
+            self._db_manager = DatabaseManager(database_url)
+            self._db_manager.init_db()
+            self._notebook_manager = NotebookManager(self._db_manager)
+            self._conversation_store = ConversationStore(self._db_manager)
+            self._query_logger = QueryLogger(db_manager=self._db_manager)
+            logger.info(f"Database initialized with notebook management, conversation persistence, and query logging")
+        else:
+            # Initialize in-memory query logger even without database
+            self._query_logger = QueryLogger()
+            logger.info("Query logger initialized (in-memory mode, notebook features disabled)")
+
         # Initialize components once
+        self._vector_store = LocalVectorStore(
+            host=host,
+            setting=self._settings,
+            persist=True
+        )
         self._engine = LocalChatEngine(
             setting=self._settings,
             host=host
@@ -49,12 +82,9 @@ class LocalRAGPipeline:
         self._ingestion = LocalDataIngestion(
             setting=self._settings,
             max_workers=4,
-            use_cache=True
-        )
-        self._vector_store = LocalVectorStore(
-            host=host,
-            setting=self._settings,
-            persist=True
+            use_cache=True,
+            db_manager=self._db_manager,
+            vector_store=self._vector_store
         )
 
         # Initialize models once and cache in Settings
@@ -69,13 +99,120 @@ class LocalRAGPipeline:
             setting=self._settings
         )
 
-        # Initialize sales enablement components
-        self._query_classifier = QueryClassifier(llm=self._default_model)
-        self._offering_analyzer = OfferingAnalyzer(llm=self._default_model)
-
         logger.info(f"Pipeline initialized - Host: {host}")
         logger.debug(f"LLM Model: {self._model_name or self._settings.ollama.llm}")
         logger.debug(f"Embed Model: {self._settings.ingestion.embed_llm}")
+
+    def switch_notebook(
+        self,
+        notebook_id: str,
+        user_id: Optional[str] = None
+    ) -> None:
+        """
+        Switch to a different notebook, loading its conversation history.
+
+        This implements the NotebookLM architecture pattern:
+        1. Save current conversation to PostgreSQL
+        2. Update notebook context
+        3. Load new notebook's conversation history
+        4. Recreate engine with notebook-filtered nodes
+
+        Args:
+            notebook_id: UUID of the notebook to switch to
+            user_id: UUID of the user (defaults to current user)
+
+        Raises:
+            ValueError: If conversation store is not initialized (database_url not provided)
+        """
+        if not self._conversation_store:
+            raise ValueError(
+                "Conversation persistence not available. "
+                "Initialize pipeline with database_url to enable notebook features."
+            )
+
+        user_id = user_id or self._current_user_id
+
+        # Step 1: Save current conversation to database (if we have one)
+        if self._current_notebook_id and self._query_engine:
+            try:
+                if hasattr(self._query_engine, 'memory'):
+                    current_history = self._query_engine.memory.get_all()
+                    if current_history:
+                        # Convert ChatMessage objects to dicts
+                        messages = [
+                            {"role": msg.role.value, "content": msg.content}
+                            for msg in current_history
+                        ]
+                        self._conversation_store.save_messages(
+                            notebook_id=self._current_notebook_id,
+                            user_id=self._current_user_id,
+                            messages=messages
+                        )
+                        logger.info(
+                            f"Saved {len(messages)} messages from notebook "
+                            f"{self._current_notebook_id}"
+                        )
+            except Exception as e:
+                logger.error(f"Failed to save conversation history: {e}")
+
+        # Step 2: Update notebook context
+        self._current_notebook_id = notebook_id
+        self._current_user_id = user_id
+        logger.info(f"Switched to notebook: {notebook_id}")
+
+        # Step 3: Load new notebook's conversation history
+        try:
+            history = self._conversation_store.get_conversation_history(
+                notebook_id=notebook_id,
+                user_id=user_id,
+                limit=50  # Last 50 messages
+            )
+            logger.info(f"Loaded {len(history)} messages from notebook {notebook_id}")
+
+            # Convert to ChatMessage objects
+            chat_history = []
+            for msg in history:
+                role = MessageRole.USER if msg["role"] == "user" else MessageRole.ASSISTANT
+                chat_history.append(ChatMessage(role=role, content=msg["content"]))
+
+        except Exception as e:
+            logger.error(f"Failed to load conversation history: {e}")
+            chat_history = []
+
+        # Step 4: Load all nodes from ChromaDB and filter by notebook_id
+        logger.info("Loading nodes from ChromaDB persistent storage")
+        all_nodes = self._vector_store.load_all_nodes()
+        logger.info(f"Loaded {len(all_nodes)} total nodes from ChromaDB")
+
+        # Filter by notebook_id
+        if all_nodes:
+            notebook_nodes = self._vector_store.get_nodes_by_notebook(
+                nodes=all_nodes,
+                notebook_id=notebook_id
+            )
+            logger.info(
+                f"Filtered {len(notebook_nodes)} nodes for notebook {notebook_id} "
+                f"from {len(all_nodes)} total"
+            )
+        else:
+            notebook_nodes = []
+            logger.warning("No nodes available in ChromaDB")
+
+        # Step 5: Recreate engine with notebook context and chat history
+        self._query_engine = self._engine.set_engine(
+            llm=self._default_model,
+            nodes=notebook_nodes,
+            language=self._language,
+            chat_history=chat_history
+        )
+
+        # Update engine state
+        self._engine_initialized = True
+
+        logger.info(
+            f"Engine recreated for notebook {notebook_id} with "
+            f"{len(notebook_nodes)} nodes and {len(chat_history)} history messages"
+        )
 
     def get_model_name(self) -> str:
         return self._model_name
@@ -171,18 +308,16 @@ class LocalRAGPipeline:
     def store_nodes(
         self,
         input_files: Optional[list[str]] = None,
-        it_practice: Optional[str] = None,
-        offering_name: Optional[str] = None,
-        offering_id: Optional[str] = None
+        notebook_id: Optional[str] = None,
+        user_id: str = "default"
     ) -> None:
         """
         Process and store document nodes with metadata.
 
         Args:
             input_files: List of file paths to process
-            it_practice: IT Practice classification (e.g., "Cloud Services")
-            offering_name: Offering name (e.g., "Cloud Migration")
-            offering_id: Unique offering identifier (UUID)
+            notebook_id: Notebook UUID for NotebookLM-style isolation (optional)
+            user_id: User identifier (defaults to "default")
 
         Uses parallel processing and caching for efficiency.
         """
@@ -193,33 +328,78 @@ class LocalRAGPipeline:
         logger.info(f"Processing {len(input_files)} files")
         self._ingestion.store_nodes(
             input_files=input_files,
-            it_practice=it_practice,
-            offering_name=offering_name,
-            offering_id=offering_id
+            notebook_id=notebook_id,
+            user_id=user_id
         )
         logger.info("Document processing complete")
 
-        # Generate synopsis for the offering if offering metadata provided
-        if offering_id and offering_name:
-            logger.info(f"Generating synopsis for offering: {offering_name}")
-            synopsis = self._ingestion.generate_synopsis_for_offering(
-                offering_id=offering_id,
-                offering_name=offering_name,
-                llm=self._default_model,
-                file_list=input_files
-            )
-            if synopsis:
-                logger.info(f"Synopsis generated successfully for {offering_name}")
-            else:
-                logger.warning(f"Failed to generate synopsis for {offering_name}")
+    def set_chat_mode(self, system_prompt: Optional[str] = None, force_reset: bool = False) -> None:
+        """Configure chat mode with current documents and settings.
 
-    def set_chat_mode(self, system_prompt: Optional[str] = None) -> None:
-        """Configure chat mode with current documents and settings."""
+        Args:
+            system_prompt: Optional system prompt to set
+            force_reset: If True, force rebuild of chat engine (needed after document upload)
+        """
         self.set_language(self._language)
         self.set_system_prompt(system_prompt)
         self.set_model()
-        self.set_engine()
-        logger.debug("Chat mode configured")
+        self.set_engine(force_reset=force_reset)
+        logger.debug(f"Chat mode configured (force_reset={force_reset})")
+
+    def load_notebook_documents(self, notebook_ids: list[str]) -> int:
+        """
+        Load and ingest documents from specified notebooks.
+
+        Args:
+            notebook_ids: List of notebook IDs to load documents from
+
+        Returns:
+            Number of documents loaded
+        """
+        if not self._notebook_manager:
+            logger.warning("Cannot load notebook documents - notebook manager not available")
+            return 0
+
+        import os
+        from pathlib import Path
+
+        total_loaded = 0
+
+        for notebook_id in notebook_ids:
+            try:
+                # Get documents for this notebook from database
+                documents = self._notebook_manager.get_documents(notebook_id)
+
+                if not documents:
+                    logger.info(f"No documents found for notebook {notebook_id}")
+                    continue
+
+                logger.info(f"Found {len(documents)} documents for notebook {notebook_id}")
+
+                # Load each document from disk and ingest with notebook_id metadata
+                for doc in documents:
+                    file_name = doc['file_name']
+                    file_path = os.path.join(self._ingestion._data_dir, file_name)
+
+                    if not os.path.exists(file_path):
+                        logger.warning(f"Document file not found: {file_path}")
+                        continue
+
+                    # Ingest with notebook_id metadata
+                    logger.info(f"Loading document: {file_name} with notebook_id={notebook_id}")
+                    self._ingestion.store_nodes(
+                        input_files=[file_path],
+                        notebook_id=notebook_id
+                    )
+                    total_loaded += 1
+
+                logger.info(f"Loaded {total_loaded} documents for notebook {notebook_id}")
+
+            except Exception as e:
+                logger.error(f"Error loading documents for notebook {notebook_id}: {e}")
+                continue
+
+        return total_loaded
 
     def set_engine(
         self,
@@ -230,15 +410,12 @@ class LocalRAGPipeline:
         Only recreates engine if filter changes or force_reset is True.
 
         Args:
-            offering_filter: List of offering names to filter by (Sales Pitch mode)
+            offering_filter: List of offering names/IDs or notebook IDs to filter by
             force_reset: Force recreation of engine even if filter unchanged
         """
-        # Check if engine needs to be recreated
-        filter_changed = offering_filter != self._current_offering_filter
-
-        if not self._engine_initialized or filter_changed or force_reset:
+        # Recreate engine if not initialized or force_reset requested
+        if not self._engine_initialized or force_reset:
             logger.info(f"Creating new engine with filter: {offering_filter}")
-            logger.info(f"Filter changed: {filter_changed}, Previous filter: {self._current_offering_filter}")
 
             # PRESERVE chat history from existing engine before recreating
             preserved_history = []
@@ -263,8 +440,38 @@ class LocalRAGPipeline:
             else:
                 logger.info("No existing engine to preserve history from")
 
-            # Get nodes with filter
-            nodes = self._ingestion.get_ingested_nodes()
+            # Load ALL nodes from ChromaDB (persistent storage)
+            logger.info("Loading nodes from ChromaDB persistent storage")
+            all_nodes = self._vector_store.load_all_nodes()
+            logger.info(f"Loaded {len(all_nodes)} total nodes from ChromaDB")
+
+            # Filter nodes by offering_filter if provided
+            if offering_filter:
+                # offering_filter can contain notebook_ids, offering_names, or offering_ids
+                filtered_nodes = []
+
+                for node in all_nodes:
+                    metadata = node.metadata or {}
+                    node_notebook_id = metadata.get("notebook_id")
+                    node_offering_name = metadata.get("offering_name")
+                    node_offering_id = metadata.get("offering_id")
+
+                    # Match against notebook_id, offering_name, OR offering_id
+                    if (node_notebook_id and node_notebook_id in offering_filter) or \
+                       (node_offering_name and node_offering_name in offering_filter) or \
+                       (node_offering_id and node_offering_id in offering_filter):
+                        filtered_nodes.append(node)
+
+                nodes = filtered_nodes
+                logger.info(
+                    f"Filtered {len(nodes)} nodes from {len(all_nodes)} total "
+                    f"(filter={offering_filter})"
+                )
+            else:
+                # No filter - use all nodes
+                nodes = all_nodes
+                logger.info(f"Using all {len(nodes)} nodes (no filter)")
+
 
             # Create new engine WITH preserved chat history
             logger.info(f"Creating new engine with {len(preserved_history)} preserved messages")
@@ -287,7 +494,6 @@ class LocalRAGPipeline:
                 logger.warning("⚠ New engine has no memory attribute!")
 
             # Update state
-            self._current_offering_filter = offering_filter
             self._engine_initialized = True
 
             filter_msg = f" (filtered by {len(offering_filter)} offerings)" if offering_filter else ""
@@ -354,6 +560,98 @@ class LocalRAGPipeline:
 
         return False
 
+    def save_message(
+        self,
+        notebook_id: str,
+        user_id: str,
+        role: str,
+        content: str
+    ) -> Optional[str]:
+        """
+        Save a single conversation message to the database.
+
+        Args:
+            notebook_id: UUID of the notebook
+            user_id: UUID of the user
+            role: Message role ('user' or 'assistant')
+            content: Message content text
+
+        Returns:
+            conversation_id (UUID) if successful, None if persistence not available
+
+        Raises:
+            ValueError: If role is not 'user' or 'assistant'
+        """
+        if not self._conversation_store:
+            logger.warning("Conversation persistence not available - message not saved")
+            return None
+
+        try:
+            conversation_id = self._conversation_store.save_message(
+                notebook_id=notebook_id,
+                user_id=user_id,
+                role=role,
+                content=content
+            )
+            logger.debug(f"Saved {role} message to notebook {notebook_id}")
+            return conversation_id
+        except Exception as e:
+            logger.error(f"Failed to save message: {e}")
+            return None
+
+    def save_conversation_exchange(
+        self,
+        notebook_id: str,
+        user_id: str,
+        user_message: str,
+        assistant_message: str
+    ) -> bool:
+        """
+        Save a complete conversation exchange (user query + assistant response).
+
+        This is a convenience method for saving both messages in a single call.
+        Typically called by the UI layer after a query completes and the streamed
+        response has been fully received.
+
+        Args:
+            notebook_id: UUID of the notebook
+            user_id: UUID of the user
+            user_message: User's query text
+            assistant_message: Assistant's response text
+
+        Returns:
+            True if both messages saved successfully, False otherwise
+        """
+        if not self._conversation_store:
+            logger.warning("Conversation persistence not available - exchange not saved")
+            return False
+
+        try:
+            # Save user message
+            user_id_saved = self.save_message(
+                notebook_id=notebook_id,
+                user_id=user_id,
+                role="user",
+                content=user_message
+            )
+
+            # Save assistant message
+            assistant_id_saved = self.save_message(
+                notebook_id=notebook_id,
+                user_id=user_id,
+                role="assistant",
+                content=assistant_message
+            )
+
+            success = user_id_saved is not None and assistant_id_saved is not None
+            if success:
+                logger.info(f"Saved conversation exchange to notebook {notebook_id}")
+            return success
+
+        except Exception as e:
+            logger.error(f"Failed to save conversation exchange: {e}")
+            return False
+
     def query(
         self,
         mode: str,
@@ -362,6 +660,10 @@ class LocalRAGPipeline:
     ) -> StreamingAgentChatResponse:
         """
         Execute a query against the chat engine.
+
+        Note: This method does NOT automatically save messages to the database.
+        If conversation persistence is enabled (database_url provided), the UI
+        should call save_conversation_exchange() after the streaming response completes.
 
         Args:
             mode: "chat" for conversational, other for single Q&A
@@ -373,32 +675,71 @@ class LocalRAGPipeline:
         """
         logger.debug(f"Query mode: {mode}, message length: {len(message)}")
 
+        # Start timing for query logging
+        start_time = time.time()
+
+        # Execute query
         if mode == "chat":
-            history = self.get_history(chatbot)
-            return self._query_engine.stream_chat(message, history)
+            # ChatMemoryBuffer automatically manages conversation history
+            # DO NOT pass history parameter - it replaces internal memory
+            response = self._query_engine.stream_chat(message)
         else:
+            # Reset memory for single Q&A mode
             self._query_engine.reset()
-            return self._query_engine.stream_chat(message)
+            response = self._query_engine.stream_chat(message)
+
+        # Log query execution with token counting
+        # Note: Prompt tokens counted immediately, completion tokens require post-stream analysis
+        if self._query_logger:
+            response_time_ms = int((time.time() - start_time) * 1000)
+
+            # Count prompt tokens using TokenCounter
+            token_counter = get_token_counter()
+            prompt_tokens = token_counter.count_tokens(message)
+
+            self._query_logger.log_query(
+                notebook_id="default",  # TODO: Replace with actual notebook_id when notebook support is added
+                user_id="default_user",
+                query_text=message,
+                model_name=self._default_model.model,
+                prompt_tokens=prompt_tokens,
+                completion_tokens=0,  # TODO: Count after stream completes (requires UI-side counting)
+                response_time_ms=response_time_ms
+            )
+
+        return response
 
 
     def query_sales_mode(
         self,
         message: str,
         selected_offerings: Optional[list[str]] = None,
+        selected_notebooks: Optional[list[str]] = None,
         chatbot: list = None
     ) -> StreamingAgentChatResponse:
         """
-        Execute sales enablement query with intelligent mode detection.
+        Execute sales enablement query with intelligent mode detection (Hybrid Architecture).
+
+        HYBRID MODE SUPPORT:
+        - Traditional: Use selected_offerings (backward compatible)
+        - Notebook: Use selected_notebooks (NotebookLM architecture)
+        - Conversation-aware: Follow-up detection via conversation history
 
         Workflow:
         1. Classify query (problem_solving vs pitch modes)
-        2. If problem_solving: analyze ALL offerings and recommend bundle
-        3. If pitch: use selected offerings
-        4. Generate response with offering context
+        2. If problem_solving + follow-up: use existing context
+        3. If problem_solving + new: analyze ALL offerings/notebooks and recommend bundle
+        4. If pitch: use selected offerings/notebooks
+        5. Generate response with context from offerings/notebooks
+
+        Note: This method does NOT automatically save messages to the database.
+        If conversation persistence is enabled (database_url provided), the UI
+        should call save_conversation_exchange() after the streaming response completes.
 
         Args:
             message: User's query
-            selected_offerings: Pre-selected offerings for pitch mode
+            selected_offerings: Pre-selected offerings for pitch mode (backward compatibility)
+            selected_notebooks: Pre-selected notebooks for pitch mode (hybrid architecture)
             chatbot: Conversation history
 
         Returns:
@@ -406,10 +747,12 @@ class LocalRAGPipeline:
         """
         logger.info(f"Sales mode query: {message[:100]}...")
 
-        # Step 1: Classify the query
+        # Step 1: Classify the query with hybrid support
         classification = self._query_classifier.classify(
             query=message,
-            selected_offerings=selected_offerings
+            selected_offerings=selected_offerings,
+            selected_notebooks=selected_notebooks,
+            conversation_history=chatbot
         )
 
         mode = classification["mode"]
@@ -429,44 +772,62 @@ class LocalRAGPipeline:
 
         # Step 2: Handle different modes
         if mode == "problem_solving":
-            # Check if this is a follow-up query
-            is_follow_up = self._is_follow_up_query(message, chatbot)
+            # Check if this is a follow-up query (from classifier)
+            is_follow_up = classification.get("is_follow_up", False)
+            use_all_notebooks = classification.get("use_all_notebooks", False)
 
             if is_follow_up:
                 logger.info("Detected follow-up query - skipping analysis, using existing engine")
                 # Use existing engine and filter - no need to run analysis again
-                offering_filter = self._current_offering_filter
+                # For follow-ups, use notebooks if provided, otherwise offerings
+                offering_filter = selected_notebooks if selected_notebooks else selected_offerings
                 # ChatMemoryBuffer in CondensePlusContextChatEngine will handle conversation history automatically
                 response_prefix = ""
             else:
-                # Analyze problem and recommend offering bundle using pre-generated synopses
-                logger.info("New problem - running offering analysis")
+                # Analyze problem and recommend offering bundle
+                logger.info(f"New problem - running offering analysis (use_all_notebooks={use_all_notebooks})")
 
-                # Load pre-generated synopses
-                all_synopses = self._ingestion.get_all_synopses()
+                # Determine analysis mode: notebook mode vs traditional mode
+                if self._notebook_manager and use_all_notebooks:
+                    # Notebook mode: analyze all notebooks using document nodes
+                    logger.info("Using notebook mode for offering analysis")
+                    analysis_result = self._offering_analyzer.analyze_problem(
+                        problem_description=classification["problem_description"],
+                        user_id="default_user",  # TODO: Get from user context
+                        nodes=all_nodes,
+                        customer_name=classification.get("customer_name"),
+                        industry=classification.get("industry"),
+                        top_n=3
+                    )
+                else:
+                    # Traditional mode: use pre-generated synopses
+                    logger.info("Using traditional mode for offering analysis")
 
-                # Extract synopsis text for available offerings
-                offering_synopses = {}
-                for offering_name in available_offerings:
-                    # Find synopsis by offering name
-                    for offering_id, synopsis_data in all_synopses.items():
-                        if synopsis_data.get("offering_name") == offering_name:
-                            offering_synopses[offering_name] = synopsis_data.get("synopsis", "")
-                            break
+                    # Load pre-generated synopses
+                    all_synopses = self._ingestion.get_all_synopses()
 
-                logger.info(f"Loaded {len(offering_synopses)} synopses for problem analysis")
+                    # Extract synopsis text for available offerings
+                    offering_synopses = {}
+                    for offering_name in available_offerings:
+                        # Find synopsis by offering name
+                        for offering_id, synopsis_data in all_synopses.items():
+                            if synopsis_data.get("offering_name") == offering_name:
+                                offering_synopses[offering_name] = synopsis_data.get("synopsis", "")
+                                break
 
-                # If no synopses available, log warning
-                if not offering_synopses:
-                    logger.warning("No synopses available for problem analysis. Please ensure synopses are generated after document upload.")
+                    logger.info(f"Loaded {len(offering_synopses)} synopses for problem analysis")
 
-                analysis_result = self._offering_analyzer.analyze_problem(
-                    problem_description=classification["problem_description"],
-                    offering_synopses=offering_synopses,
-                    customer_name=classification.get("customer_name"),
-                    industry=classification.get("industry"),
-                    top_n=3
-                )
+                    # If no synopses available, log warning
+                    if not offering_synopses:
+                        logger.warning("No synopses available for problem analysis. Please ensure synopses are generated after document upload.")
+
+                    analysis_result = self._offering_analyzer.analyze_problem(
+                        problem_description=classification["problem_description"],
+                        offering_synopses=offering_synopses,
+                        customer_name=classification.get("customer_name"),
+                        industry=classification.get("industry"),
+                        top_n=3
+                    )
 
                 recommended_offerings = analysis_result["recommended_offerings"]
                 logger.info(f"Recommended offerings: {recommended_offerings}")
@@ -534,12 +895,14 @@ class LocalRAGPipeline:
                 response_prefix = f"## {offering_name} - Comprehensive Summary\n\n"
             else:
                 logger.warning("Offering summary requested but no offering mentioned")
-                offering_filter = selected_offerings
+                # Hybrid mode: use notebooks if provided, otherwise offerings
+                offering_filter = selected_notebooks if selected_notebooks else selected_offerings
                 response_prefix = ""
 
         else:  # pitch_specific or pitch_generic
-            logger.info(f"Pitch mode: using selected offerings")
-            offering_filter = selected_offerings
+            # Hybrid mode: use notebooks if provided, otherwise offerings
+            logger.info(f"Pitch mode: using selected {'notebooks' if selected_notebooks else 'offerings'}")
+            offering_filter = selected_notebooks if selected_notebooks else selected_offerings
             response_prefix = ""
 
         # Step 3: Set engine with offering filter
@@ -553,11 +916,27 @@ class LocalRAGPipeline:
             self._query_engine.reset()
             logger.info("Starting new conversation - reset memory buffer")
 
+        # Start timing for query logging
+        start_time = time.time()
+
         # ChatMemoryBuffer will automatically:
         # 1. Store this query and response in memory
         # 2. Use CONDENSED_CONTEXT_PROMPT to condense follow-up questions with history
         # 3. Retrieve relevant context from the memory buffer
         response = self._query_engine.stream_chat(message)
+
+        # Log query execution (with placeholder token counts for streaming responses)
+        if self._query_logger:
+            response_time_ms = int((time.time() - start_time) * 1000)
+            self._query_logger.log_query(
+                notebook_id="default",  # TODO: Replace with actual notebook_id when notebook support is added
+                user_id="default_user",
+                query_text=message,
+                model_name=self._default_model.model,
+                prompt_tokens=0,  # TODO: Extract from LangSmith or implement token counting
+                completion_tokens=0,  # TODO: Extract from LangSmith or implement token counting
+                response_time_ms=response_time_ms
+            )
 
         # Add prefix to response if needed
         if response_prefix:
