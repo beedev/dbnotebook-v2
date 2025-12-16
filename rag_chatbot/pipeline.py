@@ -11,7 +11,7 @@ from .core import (
     LocalDataIngestion,
     LocalRAGModel,
     LocalEmbedding,
-    LocalVectorStore,
+    PGVectorStore,
     get_system_prompt
 )
 from .core.db import DatabaseManager
@@ -69,8 +69,8 @@ class LocalRAGPipeline:
             self._query_logger = QueryLogger()
             logger.info("Query logger initialized (in-memory mode, notebook features disabled)")
 
-        # Initialize components once
-        self._vector_store = LocalVectorStore(
+        # Initialize components once - using PGVectorStore (pgvector)
+        self._vector_store = PGVectorStore(
             host=host,
             setting=self._settings,
             persist=True
@@ -179,10 +179,10 @@ class LocalRAGPipeline:
             logger.error(f"Failed to load conversation history: {e}")
             chat_history = []
 
-        # Step 4: Load all nodes from ChromaDB and filter by notebook_id
-        logger.info("Loading nodes from ChromaDB persistent storage")
+        # Step 4: Load all nodes from pgvector and filter by notebook_id
+        logger.info("Loading nodes from pgvector persistent storage")
         all_nodes = self._vector_store.load_all_nodes()
-        logger.info(f"Loaded {len(all_nodes)} total nodes from ChromaDB")
+        logger.info(f"Loaded {len(all_nodes)} total nodes from pgvector")
 
         # Filter by notebook_id
         if all_nodes:
@@ -196,7 +196,7 @@ class LocalRAGPipeline:
             )
         else:
             notebook_nodes = []
-            logger.warning("No nodes available in ChromaDB")
+            logger.warning("No nodes available in pgvector")
 
         # Step 5: Recreate engine with notebook context and chat history
         self._query_engine = self._engine.set_engine(
@@ -440,10 +440,10 @@ class LocalRAGPipeline:
             else:
                 logger.info("No existing engine to preserve history from")
 
-            # Load ALL nodes from ChromaDB (persistent storage)
-            logger.info("Loading nodes from ChromaDB persistent storage")
+            # Load ALL nodes from pgvector (persistent storage)
+            logger.info("Loading nodes from pgvector persistent storage")
             all_nodes = self._vector_store.load_all_nodes()
-            logger.info(f"Loaded {len(all_nodes)} total nodes from ChromaDB")
+            logger.info(f"Loaded {len(all_nodes)} total nodes from pgvector")
 
             # Filter nodes by offering_filter if provided
             if offering_filter:

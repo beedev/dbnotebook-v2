@@ -253,7 +253,7 @@ class LocalDataIngestion:
         self._db_manager = db_manager
         self._notebook_manager = NotebookManager(db_manager) if db_manager else None
 
-        # Vector store for ChromaDB persistence
+        # Vector store for pgvector persistence
         self._vector_store = vector_store
 
         # Create splitter once
@@ -459,12 +459,12 @@ class LocalDataIngestion:
                     input_file = futures[future]
                     logger.error(f"Error processing {input_file}: {e}")
 
-        # Persist all nodes to ChromaDB if vector store is available
+        # Persist all nodes to pgvector if vector store is available
         # IMPORTANT: Load existing nodes first to preserve them when adding new files
         if self._vector_store and notebook_id and return_nodes:
             try:
-                # Load existing nodes from ChromaDB
-                logger.debug(f"Loading existing nodes from ChromaDB for notebook {notebook_id}")
+                # Load existing nodes from pgvector
+                logger.debug(f"Loading existing nodes from pgvector for notebook {notebook_id}")
                 existing_nodes = self._vector_store.load_all_nodes()
 
                 # Filter to get only THIS notebook's existing nodes
@@ -475,16 +475,16 @@ class LocalDataIngestion:
 
                 # Combine existing + new nodes
                 all_nodes = existing_notebook_nodes + return_nodes
-                logger.info(f"Persisting {len(all_nodes)} total nodes ({len(existing_notebook_nodes)} existing + {len(return_nodes)} new) to ChromaDB for notebook {notebook_id}")
+                logger.info(f"Persisting {len(all_nodes)} total nodes ({len(existing_notebook_nodes)} existing + {len(return_nodes)} new) to pgvector for notebook {notebook_id}")
 
                 # Persist ALL nodes together (forces rebuild to ensure all are stored)
                 self._vector_store.get_index(all_nodes, force_rebuild=True)
 
-                # CRITICAL: Verify nodes are persisted and readable from ChromaDB
-                # ChromaDB may have an internal write buffer that needs to flush
+                # CRITICAL: Verify nodes are persisted and readable from pgvector
+                # pgvector writes are synchronous but we verify for safety
                 import time
-                max_retries = 10
-                retry_delay = 0.5  # 500ms
+                max_retries = 5
+                retry_delay = 0.3  # 300ms (faster for pgvector)
 
                 for attempt in range(max_retries):
                     loaded_nodes = self._vector_store.load_all_nodes()
@@ -494,25 +494,25 @@ class LocalDataIngestion:
 
                     if len(notebook_loaded) >= len(all_nodes):
                         logger.info(
-                            f"✓ Verified {len(notebook_loaded)} nodes persisted to ChromaDB "
+                            f"✓ Verified {len(notebook_loaded)} nodes persisted to pgvector "
                             f"(attempt {attempt + 1}/{max_retries})"
                         )
                         break
                     elif attempt < max_retries - 1:
                         logger.debug(
-                            f"Waiting for ChromaDB flush... "
+                            f"Waiting for pgvector commit... "
                             f"(found {len(notebook_loaded)}/{len(all_nodes)} nodes, "
                             f"attempt {attempt + 1}/{max_retries})"
                         )
                         time.sleep(retry_delay)
                     else:
                         logger.warning(
-                            f"ChromaDB verification timeout: "
+                            f"pgvector verification timeout: "
                             f"only {len(notebook_loaded)}/{len(all_nodes)} nodes readable "
                             f"after {max_retries * retry_delay}s"
                         )
             except Exception as e:
-                logger.error(f"Error persisting nodes to ChromaDB: {e}")
+                logger.error(f"Error persisting nodes to pgvector: {e}")
 
         logger.info(f"Total nodes created: {len(return_nodes)}")
         return return_nodes

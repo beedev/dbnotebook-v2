@@ -62,12 +62,12 @@ class FlaskChatbotUI:
 
         self._setup_routes()
 
-        # ChromaDB Persistence: Load nodes from persistent storage instead of re-ingesting
-        # Documents are persisted to ChromaDB during upload, no need to reload from disk
-        # The pipeline will load nodes from ChromaDB when set_engine() is called
-        # self._reload_documents_with_metadata()  # DISABLED - using ChromaDB persistence
+        # pgvector Persistence: Load nodes from persistent storage instead of re-ingesting
+        # Documents are persisted to pgvector during upload, no need to reload from disk
+        # The pipeline will load nodes from pgvector when set_engine() is called
+        # self._reload_documents_with_metadata()  # DISABLED - using pgvector persistence
 
-        logger.info("Flask UI initialized (using ChromaDB persistence)")
+        logger.info("Flask UI initialized (using pgvector persistence)")
 
     def _reload_documents_with_metadata(self) -> None:
         """Reload all documents from data and uploads directories with metadata from JSON."""
@@ -549,14 +549,15 @@ High quality, business presentation style"""
             if not files or files[0].filename == "":
                 return jsonify({"success": False, "error": "No files selected"})
 
-            # Get metadata from form
+            # Get notebook_id from form (notebook-based architecture)
+            notebook_id = request.form.get("notebook_id", "")
+            user_id = "00000000-0000-0000-0000-000000000001"  # Default user
+
+            # Legacy metadata (still captured for backwards compatibility)
             it_practice = request.form.get("it_practice", "")
             offering_name = request.form.get("offering_name", "")
-
-            # Auto-generate offering_id from offering_name if not empty
             offering_id = ""
             if offering_name:
-                # Convert offering name to lowercase, replace spaces with hyphens
                 offering_id = offering_name.lower().replace(" ", "-").replace("_", "-")
 
             uploaded_files = []
@@ -567,15 +568,14 @@ High quality, business presentation style"""
                         filepath = self._upload_dir / file.filename
                         file.save(str(filepath))
                         uploaded_files.append(str(filepath))
-                        logger.info(f"Uploaded: {file.filename} [Practice: {it_practice}, Offering: {offering_name}]")
+                        logger.info(f"Uploaded: {file.filename} [Notebook: {notebook_id}]")
 
-                # Process documents with metadata
+                # Process documents with notebook-based architecture
                 if uploaded_files:
                     self._pipeline.store_nodes(
                         input_files=uploaded_files,
-                        it_practice=it_practice if it_practice else None,
-                        offering_name=offering_name if offering_name else None,
-                        offering_id=offering_id if offering_id else None
+                        notebook_id=notebook_id if notebook_id else None,
+                        user_id=user_id
                     )
                     self._pipeline.set_chat_mode()
                     # Track processed files and save metadata
@@ -583,15 +583,16 @@ High quality, business presentation style"""
                         filename = os.path.basename(f)
                         if filename not in self._processed_files:
                             self._processed_files.append(filename)
-                        # Save document metadata
+                        # Save document metadata (legacy support)
                         self._add_document_metadata(filename, it_practice, offering_name, offering_id)
-                    logger.info(f"Processed {len(uploaded_files)} documents with metadata")
+                    logger.info(f"Processed {len(uploaded_files)} documents for notebook {notebook_id}")
 
                 return jsonify({
                     "success": True,
                     "count": len(uploaded_files),
                     "files": [os.path.basename(f) for f in uploaded_files],
                     "all_files": self._processed_files,
+                    "notebook_id": notebook_id,
                     "metadata": {
                         "it_practice": it_practice,
                         "offering_name": offering_name,
@@ -1262,7 +1263,7 @@ High quality, business presentation style"""
                 # store_nodes() handles:
                 # 1. Document registration in PostgreSQL with correct chunk_count
                 # 2. Node metadata (notebook_id, source_id, user_id)
-                # 3. ChromaDB persistence
+                # 3. pgvector persistence
                 logger.info(f"Processing {len(file_paths)} files for notebook {notebook_id}")
                 returned_nodes = self._pipeline.store_nodes(
                     input_files=file_paths,
@@ -1292,8 +1293,8 @@ High quality, business presentation style"""
 
                     logger.info(f"Uploaded {filename} to notebook {notebook_id} (source_id: {source_id})")
 
-                # Force rebuild chat engine after loading documents (load nodes from ChromaDB)
-                logger.info("Rebuilding chat engine with newly loaded documents from ChromaDB")
+                # Force rebuild chat engine after loading documents (load nodes from pgvector)
+                logger.info("Rebuilding chat engine with newly loaded documents from pgvector")
                 self._pipeline.set_chat_mode(force_reset=True)
 
                 return jsonify({
@@ -1346,12 +1347,12 @@ High quality, business presentation style"""
                         "error": "Document not found or deletion failed"
                     }), 404
 
-                # Delete from ChromaDB vector store
+                # Delete from pgvector embeddings table
                 if self._pipeline and self._pipeline._vector_store:
-                    chromadb_success = self._pipeline._vector_store.delete_document_nodes(source_id)
+                    pgvector_success = self._pipeline._vector_store.delete_document_nodes(source_id)
 
-                    if not chromadb_success:
-                        logger.warning(f"ChromaDB deletion failed for document {source_id}, but PostgreSQL deletion succeeded")
+                    if not pgvector_success:
+                        logger.warning(f"pgvector deletion failed for document {source_id}, but PostgreSQL deletion succeeded")
 
                 logger.info(f"Deleted document {source_id} from notebook {notebook_id}")
 

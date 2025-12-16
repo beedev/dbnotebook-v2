@@ -156,7 +156,14 @@ class LocalVectorStore:
             for node in nodes:
                 metadata = node.metadata or {}
 
-                # Check offering filter (by name or id)
+                # Check notebook_id filter (for notebook-based architecture)
+                if offering_ids:
+                    node_notebook_id = metadata.get("notebook_id")
+                    if node_notebook_id and node_notebook_id in offering_ids:
+                        filtered_nodes.append(node)
+                        continue
+
+                # Check offering filter (by name or id) - legacy support
                 if offering_ids:
                     node_offering_id = metadata.get("offering_id")
                     node_offering_name = metadata.get("offering_name")
@@ -175,13 +182,13 @@ class LocalVectorStore:
             if not filtered_nodes:
                 logger.warning(
                     f"No nodes found matching filters: "
-                    f"offerings={offering_ids}, practices={practice_names}"
+                    f"offerings/notebooks={offering_ids}, practices={practice_names}"
                 )
                 return None
 
             logger.info(
                 f"Filtered {len(filtered_nodes)} nodes from {len(nodes)} total "
-                f"(offerings={offering_ids}, practices={practice_names})"
+                f"(offerings/notebooks={offering_ids}, practices={practice_names})"
             )
 
         # Create index with filtered nodes
