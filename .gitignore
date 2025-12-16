@@ -167,3 +167,4 @@ test
 junit.xml
 # Generated images
 outputs/
+.env.dev
