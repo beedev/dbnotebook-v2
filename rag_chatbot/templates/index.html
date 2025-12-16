@@ -445,9 +445,220 @@
         @keyframes spin {
             to { transform: rotate(360deg); }
         }
+
+        /* Toast Notifications (MVP 6) */
+        .toast-container {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            z-index: 1000;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .toast {
+            padding: 12px 20px;
+            border-radius: 8px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+            animation: slideIn 0.3s ease;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            max-width: 400px;
+        }
+
+        .toast.success {
+            background: linear-gradient(135deg, rgba(0,200,100,0.95), rgba(0,150,75,0.95));
+            color: white;
+        }
+
+        .toast.error {
+            background: linear-gradient(135deg, rgba(255,80,80,0.95), rgba(200,50,50,0.95));
+            color: white;
+        }
+
+        .toast.info {
+            background: linear-gradient(135deg, rgba(0,180,255,0.95), rgba(0,130,200,0.95));
+            color: white;
+        }
+
+        .toast-close {
+            background: none;
+            border: none;
+            color: white;
+            cursor: pointer;
+            font-size: 18px;
+            margin-left: auto;
+            opacity: 0.7;
+        }
+
+        .toast-close:hover {
+            opacity: 1;
+        }
+
+        @keyframes slideIn {
+            from { transform: translateX(100%); opacity: 0; }
+            to { transform: translateX(0); opacity: 1; }
+        }
+
+        @keyframes slideOut {
+            from { transform: translateX(0); opacity: 1; }
+            to { transform: translateX(100%); opacity: 0; }
+        }
+
+        /* Loading Overlay (MVP 6) */
+        .loading-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0,0,0,0.5);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 8px;
+            z-index: 10;
+        }
+
+        .loading-spinner {
+            width: 40px;
+            height: 40px;
+            border: 4px solid rgba(0,217,255,0.2);
+            border-top-color: #00d9ff;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        .loading-text {
+            color: #00d9ff;
+            margin-top: 10px;
+            font-size: 0.9rem;
+        }
+
+        /* Keyboard Shortcuts Help (MVP 6) */
+        .shortcuts-help {
+            position: fixed;
+            bottom: 20px;
+            left: 20px;
+            background: rgba(0,0,0,0.8);
+            padding: 15px;
+            border-radius: 8px;
+            font-size: 0.8rem;
+            color: #aaa;
+            display: none;
+            z-index: 100;
+        }
+
+        .shortcuts-help.visible {
+            display: block;
+        }
+
+        .shortcuts-help h4 {
+            color: #00d9ff;
+            margin-bottom: 10px;
+        }
+
+        .shortcut-item {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 5px;
+            gap: 20px;
+        }
+
+        .shortcut-key {
+            background: rgba(255,255,255,0.1);
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-family: monospace;
+            color: #00d9ff;
+        }
+
+        /* Responsive Design (MVP 6) */
+        @media (max-width: 1024px) {
+            .container {
+                grid-template-columns: 1fr;
+            }
+
+            .sidebar {
+                max-height: 300px;
+            }
+        }
+
+        @media (max-width: 768px) {
+            .container {
+                padding: 10px;
+            }
+
+            .chat-header h1 {
+                font-size: 1.2rem;
+            }
+
+            .message {
+                max-width: 95%;
+            }
+
+            .btn {
+                padding: 10px 15px;
+                font-size: 0.85rem;
+            }
+        }
+
+        /* Typing Indicator */
+        .typing-indicator {
+            display: flex;
+            gap: 5px;
+            padding: 10px;
+        }
+
+        .typing-dot {
+            width: 8px;
+            height: 8px;
+            background: #00d9ff;
+            border-radius: 50%;
+            animation: typingBounce 1.4s infinite ease-in-out;
+        }
+
+        .typing-dot:nth-child(1) { animation-delay: 0s; }
+        .typing-dot:nth-child(2) { animation-delay: 0.2s; }
+        .typing-dot:nth-child(3) { animation-delay: 0.4s; }
+
+        @keyframes typingBounce {
+            0%, 80%, 100% { transform: translateY(0); }
+            40% { transform: translateY(-8px); }
+        }
     </style>
 </head>
 <body>
+    <!-- Toast Container (MVP 6) -->
+    <div id="toastContainer" class="toast-container"></div>
+
+    <!-- Keyboard Shortcuts Help (MVP 6) -->
+    <div id="shortcutsHelp" class="shortcuts-help">
+        <h4>Keyboard Shortcuts</h4>
+        <div class="shortcut-item">
+            <span>Send message</span>
+            <span class="shortcut-key">Enter</span>
+        </div>
+        <div class="shortcut-item">
+            <span>New line</span>
+            <span class="shortcut-key">Shift+Enter</span>
+        </div>
+        <div class="shortcut-item">
+            <span>Clear chat</span>
+            <span class="shortcut-key">Ctrl+K</span>
+        </div>
+        <div class="shortcut-item">
+            <span>Focus input</span>
+            <span class="shortcut-key">Ctrl+/</span>
+        </div>
+        <div class="shortcut-item">
+            <span>Toggle help</span>
+            <span class="shortcut-key">?</span>
+        </div>
+    </div>
+
     <div class="container">
         <!-- Sidebar -->
         <div class="sidebar">
@@ -520,10 +731,70 @@
         let selectedDocuments = new Set();
         let uploadedFiles = [];
 
+        // ========================================
+        // Toast Notification System (MVP 6)
+        // ========================================
+        function showToast(message, type = 'info', duration = 4000) {
+            const container = document.getElementById('toastContainer');
+            const toast = document.createElement('div');
+            toast.className = `toast ${type}`;
+
+            const icon = type === 'success' ? '✓' : type === 'error' ? '✗' : 'ℹ';
+            toast.innerHTML = `
+                <span>${icon}</span>
+                <span>${message}</span>
+                <button class="toast-close" onclick="this.parentElement.remove()">×</button>
+            `;
+
+            container.appendChild(toast);
+
+            // Auto-dismiss
+            setTimeout(() => {
+                toast.style.animation = 'slideOut 0.3s ease forwards';
+                setTimeout(() => toast.remove(), 300);
+            }, duration);
+        }
+
+        // ========================================
+        // Keyboard Shortcuts (MVP 6)
+        // ========================================
+        document.addEventListener('keydown', (e) => {
+            // Ctrl+K - Clear chat
+            if (e.ctrlKey && e.key === 'k') {
+                e.preventDefault();
+                clearChat();
+                showToast('Chat cleared', 'info');
+            }
+
+            // Ctrl+/ - Focus input
+            if (e.ctrlKey && e.key === '/') {
+                e.preventDefault();
+                document.getElementById('chatInput').focus();
+            }
+
+            // ? - Toggle shortcuts help (when not in input)
+            if (e.key === '?' && document.activeElement.tagName !== 'TEXTAREA' && document.activeElement.tagName !== 'INPUT') {
+                const help = document.getElementById('shortcutsHelp');
+                help.classList.toggle('visible');
+            }
+
+            // Escape - Close modals/help
+            if (e.key === 'Escape') {
+                document.getElementById('shortcutsHelp').classList.remove('visible');
+            }
+        });
+
+        // ========================================
         // Initialize on page load
+        // ========================================
         document.addEventListener('DOMContentLoaded', () => {
             loadNotebooks();
             loadModels();
+
+            // Show welcome toast
+            setTimeout(() => {
+                showToast('Welcome! Press ? for keyboard shortcuts', 'info', 5000);
+            }, 1000);
         });
 
         // Clear Chat Function
@@ -535,10 +806,11 @@
 
                 if (response.ok) {
                     document.getElementById('chatMessages').innerHTML = '<div class="message assistant"><strong>Assistant:</strong><div class="message-content">How can I help you today?</div></div>';
-                    console.log('Chat cleared successfully');
+                    showToast('Chat cleared', 'success', 2000);
                 }
             } catch (error) {
                 console.error('Error clearing chat:', error);
+                showToast('Failed to clear chat', 'error');
             }
         }
 
@@ -573,6 +845,7 @@
         function onNotebookChange() {
             const select = document.getElementById('notebookSelect');
             const selectedNotebook = select.value;
+            const selectedText = select.options[select.selectedIndex]?.text;
 
             currentNotebook = selectedNotebook;
 
@@ -584,6 +857,7 @@
                 documentsHeader.style.display = 'block';
                 documentsList.style.display = 'block';
                 loadNotebookDocuments(selectedNotebook);
+                showToast(`Selected notebook: ${selectedText}`, 'info', 3000);
             } else {
                 // Hide documents section
                 documentsHeader.style.display = 'none';
@@ -878,11 +1152,35 @@
             }
         }
 
+        // Create typing indicator element
+        function createTypingIndicator() {
+            const indicator = document.createElement('div');
+            indicator.className = 'message assistant';
+            indicator.id = 'typingIndicator';
+            indicator.innerHTML = `
+                <strong>Assistant:</strong>
+                <div class="typing-indicator">
+                    <div class="typing-dot"></div>
+                    <div class="typing-dot"></div>
+                    <div class="typing-dot"></div>
+                </div>
+            `;
+            return indicator;
+        }
+
+        // Remove typing indicator
+        function removeTypingIndicator() {
+            const indicator = document.getElementById('typingIndicator');
+            if (indicator) {
+                indicator.remove();
+            }
+        }
+
         // Send Chat Message
         async function sendMessage() {
             const input = document.getElementById('chatInput');
             const message = input.value.trim();
-            
+
             if (!message) return;
 
             // Add user message to chat
@@ -893,6 +1191,12 @@
             const sendBtn = document.getElementById('sendBtn');
             sendBtn.disabled = true;
             sendBtn.innerHTML = '<div class="loading"></div>';
+
+            // Show typing indicator
+            const messagesDiv = document.getElementById('chatMessages');
+            const typingIndicator = createTypingIndicator();
+            messagesDiv.appendChild(typingIndicator);
+            messagesDiv.scrollTop = messagesDiv.scrollHeight;
 
             try {
                 // Get selected model from dropdown
@@ -940,6 +1244,8 @@
                                 if (data.token) {
                                     assistantMessage += data.token;
                                     if (!messageDiv) {
+                                        // Remove typing indicator when first token arrives
+                                        removeTypingIndicator();
                                         messageDiv = addMessage('', 'assistant');
                                     }
                                     updateMessage(messageDiv, assistantMessage);
@@ -956,8 +1262,11 @@
                 }
             } catch (error) {
                 console.error('Error sending message:', error);
+                removeTypingIndicator();
                 addMessage(`Error: ${error.message}`, 'assistant');
+                showToast('Failed to send message', 'error');
             } finally {
+                removeTypingIndicator(); // Ensure it's always removed
                 sendBtn.disabled = false;
                 sendBtn.textContent = 'Send';
             }

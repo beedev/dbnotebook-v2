@@ -744,7 +744,107 @@ High quality, business presentation style"""
 
         @self._app.route("/health", methods=["GET"])
         def health():
-            return jsonify({"status": "healthy"})
+            """Comprehensive health check endpoint (MVP 6)."""
+            import time
+            import psutil
+            import requests
+
+            start_time = time.time()
+            health_status = {
+                "status": "healthy",
+                "version": "2.0.0",
+                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                "components": {}
+            }
+
+            # Check database connection
+            try:
+                if self._db_manager:
+                    with self._db_manager.get_session() as session:
+                        session.execute("SELECT 1")
+                    health_status["components"]["database"] = {
+                        "status": "healthy",
+                        "type": "postgresql"
+                    }
+                else:
+                    health_status["components"]["database"] = {
+                        "status": "not_configured",
+                        "type": "none"
+                    }
+            except Exception as e:
+                health_status["status"] = "degraded"
+                health_status["components"]["database"] = {
+                    "status": "unhealthy",
+                    "error": str(e)
+                }
+
+            # Check Ollama connection
+            try:
+                ollama_url = f"http://{self._host}:11434/api/tags"
+                response = requests.get(ollama_url, timeout=5)
+                if response.status_code == 200:
+                    models = response.json().get("models", [])
+                    health_status["components"]["ollama"] = {
+                        "status": "healthy",
+                        "models_available": len(models)
+                    }
+                else:
+                    health_status["components"]["ollama"] = {
+                        "status": "degraded",
+                        "http_status": response.status_code
+                    }
+            except Exception as e:
+                health_status["components"]["ollama"] = {
+                    "status": "unavailable",
+                    "error": str(e)
+                }
+
+            # Check vector store
+            try:
+                if self._pipeline and self._pipeline._vector_store:
+                    stats = self._pipeline._vector_store.get_collection_stats()
+                    health_status["components"]["vector_store"] = {
+                        "status": "healthy",
+                        "type": "pgvector",
+                        "document_count": stats.get("count", 0)
+                    }
+                else:
+                    health_status["components"]["vector_store"] = {
+                        "status": "not_initialized"
+                    }
+            except Exception as e:
+                health_status["components"]["vector_store"] = {
+                    "status": "error",
+                    "error": str(e)
+                }
+
+            # System resources
+            try:
+                health_status["system"] = {
+                    "cpu_percent": psutil.cpu_percent(),
+                    "memory_percent": psutil.virtual_memory().percent,
+                    "disk_percent": psutil.disk_usage('/').percent
+                }
+            except Exception:
+                health_status["system"] = {"status": "unavailable"}
+
+            # Response time
+            health_status["response_time_ms"] = round((time.time() - start_time) * 1000, 2)
+
+            # Overall status
+            component_statuses = [c.get("status") for c in health_status["components"].values()]
+            if "unhealthy" in component_statuses:
+                health_status["status"] = "unhealthy"
+            elif "degraded" in component_statuses or "unavailable" in component_statuses:
+                health_status["status"] = "degraded"
+
+            status_code = 200 if health_status["status"] == "healthy" else 503
+            return jsonify(health_status), status_code
+
+        @self._app.route("/api/health", methods=["GET"])
+        def api_health():
+            """Simple health check for load balancers."""
+            return jsonify({"status": "ok"})
 
         @self._app.route("/generate-image", methods=["POST"])
         def generate_image():
