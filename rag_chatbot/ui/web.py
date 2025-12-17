@@ -66,6 +66,8 @@ class FlaskChatbotUI:
             template_folder=str(template_dir)
         )
 
+        # Add CORS support for React dev server
+        self._setup_cors()
         self._setup_routes()
 
         # pgvector Persistence: Load nodes from persistent storage instead of re-ingesting
@@ -340,6 +342,39 @@ Output ONLY valid JSON, nothing else."""
                 ]
             }
 
+    def _setup_cors(self):
+        """Set up CORS headers for React dev server."""
+
+        @self._app.after_request
+        def add_cors_headers(response):
+            # Allow React dev server (localhost:3000 and localhost:5173)
+            origin = request.headers.get('Origin', '')
+            allowed_origins = ['http://localhost:3000', 'http://localhost:5173', 'http://127.0.0.1:3000', 'http://127.0.0.1:5173']
+
+            if origin in allowed_origins:
+                response.headers['Access-Control-Allow-Origin'] = origin
+                response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, PATCH, OPTIONS'
+                response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, Accept'
+                response.headers['Access-Control-Allow-Credentials'] = 'true'
+
+            return response
+
+        @self._app.route('/', defaults={'path': ''}, methods=['OPTIONS'])
+        @self._app.route('/<path:path>', methods=['OPTIONS'])
+        def handle_options(path):
+            """Handle preflight OPTIONS requests."""
+            response = self._app.make_default_options_response()
+            origin = request.headers.get('Origin', '')
+            allowed_origins = ['http://localhost:3000', 'http://localhost:5173', 'http://127.0.0.1:3000', 'http://127.0.0.1:5173']
+
+            if origin in allowed_origins:
+                response.headers['Access-Control-Allow-Origin'] = origin
+                response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, PATCH, OPTIONS'
+                response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, Accept'
+                response.headers['Access-Control-Allow-Credentials'] = 'true'
+
+            return response
+
     def _setup_routes(self):
         """Set up Flask routes."""
 
@@ -357,6 +392,11 @@ Output ONLY valid JSON, nothing else."""
             # Hybrid mode: support both offerings (traditional) and notebooks
             selected_offerings = data.get("selected_offerings", [])
             selected_notebooks = data.get("selected_notebooks", [])
+
+            # Support React frontend's notebook_id (singular) format
+            notebook_id = data.get("notebook_id")
+            if notebook_id and not selected_notebooks:
+                selected_notebooks = [notebook_id]
 
             if not message:
                 return jsonify({"error": "No message provided"}), 400
@@ -398,7 +438,7 @@ Output ONLY valid JSON, nothing else."""
                     # Query RAG pipeline to get relevant document content
                     yield f"data: {json.dumps({'token': ''})}\n\n"
 
-                    # Choose query method based on whether notebooks are selected
+                    # Choose query method based on selection
                     if selected_notebooks:
                         # NOTEBOOK MODE: Use simple query() method for direct Q&A with notebook documents
                         # Set engine with notebook filter before querying
@@ -408,13 +448,20 @@ Output ONLY valid JSON, nothing else."""
                             message=message,
                             chatbot=history
                         )
-                    else:
+                    elif selected_offerings:
                         # SALES MODE: Use query_sales_mode for intelligent classification
-                        # Hybrid mode: pass both offerings and notebooks
+                        # Only use when offerings are explicitly selected
                         rag_response = self._pipeline.query_sales_mode(
                             message=message,
                             selected_offerings=selected_offerings,
                             selected_notebooks=selected_notebooks,
+                            chatbot=history
+                        )
+                    else:
+                        # GENERAL CHAT MODE: Bypass retriever, direct LLM chat
+                        # Uses SimpleChatEngine without loading any documents
+                        rag_response = self._pipeline.chat_without_retrieval(
+                            message=message,
                             chatbot=history
                         )
 
@@ -484,7 +531,57 @@ Output ONLY valid JSON, nothing else."""
                         # STEP 5: Return normal RAG response
                         for token in document_context:
                             yield f"data: {json.dumps({'token': token})}\n\n"
-                        yield f"data: {json.dumps({'done': True})}\n\n"
+
+                        # STEP 6: Extract and send source citations
+                        sources = []
+                        try:
+                            source_nodes = getattr(rag_response, 'source_nodes', [])
+                            if source_nodes:
+                                seen_sources = set()  # Deduplicate sources
+                                for node in source_nodes:
+                                    # Extract metadata from the node
+                                    metadata = getattr(node.node, 'metadata', {}) if hasattr(node, 'node') else {}
+
+                                    # Get filename from various possible metadata keys
+                                    filename = (
+                                        metadata.get('file_name') or
+                                        metadata.get('filename') or
+                                        metadata.get('source') or
+                                        metadata.get('document_title') or
+                                        'Unknown source'
+                                    )
+
+                                    # Get page number if available
+                                    page = metadata.get('page_label') or metadata.get('page') or metadata.get('page_number')
+
+                                    # Get relevance score
+                                    score = getattr(node, 'score', None)
+
+                                    # Create a unique key for deduplication
+                                    source_key = f"{filename}:{page}" if page else filename
+
+                                    if source_key not in seen_sources:
+                                        seen_sources.add(source_key)
+                                        source_info = {
+                                            'filename': filename,
+                                            'score': round(score, 3) if score else None
+                                        }
+                                        if page:
+                                            source_info['page'] = page
+
+                                        # Include a text snippet for context
+                                        text_content = getattr(node.node, 'text', '') if hasattr(node, 'node') else ''
+                                        if text_content:
+                                            source_info['snippet'] = text_content[:200] + '...' if len(text_content) > 200 else text_content
+
+                                        sources.append(source_info)
+
+                                logger.info(f"Found {len(sources)} unique sources for response")
+                        except Exception as src_err:
+                            logger.warning(f"Error extracting sources: {src_err}")
+
+                        # Send sources with the done signal
+                        yield f"data: {json.dumps({'done': True, 'sources': sources})}\n\n"
 
                 except Exception as e:
                     logger.error(f"Error during chat: {e}")
@@ -967,57 +1064,62 @@ Output ONLY valid JSON, nothing else."""
 
         @self._app.route("/api/models", methods=["GET"])
         def get_available_models():
-            """Get all available LLM models from Ollama and configured API providers."""
+            """Get all available LLM models from config file and Ollama.
+
+            Models are configured in config/models.yaml. For Ollama, models
+            can be auto-detected from the running server or filtered by whitelist.
+            """
             try:
-                import os
                 from rag_chatbot.core.model import LocalRAGModel
+                from rag_chatbot.setting import get_models_settings
 
                 models = []
+                models_config = get_models_settings()
 
-                # Get Ollama models
-                ollama_models = LocalRAGModel.list_available_models(self._host)
-                for model in ollama_models:
-                    models.append({
-                        "name": model,
-                        "provider": "Ollama",
-                        "type": "local"
-                    })
+                # Provider name mapping for display
+                provider_display = {
+                    "ollama": "Ollama",
+                    "openai": "OpenAI",
+                    "anthropic": "Anthropic",
+                    "google": "Google"
+                }
 
-                # Get OpenAI models if API key is configured
-                openai_key = os.getenv("OPENAI_API_KEY", "")
-                if openai_key and openai_key != "your_openai_api_key_here":
-                    # Use the OPENAI_MODELS set from LocalRAGModel
-                    for model in sorted(LocalRAGModel.OPENAI_MODELS):
-                        if model not in [m["name"] for m in models]:
-                            models.append({
-                                "name": model,
-                                "provider": "OpenAI",
-                                "type": "api"
-                            })
+                # Process each provider from config
+                for provider_key, provider_config in models_config.providers.items():
+                    if not provider_config.enabled:
+                        continue
 
-                # Get Anthropic (Claude) models if API key is configured
-                anthropic_key = os.getenv("ANTHROPIC_API_KEY", "")
-                if anthropic_key and anthropic_key != "your_anthropic_api_key_here":
-                    # Use the CLAUDE_MODELS set from LocalRAGModel
-                    for model in sorted(LocalRAGModel.CLAUDE_MODELS):
-                        if model not in [m["name"] for m in models]:
-                            models.append({
-                                "name": model,
-                                "provider": "Anthropic",
-                                "type": "api"
-                            })
+                    # Check API key requirement
+                    if provider_config.requires_api_key and not models_config.has_api_key(provider_key):
+                        continue
 
-                # Get Google (Gemini) models if API key is configured
-                google_key = os.getenv("GOOGLE_API_KEY", "")
-                if google_key and google_key != "your_google_api_key_here":
-                    # Use the GEMINI_MODELS set from LocalRAGModel
-                    for model in sorted(LocalRAGModel.GEMINI_MODELS):
-                        if model not in [m["name"] for m in models]:
-                            models.append({
-                                "name": model,
-                                "provider": "Google",
-                                "type": "api"
-                            })
+                    provider_name = provider_display.get(provider_key, provider_key.title())
+                    provider_type = provider_config.type
+
+                    if provider_key == "ollama":
+                        # For Ollama, auto-detect models from server
+                        ollama_models = LocalRAGModel.list_available_models(self._host)
+
+                        # If whitelist is defined in config, filter models
+                        whitelist = [m.name for m in provider_config.models] if provider_config.models else None
+
+                        for model in ollama_models:
+                            if whitelist is None or model in whitelist:
+                                models.append({
+                                    "name": model,
+                                    "provider": provider_name,
+                                    "type": provider_type
+                                })
+                    else:
+                        # For API providers, use models from config
+                        for model_config in provider_config.models:
+                            if model_config.enabled:
+                                models.append({
+                                    "name": model_config.name,
+                                    "display_name": model_config.display_name or model_config.name,
+                                    "provider": provider_name,
+                                    "type": provider_type
+                                })
 
                 # Remove duplicates while preserving order
                 seen = set()
@@ -1030,7 +1132,9 @@ Output ONLY valid JSON, nothing else."""
                 return jsonify({
                     "success": True,
                     "models": unique_models,
-                    "count": len(unique_models)
+                    "count": len(unique_models),
+                    "default_model": models_config.default_model,
+                    "default_provider": models_config.default_provider
                 })
 
             except Exception as e:

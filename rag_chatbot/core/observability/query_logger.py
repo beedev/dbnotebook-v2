@@ -57,7 +57,7 @@ class QueryLogger:
 
     def log_query(
         self,
-        notebook_id: str,
+        notebook_id: Optional[str],
         user_id: str,
         query_text: str,
         model_name: str,

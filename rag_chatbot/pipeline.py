@@ -43,6 +43,7 @@ class LocalRAGPipeline:
         self._model_name = ""
         self._system_prompt = get_system_prompt("eng", is_rag_prompt=False)
         self._query_engine = None
+        self._simple_chat_engine = None  # For general chat without retrieval
         self._settings = get_settings()
 
         # Engine state management for conversation history preservation
@@ -698,8 +699,8 @@ class LocalRAGPipeline:
             prompt_tokens = token_counter.count_tokens(message)
 
             self._query_logger.log_query(
-                notebook_id="default",  # TODO: Replace with actual notebook_id when notebook support is added
-                user_id="default_user",
+                notebook_id=self._current_notebook_id,  # Use current notebook or None
+                user_id=self._current_user_id,
                 query_text=message,
                 model_name=self._default_model.model,
                 prompt_tokens=prompt_tokens,
@@ -709,6 +710,65 @@ class LocalRAGPipeline:
 
         return response
 
+    def chat_without_retrieval(
+        self,
+        message: str,
+        chatbot: list[list[str]]
+    ) -> StreamingAgentChatResponse:
+        """
+        Direct chat with LLM without any document retrieval.
+        Used when no notebook is selected (General Chat mode).
+
+        This bypasses the entire retrieval pipeline for faster responses
+        when the user just wants to chat with the LLM directly.
+
+        Args:
+            message: User message
+            chatbot: Conversation history (for context, though SimpleChatEngine manages its own memory)
+
+        Returns:
+            Streaming response from SimpleChatEngine
+        """
+        from llama_index.core.chat_engine import SimpleChatEngine
+        from llama_index.core.memory import ChatMemoryBuffer
+
+        logger.debug(f"General chat (no retrieval): message length {len(message)}")
+
+        # Create SimpleChatEngine on first use (lazy initialization)
+        if self._simple_chat_engine is None:
+            logger.info("Initializing SimpleChatEngine for general chat mode")
+            memory = ChatMemoryBuffer.from_defaults(
+                token_limit=self._settings.ollama.chat_token_limit
+            )
+            self._simple_chat_engine = SimpleChatEngine.from_defaults(
+                llm=self._default_model,
+                memory=memory,
+                system_prompt=self._system_prompt
+            )
+
+        # Start timing for query logging
+        start_time = time.time()
+
+        # Execute direct chat (no retrieval)
+        response = self._simple_chat_engine.stream_chat(message)
+
+        # Log query execution
+        if self._query_logger:
+            response_time_ms = int((time.time() - start_time) * 1000)
+            token_counter = get_token_counter()
+            prompt_tokens = token_counter.count_tokens(message)
+
+            self._query_logger.log_query(
+                notebook_id=None,  # NULL for general chat (no notebook)
+                user_id=self._current_user_id,
+                query_text=message,
+                model_name=self._default_model.model,
+                prompt_tokens=prompt_tokens,
+                completion_tokens=0,
+                response_time_ms=response_time_ms
+            )
+
+        return response
 
     def query_sales_mode(
         self,
@@ -929,8 +989,8 @@ class LocalRAGPipeline:
         if self._query_logger:
             response_time_ms = int((time.time() - start_time) * 1000)
             self._query_logger.log_query(
-                notebook_id="default",  # TODO: Replace with actual notebook_id when notebook support is added
-                user_id="default_user",
+                notebook_id=self._current_notebook_id,  # Use current notebook or None
+                user_id=self._current_user_id,
                 query_text=message,
                 model_name=self._default_model.model,
                 prompt_tokens=0,  # TODO: Extract from LangSmith or implement token counting

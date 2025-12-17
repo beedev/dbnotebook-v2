@@ -1,10 +1,24 @@
 import os
+import yaml
+from pathlib import Path
 from functools import lru_cache
 from pydantic import BaseModel, Field
-from typing import List
+from typing import List, Dict, Any, Optional
 from dotenv import load_dotenv
 
 load_dotenv()
+
+
+# Find config directory relative to project root
+def _get_config_path() -> Path:
+    """Get path to config directory."""
+    # Try relative to this file first
+    current_dir = Path(__file__).parent.parent.parent
+    config_path = current_dir / "config"
+    if config_path.exists():
+        return config_path
+    # Fallback to current working directory
+    return Path.cwd() / "config"
 
 
 class OllamaSettings(BaseModel):
@@ -185,6 +199,118 @@ class ImageGenerationSettings(BaseModel):
         default_factory=lambda: os.getenv("SUPPORTED_IMAGE_FORMATS", "jpg,jpeg,png,webp"),
         description="Supported image formats (comma-separated)"
     )
+
+
+class ModelConfig(BaseModel):
+    """Configuration for a single model."""
+    name: str
+    display_name: Optional[str] = None
+    enabled: bool = True
+
+
+class ProviderConfig(BaseModel):
+    """Configuration for a model provider."""
+    enabled: bool = True
+    type: str = "api"  # "local" or "api"
+    requires_api_key: bool = False
+    env_key: Optional[str] = None
+    models: List[ModelConfig] = []
+
+
+class ModelsSettings(BaseModel):
+    """Settings for available models loaded from config/models.yaml."""
+    providers: Dict[str, ProviderConfig] = {}
+    default_model: str = "llama3.1:latest"
+    default_provider: str = "ollama"
+
+    @classmethod
+    def load_from_yaml(cls, config_path: Optional[Path] = None) -> "ModelsSettings":
+        """Load models configuration from YAML file."""
+        if config_path is None:
+            config_path = _get_config_path() / "models.yaml"
+
+        if not config_path.exists():
+            # Return empty settings if config doesn't exist
+            return cls()
+
+        try:
+            with open(config_path, 'r') as f:
+                data = yaml.safe_load(f) or {}
+
+            # Parse providers
+            providers = {}
+            for provider_name, provider_data in data.get('providers', {}).items():
+                if provider_data is None:
+                    continue
+
+                # Parse models for this provider
+                models = []
+                for model_data in provider_data.get('models', []):
+                    if isinstance(model_data, dict):
+                        models.append(ModelConfig(**model_data))
+                    elif isinstance(model_data, str):
+                        models.append(ModelConfig(name=model_data))
+
+                providers[provider_name] = ProviderConfig(
+                    enabled=provider_data.get('enabled', True),
+                    type=provider_data.get('type', 'api'),
+                    requires_api_key=provider_data.get('requires_api_key', False),
+                    env_key=provider_data.get('env_key'),
+                    models=models
+                )
+
+            return cls(
+                providers=providers,
+                default_model=data.get('default_model', 'llama3.1:latest'),
+                default_provider=data.get('default_provider', 'ollama')
+            )
+        except Exception as e:
+            print(f"Warning: Failed to load models config: {e}")
+            return cls()
+
+    def get_models_for_provider(self, provider: str) -> List[ModelConfig]:
+        """Get list of models for a specific provider."""
+        if provider in self.providers and self.providers[provider].enabled:
+            return [m for m in self.providers[provider].models if m.enabled]
+        return []
+
+    def is_provider_enabled(self, provider: str) -> bool:
+        """Check if a provider is enabled in config."""
+        return provider in self.providers and self.providers[provider].enabled
+
+    def has_api_key(self, provider: str) -> bool:
+        """Check if API key is available for a provider."""
+        if provider not in self.providers:
+            return False
+
+        config = self.providers[provider]
+        if not config.requires_api_key:
+            return True
+
+        if config.env_key:
+            key = os.getenv(config.env_key, "")
+            return bool(key and key != f"your_{provider}_api_key_here")
+
+        return False
+
+
+# Singleton for models settings
+_models_settings_instance: ModelsSettings | None = None
+
+
+def get_models_settings() -> ModelsSettings:
+    """Get singleton ModelsSettings instance."""
+    global _models_settings_instance
+    if _models_settings_instance is None:
+        _models_settings_instance = ModelsSettings.load_from_yaml()
+    return _models_settings_instance
+
+
+def reload_models_settings() -> ModelsSettings:
+    """Reload models settings from config file."""
+    global _models_settings_instance
+    _models_settings_instance = ModelsSettings.load_from_yaml()
+    return _models_settings_instance
 
 
 class RAGSettings(BaseModel):
