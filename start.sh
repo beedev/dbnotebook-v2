@@ -6,6 +6,10 @@
 
 set -e  # Exit on error
 
+# Change to script directory
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR"
+
 # Color codes for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -16,6 +20,16 @@ NC='\033[0m' # No Color
 # Default configuration
 PORT=${1:-7860}
 HOST=${2:-localhost}
+
+# Determine Python command
+if command -v python3 &> /dev/null; then
+    PYTHON_CMD="python3"
+elif command -v python &> /dev/null; then
+    PYTHON_CMD="python"
+else
+    echo -e "${RED}✗ Python is not installed. Please install Python 3.9+ first.${NC}"
+    exit 1
+fi
 
 # =============================================================================
 # Helper Functions
@@ -49,24 +63,19 @@ print_info() {
 
 validate_environment() {
     print_info "Validating environment..."
-
-    # Check if Python is available
-    if ! command -v python &> /dev/null && ! command -v python3 &> /dev/null; then
-        print_error "Python is not installed. Please install Python 3.9+ first."
-        exit 1
-    fi
-    print_success "Python found"
+    print_success "Python found ($PYTHON_CMD)"
 
     # Check if venv exists
     if [ ! -d "venv" ]; then
         print_warning "Virtual environment not found"
         print_info "Creating virtual environment..."
-        python -m venv venv || python3 -m venv venv
+        $PYTHON_CMD -m venv venv
         print_success "Virtual environment created"
 
         print_info "Installing dependencies..."
         source venv/bin/activate
-        pip install -e . || pip install --upgrade pip && pip install -e .
+        pip install --upgrade pip
+        pip install -e .
         print_success "Dependencies installed"
     else
         print_success "Virtual environment found"
@@ -165,8 +174,8 @@ start_server() {
     echo -e "${BLUE}========================================${NC}"
     echo ""
 
-    # Start the application
-    python -m dbnotebook --host $HOST --port $PORT
+    # Start the application (use python from venv)
+    python -m dbnotebook --host "$HOST" --port "$PORT"
 }
 
 # =============================================================================
