@@ -7,12 +7,16 @@ import shutil
 from pathlib import Path
 from typing import Generator
 
-from flask import Flask, render_template, request, jsonify, Response, stream_with_context, send_file
+from flask import Flask, render_template, request, jsonify, Response, stream_with_context, send_file, send_from_directory
 
 from ..pipeline import LocalRAGPipeline
 from ..core.plugins import get_configured_image_provider, register_default_plugins
 from ..core.metadata import MetadataManager
 from ..api.routes.chat import create_chat_routes
+from ..api.routes.web_content import create_web_content_routes
+from ..api.routes.studio import create_studio_routes
+from ..core.ingestion import WebContentIngestion, SynopsisManager
+from ..core.studio import StudioManager
 
 logger = logging.getLogger(__name__)
 
@@ -59,11 +63,16 @@ class FlaskChatbotUI:
         self._data_dir.mkdir(parents=True, exist_ok=True)
         self._upload_dir.mkdir(parents=True, exist_ok=True)
 
-        # Initialize Flask app
+        # Initialize Flask app with React frontend
         template_dir = Path(__file__).parent.parent / "templates"
+        # React frontend build directory
+        frontend_dist = Path(__file__).parent.parent.parent / "frontend" / "dist"
+        self._frontend_dist = frontend_dist
         self._app = Flask(
             __name__,
-            template_folder=str(template_dir)
+            template_folder=str(template_dir),
+            static_folder=str(frontend_dist / "assets") if frontend_dist.exists() else None,
+            static_url_path="/assets"
         )
 
         # Add CORS support for React dev server
@@ -380,6 +389,9 @@ Output ONLY valid JSON, nothing else."""
 
         @self._app.route("/")
         def index():
+            """Serve React frontend."""
+            if self._frontend_dist.exists():
+                return send_from_directory(str(self._frontend_dist), "index.html")
             return render_template("index.html")
 
         @self._app.route("/chat", methods=["POST"])
@@ -903,6 +915,8 @@ Output ONLY valid JSON, nothing else."""
             return jsonify({"status": "ok"})
 
         @self._app.route("/generate-image", methods=["POST"])
+        @self._app.route("/image/generate", methods=["POST"])
+        @self._app.route("/api/image/generate", methods=["POST"])
         def generate_image():
             try:
                 if not self._image_provider:
@@ -1236,6 +1250,32 @@ Output ONLY valid JSON, nothing else."""
         # Register chat API routes
         create_chat_routes(self._app, self._pipeline)
 
+        # Register web content routes (for web search and scraping)
+        try:
+            self._web_ingestion = WebContentIngestion(
+                notebook_manager=self._notebook_manager,
+                setting=self._pipeline._settings if self._pipeline else None,
+            )
+            create_web_content_routes(self._app, self._web_ingestion, self._pipeline)
+            logger.info("Web content routes registered")
+        except Exception as e:
+            logger.warning(f"Web content routes not available: {e}")
+            self._web_ingestion = None
+
+        # Register Content Studio routes
+        try:
+            self._studio_manager = StudioManager(self._db_manager)
+            self._synopsis_manager = SynopsisManager()  # Create fresh instance
+            create_studio_routes(
+                self._app,
+                self._studio_manager,
+                self._synopsis_manager,
+            )
+            logger.info("Content Studio routes registered")
+        except Exception as e:
+            logger.warning(f"Content Studio routes not available: {e}")
+            self._studio_manager = None
+
         # === Query Logging & Observability Endpoints ===
 
         @self._app.route("/api/usage-stats", methods=["GET"])
@@ -1378,6 +1418,51 @@ Output ONLY valid JSON, nothing else."""
                 logger.error(f"Error creating notebook: {e}")
                 return jsonify({"success": False, "error": str(e)}), 500
 
+        @self._app.route("/api/notebooks/<notebook_id>", methods=["PUT"])
+        def update_notebook(notebook_id):
+            """Update a notebook's name or description."""
+            try:
+                if not self._notebook_manager:
+                    return jsonify({
+                        "success": False,
+                        "error": "Notebook feature not available"
+                    }), 503
+
+                data = request.json or {}
+                name = data.get("name")
+                description = data.get("description")
+
+                if not name and description is None:
+                    return jsonify({
+                        "success": False,
+                        "error": "No update data provided (name or description required)"
+                    }), 400
+
+                success = self._notebook_manager.update_notebook(
+                    notebook_id=notebook_id,
+                    name=name,
+                    description=description
+                )
+
+                if success:
+                    # Get updated notebook details
+                    notebook = self._notebook_manager.get_notebook(notebook_id)
+                    return jsonify({
+                        "success": True,
+                        "notebook": notebook,
+                        "message": "Notebook updated successfully"
+                    })
+                else:
+                    return jsonify({
+                        "success": False,
+                        "error": "Notebook not found"
+                    }), 404
+            except ValueError as e:
+                return jsonify({"success": False, "error": str(e)}), 400
+            except Exception as e:
+                logger.error(f"Error updating notebook: {e}")
+                return jsonify({"success": False, "error": str(e)}), 500
+
         @self._app.route("/api/notebooks/<notebook_id>", methods=["DELETE"])
         def delete_notebook(notebook_id):
             """Delete a notebook."""
@@ -1473,9 +1558,9 @@ Output ONLY valid JSON, nothing else."""
                             break
 
                     uploaded_files.append({
-                        "filename": filename,
+                        "file_name": filename,
                         "source_id": source_id,
-                        "size": file_size
+                        "file_size": file_size
                     })
 
                     logger.info(f"Uploaded {filename} to notebook {notebook_id} (source_id: {source_id})")
@@ -1550,6 +1635,72 @@ Output ONLY valid JSON, nothing else."""
             except Exception as e:
                 logger.error(f"Error deleting notebook document: {e}")
                 return jsonify({"success": False, "error": str(e)}), 500
+
+        @self._app.route("/api/notebooks/<notebook_id>/documents/<source_id>", methods=["PATCH"])
+        def update_notebook_document(notebook_id, source_id):
+            """Update document properties (e.g., active status)."""
+            try:
+                if not self._notebook_manager:
+                    return jsonify({
+                        "success": False,
+                        "error": "Notebook feature not available"
+                    }), 503
+
+                data = request.json or {}
+                active = data.get("active")
+
+                if active is None:
+                    return jsonify({
+                        "success": False,
+                        "error": "No update data provided"
+                    }), 400
+
+                # Update the document active status
+                updated_doc = self._notebook_manager.update_document_active(
+                    notebook_id=notebook_id,
+                    source_id=source_id,
+                    active=active
+                )
+
+                if not updated_doc:
+                    return jsonify({
+                        "success": False,
+                        "error": "Document not found"
+                    }), 404
+
+                return jsonify({
+                    "success": True,
+                    "document": {
+                        "source_id": updated_doc['source_id'],
+                        "file_name": updated_doc['file_name'],
+                        "file_type": updated_doc.get('file_type'),
+                        "chunk_count": updated_doc.get('chunk_count'),
+                        "active": updated_doc['active']
+                    },
+                    "message": "Document status updated"
+                })
+            except Exception as e:
+                logger.error(f"Error updating notebook document: {e}")
+                return jsonify({"success": False, "error": str(e)}), 500
+
+        # React SPA catch-all route - must be last to not interfere with API routes
+        @self._app.route("/<path:path>")
+        def serve_react_app(path):
+            """Serve React frontend assets or fallback to index.html for SPA routing."""
+            # Skip API and other backend routes
+            if path.startswith(('api/', 'chat', 'upload', 'clear', 'reset', 'model',
+                               'notebooks', 'documents', 'health', 'generate-image',
+                               'image/', 'images', 'clear-images', 'outputs/')):
+                return jsonify({"error": "Not found"}), 404
+
+            if self._frontend_dist.exists():
+                # Check if it's a static file request (js, css, images, etc.)
+                file_path = self._frontend_dist / path
+                if file_path.exists() and file_path.is_file():
+                    return send_from_directory(str(self._frontend_dist), path)
+                # For SPA routing, return index.html
+                return send_from_directory(str(self._frontend_dist), "index.html")
+            return render_template("index.html")
 
     def run(self, host: str = "0.0.0.0", port: int = 5000, debug: bool = False):
         """Run the Flask application."""

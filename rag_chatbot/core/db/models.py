@@ -9,9 +9,9 @@ This module defines the database models for the NotebookLM-style document chatbo
 - QueryLogs: Query logging for observability and cost tracking
 """
 
-from sqlalchemy import Column, String, Integer, Text, TIMESTAMP, ForeignKey, BigInteger, Index, TypeDecorator
+from sqlalchemy import Column, String, Integer, Text, TIMESTAMP, ForeignKey, BigInteger, Index, TypeDecorator, Boolean
 from sqlalchemy.orm import relationship, declarative_base
-from sqlalchemy.dialects.postgresql import UUID as PostgreSQL_UUID
+from sqlalchemy.dialects.postgresql import UUID as PostgreSQL_UUID, JSONB
 import uuid
 from datetime import datetime
 
@@ -116,12 +116,13 @@ class NotebookSource(Base):
     file_type = Column(String(50))  # PDF, DOCX, TXT, etc.
     chunk_count = Column(Integer)  # Number of chunks/nodes created
     upload_timestamp = Column(TIMESTAMP, default=datetime.utcnow, nullable=False)
+    active = Column(Boolean, default=True, nullable=False)  # Toggle for including in RAG retrieval
 
     # Relationships
     notebook = relationship("Notebook", back_populates="sources")
 
     def __repr__(self):
-        return f"<NotebookSource(source_id={self.source_id}, file_name='{self.file_name}', chunks={self.chunk_count})>"
+        return f"<NotebookSource(source_id={self.source_id}, file_name='{self.file_name}', chunks={self.chunk_count}, active={self.active})>"
 
 
 class Conversation(Base):
@@ -173,3 +174,31 @@ class QueryLog(Base):
 
     def __repr__(self):
         return f"<QueryLog(log_id={self.log_id}, model='{self.model_name}', tokens={self.total_tokens}, time={self.response_time_ms}ms)>"
+
+
+class GeneratedContent(Base):
+    """Generated content from Content Studio (infographics, mind maps, etc.)"""
+    __tablename__ = "generated_content"
+    __table_args__ = (
+        Index('idx_generated_content_user', 'user_id', 'created_at'),
+        Index('idx_generated_content_notebook', 'source_notebook_id', 'created_at'),
+        Index('idx_generated_content_type', 'content_type', 'created_at'),
+    )
+
+    content_id = Column(UUID(), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(), ForeignKey("users.user_id", ondelete="CASCADE"), nullable=False)
+    source_notebook_id = Column(UUID(), ForeignKey("notebooks.notebook_id", ondelete="SET NULL"), nullable=True)
+    content_type = Column(String(50), nullable=False)  # 'infographic', 'mindmap', 'summary', etc.
+    title = Column(String(500))
+    prompt_used = Column(Text)  # The prompt used to generate the content
+    file_path = Column(String(1000))  # Path to the generated file (e.g., outputs/studio/xxx.png)
+    thumbnail_path = Column(String(1000))  # Optional thumbnail for gallery preview
+    content_metadata = Column(JSONB)  # Additional generation params, model used, etc.
+    created_at = Column(TIMESTAMP, default=datetime.utcnow, nullable=False)
+
+    # Relationships
+    user = relationship("User", backref="generated_content")
+    source_notebook = relationship("Notebook", backref="generated_content")
+
+    def __repr__(self):
+        return f"<GeneratedContent(content_id={self.content_id}, type='{self.content_type}', title='{self.title}')>"

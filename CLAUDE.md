@@ -4,103 +4,210 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-A local RAG (Retrieval-Augmented Generation) chatbot for PDF documents using LlamaIndex, Ollama, and Gradio. Supports multiple document formats (PDF, EPUB, TXT, DOCX, PPTX, images) with a hybrid retrieval system combining BM25 and vector search.
+A multimodal RAG (Retrieval-Augmented Generation) Sales Enablement System using LlamaIndex, PostgreSQL/pgvector, and Flask. Features NotebookLM-style document organization, persistent conversations, hybrid retrieval (BM25 + vector), multi-provider LLM support (Ollama, OpenAI, Anthropic, Gemini), web search integration (Firecrawl + Jina), and Content Studio for multimodal content generation.
 
 ## Development Commands
 
 ```bash
-# Install dependencies (requires Poetry)
-pip install .
-# or
-source ./scripts/install.sh
+# Start application (handles venv, deps, Ollama automatically)
+./start.sh                    # Flask UI (default port 7860)
+./start.sh 8080 localhost     # Custom port/host
+./start_gradio.sh             # Original Gradio UI
 
-# Run locally (starts Ollama server if not running)
-python -m rag_chatbot --host localhost
-# or
-source ./scripts/run.sh
+# Manual execution
+source venv/bin/activate
+python -m rag_chatbot --host localhost --port 7860
 
-# Run with ngrok for external access
-source ./scripts/run.sh --ngrok
+# Frontend development (React + Vite)
+cd frontend
+npm install
+npm run dev                   # Dev server with HMR
+npm run build                 # Production build
+npm run lint                  # ESLint
 
-# Run in Docker
+# Database migrations (Alembic)
+alembic upgrade head          # Apply migrations
+alembic revision --autogenerate -m "description"  # Create migration
+
+# Docker
 docker compose up --build
 
-# Run tests
+# Tests
 pytest
+pytest tests/test_metadata.py  # Specific test
 ```
 
 ## Architecture
 
-### Core Pipeline Flow
+### Core Data Flow
 
 ```
-User Input → LocalRAGPipeline → LocalChatEngine → Retriever → LLM Response
-                   ↓
-            LocalDataIngestion (document processing)
-                   ↓
-            LocalVectorStore (ChromaDB)
+User Input → Flask UI (web.py) → LocalRAGPipeline (pipeline.py)
+                                        ↓
+                    ┌───────────────────┴───────────────────┐
+                    ↓                                       ↓
+           LocalDataIngestion                        LocalChatEngine
+           (document processing)                    (chat/retrieval)
+                    ↓                                       ↓
+           PGVectorStore ←─────────────────────── LocalRetriever
+           (PostgreSQL + pgvector)                 (hybrid BM25 + vector)
+                    ↓
+           LLM Response (streaming via SSE)
 ```
 
 ### Key Components
 
-**`rag_chatbot/pipeline.py`** - `LocalRAGPipeline` orchestrates the entire RAG workflow:
-- Manages model selection (Ollama/OpenAI), embedding models, and system prompts
-- Coordinates between ingestion, vector store, and chat engine
-- Handles conversation history via `ChatMessage` objects
+**`rag_chatbot/pipeline.py`** (1139 lines) - Central orchestrator:
+- Manages LLM providers, embedding models, notebook context
+- Tracks `_current_notebook_id` and `_current_user_id` for document isolation
+- Coordinates vector store, chat engine, conversation history
+- Key methods: `switch_notebook()`, `store_nodes()`, `stream_chat()`, `set_chat_mode()`
 
-**`rag_chatbot/core/engine/`** - Chat engine and retrieval:
-- `LocalChatEngine` - Switches between `SimpleChatEngine` (no docs) and `CondensePlusContextChatEngine` (with docs)
-- `LocalRetriever` - Implements hybrid retrieval strategy:
-  - Uses `RouterRetriever` to select between query fusion and two-stage retrieval based on document count
-  - `TwoStageRetriever` combines BM25 + vector retrieval with reranking
+**`rag_chatbot/ui/web.py`** (1561 lines) - Flask web interface:
+- REST API endpoints for chat, upload, notebooks, image generation
+- Streaming responses via Server-Sent Events (SSE)
+- Integrates with NotebookManager, MetadataManager, ImageProvider
 
-**`rag_chatbot/core/ingestion/ingestion.py`** - `LocalDataIngestion` handles document processing:
-- Supports PDF, EPUB, TXT, DOCX, PPTX, images (via AWS Textract)
-- Uses `SentenceSplitter` for chunking with configurable overlap
-- Caches processed nodes by filename
+**`rag_chatbot/core/vector_store/pg_vector_store.py`** - PGVectorStore (replaces ChromaDB):
+- PostgreSQL + pgvector for O(log n) metadata filtering
+- Stores embeddings with `notebook_id`, `file_hash`, `it_practice`, `offering_id` metadata
+- Table: `data_embeddings` with JSONB metadata column
 
-**`rag_chatbot/core/model/model.py`** - `LocalRAGModel` wraps LLM providers:
-- Ollama models via `llama_index.llms.ollama.Ollama`
-- OpenAI models (gpt-3.5-turbo, gpt-4) via `llama_index.llms.openai.OpenAI`
+**`rag_chatbot/core/engine/retriever.py`** - LocalRetriever:
+- ≤6 nodes: VectorIndexRetriever (pure semantic)
+- \>6 nodes: RouterRetriever selecting:
+  - QueryFusionRetriever (ambiguous queries): generates 5 variations, fuses BM25 + vector
+  - TwoStageRetriever (clear queries): BM25 + vector → reranker (`mixedbread-ai/mxbai-rerank-large-v1`)
 
-**`rag_chatbot/core/embedding/embedding.py`** - `LocalEmbedding` wraps embedding models:
-- HuggingFace embeddings (default: `nomic-ai/nomic-embed-text-v1.5`)
-- OpenAI embeddings (`text-embedding-ada-002`)
+**`rag_chatbot/core/notebook/notebook_manager.py`** - NotebookManager:
+- CRUD for notebooks (NotebookLM-style document organization)
+- Document tracking with MD5 hash duplicate detection
+- Multi-user support via `user_id`
 
-**`rag_chatbot/setting/setting.py`** - Pydantic settings classes:
-- `RAGSettings` aggregates `OllamaSettings`, `RetrieverSettings`, `IngestionSettings`, `StorageSettings`
-- Default LLM: `llama3.1:latest`, default embedding: `nomic-ai/nomic-embed-text-v1.5`
+**`rag_chatbot/core/conversation/conversation_store.py`** - ConversationStore:
+- Persistent conversation history per notebook
+- Cross-session context preservation
 
-**`rag_chatbot/ui/ui.py`** - `LocalChatbotUI` Gradio interface:
-- Multi-tab interface (Interface, Setting, Output)
-- Handles document upload, model selection, chat modes (chat/QA)
-- Streaming responses via `LLMResponse.stream_response()`
+### Plugin Architecture
 
-### Data Flow for Document Processing
+```
+PluginRegistry (core/registry.py)
+├── LLM Providers: Ollama, OpenAI, Anthropic, Gemini
+├── Embedding Providers: HuggingFace, OpenAI
+├── Retrieval Strategies: Hybrid, Semantic, Keyword
+├── Image Providers: Gemini/Imagen
+├── Web Search Providers: Firecrawl
+└── Web Scraper Providers: Jina Reader
+```
 
-1. Files uploaded via Gradio → moved to `data/data/`
-2. `LocalDataIngestion.store_nodes()` extracts text (pymupdf for PDFs, langchain loaders for DOCX/PPTX)
-3. Text filtered and chunked via `SentenceSplitter`
-4. Embeddings generated and cached in `_node_store`
-5. `LocalRetriever.get_retrievers()` builds retriever based on node count:
-   - ≤6 nodes: `VectorIndexRetriever`
-   - >6 nodes: `RouterRetriever` with fusion/two-stage options
+Providers are registered at startup and selected via environment variables (`LLM_PROVIDER`, `EMBEDDING_PROVIDER`, `RETRIEVAL_STRATEGY`).
 
-### Retrieval Strategy
+### Web Search Integration
 
-The retriever uses a router pattern with two strategies:
-- **Fusion Retriever**: For ambiguous queries - generates multiple query variations, fuses BM25 + vector results
-- **Two-Stage Retriever**: For clear queries - BM25 + vector retrieval followed by reranking (`mixedbread-ai/mxbai-rerank-large-v1`)
+**`rag_chatbot/core/providers/firecrawl.py`** - FirecrawlSearchProvider:
+- Web search via Firecrawl API
+- Returns structured results with URL, title, description
 
-### Host Configuration
+**`rag_chatbot/core/providers/jina_reader.py`** - JinaReaderProvider:
+- Content scraping via Jina Reader (r.jina.ai/{url})
+- Extracts clean markdown content from web pages
 
-- `localhost` - Local development, auto-starts Ollama server
-- `host.docker.internal` - Docker container (default), connects to host Ollama
+**`rag_chatbot/core/ingestion/web_ingestion.py`** - WebContentIngestion:
+- Orchestrates search → preview → scrape → embed workflow
+- User selects URLs to import after search results displayed
+
+**API Endpoints**:
+- `POST /api/web/search` - Search web for URLs
+- `POST /api/web/scrape-preview` - Preview content before import
+- `POST /api/notebooks/{id}/web-sources` - Add selected URLs to notebook
+
+### Content Studio
+
+**`rag_chatbot/core/studio/`** - Multimodal content generation:
+- `StudioManager` - CRUD for generated content, gallery management
+- `ContentGenerator` (base) - Abstract class for generators
+- `InfographicGenerator` - Creates infographics using Gemini/Imagen
+- `MindMapGenerator` - Creates mind maps using Gemini/Imagen
+
+**`rag_chatbot/api/routes/studio.py`** - Studio API endpoints:
+- `GET /api/studio/gallery` - List generated content with filters
+- `POST /api/studio/generate` - Generate new content from notebook
+- `GET /api/studio/content/{id}` - Get content details
+- `GET /api/studio/content/{id}/file` - Serve generated file
+- `GET /api/studio/content/{id}/thumbnail` - Serve thumbnail
+- `DELETE /api/studio/content/{id}` - Delete content
+- `GET /api/studio/generators` - List available generators
+
+**Database**: `generated_content` table stores metadata, file paths, source notebook reference.
+
+### Database Layer
+
+- **ORM**: SQLAlchemy 2.0 with models in `core/db/models.py`
+- **Migrations**: Alembic in `/alembic/`
+- **Tables**:
+  - `users` - User accounts
+  - `notebooks` - NotebookLM-style document collections
+  - `notebook_sources` - Documents within notebooks (has `active` toggle for RAG inclusion)
+  - `conversations` - Persistent chat history per notebook
+  - `query_logs` - Query logging for observability
+  - `data_embeddings` - pgvector embeddings storage
+  - `generated_content` - Content Studio outputs (infographics, mind maps)
+
+## Environment Configuration
+
+Copy `.env.example` to `.env` and configure:
+
+```bash
+# Core providers
+LLM_PROVIDER=ollama              # ollama|openai|anthropic|gemini
+LLM_MODEL=llama3.1:latest
+EMBEDDING_PROVIDER=huggingface
+EMBEDDING_MODEL=nomic-ai/nomic-embed-text-v1.5
+RETRIEVAL_STRATEGY=hybrid        # hybrid|semantic|keyword
+
+# Database (required for persistence)
+DATABASE_URL=postgresql://user:pass@localhost:5432/rag_chatbot
+POSTGRES_HOST=localhost
+POSTGRES_PORT=5433
+
+# API keys (as needed)
+OPENAI_API_KEY=...
+ANTHROPIC_API_KEY=...
+GOOGLE_API_KEY=...
+
+# Image generation
+IMAGE_GENERATION_PROVIDER=gemini
+GEMINI_IMAGE_MODEL=imagen-4.0-generate-001
+
+# Web Search (optional)
+FIRECRAWL_API_KEY=...           # Required for web search
+JINA_API_KEY=...                # Optional (for higher rate limits)
+```
+
+## Frontend (React + TypeScript)
+
+Located in `/frontend/`:
+- **Stack**: React 19, Vite, Tailwind CSS 4, TypeScript
+- **Theme**: Deep Space Terminal (dark theme)
+- **Dev server**: `npm run dev` (proxies to Flask backend)
 
 ## Key Defaults
 
-- Ollama port: 11434
-- Gradio UI: http://0.0.0.0:7860
+- Flask UI: http://localhost:7860
+- Ollama: localhost:11434
+- PostgreSQL: localhost:5433 (Docker) or 5432 (local)
 - Chunk size: 512 tokens, overlap: 32
 - Context window: 8000 tokens
 - Similarity top-k: 20, rerank top-k: 6
+- Embedding dimension: 768 (nomic) or 1536 (OpenAI)
+
+## Document Processing
+
+Supported formats: PDF, EPUB, TXT, DOCX, PPTX, images (via OCR/Textract)
+
+Pipeline:
+1. Format-specific readers (PyMuPDF for PDFs, LangChain for Office docs)
+2. MD5 hash for duplicate detection
+3. SentenceSplitter (512 tokens, 32 overlap)
+4. HuggingFace embeddings (batch size 8)
+5. Store in PGVectorStore with metadata

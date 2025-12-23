@@ -103,11 +103,19 @@ function App() {
             onDeleteDocument={handleDeleteDocument}
             onToggleDocument={toggleDocumentActive}
             isLoadingDocs={isLoadingDocs}
+            // Web Search - refresh documents after adding web sources
+            onWebSourcesAdded={() => {
+              // Re-fetch documents to include newly added web sources
+              if (selectedNotebook) {
+                selectNotebook(selectedNotebook);
+              }
+            }}
           />
         }
       >
         <ChatArea
           notebookId={selectedNotebook?.id}
+          notebookName={selectedNotebook?.name}
           selectedModel={selectedModel}
           onCopy={handleCopy}
           onFileUpload={handleFileUpload}

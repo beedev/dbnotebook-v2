@@ -83,6 +83,35 @@ class PGVectorStore:
             f"table={self._actual_table_name}, embed_dim={self._embed_dim}"
         )
 
+        # Ensure indexes exist for fast metadata filtering
+        self._ensure_metadata_indexes()
+
+    def _ensure_metadata_indexes(self) -> None:
+        """Create indexes on metadata JSONB for fast filtering and uniqueness."""
+        try:
+            with self._Session() as session:
+                # Create index on notebook_id for O(log n) lookups
+                session.execute(text(f"""
+                    CREATE INDEX IF NOT EXISTS idx_{self._table_name}_notebook_id
+                    ON {self._actual_table_name} ((metadata_->>'notebook_id'))
+                """))
+                # Create index on source_id for document lookups
+                session.execute(text(f"""
+                    CREATE INDEX IF NOT EXISTS idx_{self._table_name}_source_id
+                    ON {self._actual_table_name} ((metadata_->>'source_id'))
+                """))
+                # Create unique index on text + notebook_id to prevent duplicates
+                # This prevents the same text chunk from being added multiple times
+                session.execute(text(f"""
+                    CREATE UNIQUE INDEX IF NOT EXISTS idx_{self._table_name}_unique_text_notebook
+                    ON {self._actual_table_name} (md5(text), (metadata_->>'notebook_id'))
+                """))
+                session.commit()
+                logger.debug("Metadata indexes ensured")
+        except Exception as e:
+            # Table might not exist yet - that's OK
+            logger.debug(f"Could not create metadata indexes (table may not exist yet): {e}")
+
     def _create_vector_store(self) -> LlamaPGVectorStore:
         """Create LlamaIndex PGVectorStore instance."""
         return LlamaPGVectorStore.from_params(
@@ -162,16 +191,17 @@ class PGVectorStore:
         notebook_id: Optional[str] = None
     ) -> int:
         """
-        Add nodes to the vector store incrementally.
+        Add nodes to the vector store incrementally with duplicate detection.
 
         This is O(n) for n new nodes, NOT O(total) like ChromaDB rebuild.
+        Duplicates are detected using md5 hash of text + notebook_id.
 
         Args:
             nodes: List of nodes to add
             notebook_id: Optional notebook ID to set on all nodes
 
         Returns:
-            Number of nodes added
+            Number of nodes actually added (after deduplication)
         """
         if not nodes:
             return 0
@@ -183,19 +213,89 @@ class PGVectorStore:
                     if hasattr(node, 'metadata'):
                         node.metadata["notebook_id"] = notebook_id
 
-            # Add nodes to pgvector store
-            self._vector_store.add(nodes)
+            # Filter out duplicates by checking existing text hashes
+            unique_nodes = self._filter_duplicate_nodes(nodes, notebook_id)
+
+            if not unique_nodes:
+                logger.info(f"All {len(nodes)} nodes already exist, skipping add")
+                return 0
+
+            if len(unique_nodes) < len(nodes):
+                logger.info(f"Filtered {len(nodes) - len(unique_nodes)} duplicate nodes")
+
+            # Add only unique nodes to pgvector store
+            self._vector_store.add(unique_nodes)
 
             # Invalidate cache
             self._index_cache = None
             self._cached_node_count = 0
 
-            logger.info(f"Added {len(nodes)} nodes to pgvector store")
-            return len(nodes)
+            logger.info(f"Added {len(unique_nodes)} nodes to pgvector store")
+            return len(unique_nodes)
 
         except Exception as e:
             logger.error(f"Error adding nodes to pgvector: {e}")
             return 0
+
+    def _filter_duplicate_nodes(
+        self,
+        nodes: List[BaseNode],
+        notebook_id: Optional[str] = None
+    ) -> List[BaseNode]:
+        """
+        Filter out nodes that already exist in the database.
+
+        Uses md5 hash of text to efficiently check for duplicates.
+
+        Args:
+            nodes: List of nodes to check
+            notebook_id: Notebook ID to check within
+
+        Returns:
+            List of nodes that don't exist in the database
+        """
+        import hashlib
+
+        if not nodes:
+            return []
+
+        try:
+            # Calculate md5 hashes for all nodes
+            node_hashes = {}
+            for node in nodes:
+                text = node.get_content() if hasattr(node, 'get_content') else str(node.text)
+                text_hash = hashlib.md5(text.encode()).hexdigest()
+                node_hashes[text_hash] = node
+
+            # Query existing hashes in one batch
+            with self._Session() as session:
+                if notebook_id:
+                    result = session.execute(text(f"""
+                        SELECT md5(text) as text_hash
+                        FROM {self._actual_table_name}
+                        WHERE metadata_->>'notebook_id' = :notebook_id
+                        AND md5(text) = ANY(:hashes)
+                    """), {"notebook_id": notebook_id, "hashes": list(node_hashes.keys())})
+                else:
+                    result = session.execute(text(f"""
+                        SELECT md5(text) as text_hash
+                        FROM {self._actual_table_name}
+                        WHERE md5(text) = ANY(:hashes)
+                    """), {"hashes": list(node_hashes.keys())})
+
+                existing_hashes = {row[0] for row in result}
+
+            # Return nodes that don't exist
+            unique_nodes = [
+                node for text_hash, node in node_hashes.items()
+                if text_hash not in existing_hashes
+            ]
+
+            return unique_nodes
+
+        except Exception as e:
+            logger.warning(f"Error checking for duplicates, adding all nodes: {e}")
+            return nodes
 
     def get_index_with_filter(
         self,

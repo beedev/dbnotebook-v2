@@ -9,6 +9,14 @@ import type {
   ImageGenerateRequest,
   ImageGenerateResponse,
   ApiError,
+  WebSearchResponse,
+  WebScrapePreviewResponse,
+  WebSourceAddResponse,
+  StudioGalleryResponse,
+  StudioGenerateRequest,
+  StudioGenerateResponse,
+  StudioGeneratorsResponse,
+  GeneratedContent,
 } from '../types';
 
 const API_BASE = '/api';
@@ -459,4 +467,195 @@ export async function getSystemInfo(): Promise<{
   provider: string;
 }> {
   return fetchApi('/info');
+}
+
+// ============================================
+// Web Search API
+// ============================================
+
+export async function searchWeb(
+  query: string,
+  numResults: number = 5
+): Promise<WebSearchResponse> {
+  const response = await fetch('/api/web/search', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      query,
+      num_results: numResults,
+    }),
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw {
+      error: errorData.error || 'Web search failed',
+      message: errorData.message || `HTTP ${response.status}`,
+      status: response.status,
+    };
+  }
+
+  return response.json();
+}
+
+export async function previewWebUrl(
+  url: string,
+  maxChars: number = 500
+): Promise<WebScrapePreviewResponse> {
+  const response = await fetch('/api/web/scrape-preview', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      url,
+      max_chars: maxChars,
+    }),
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw {
+      error: errorData.error || 'Web preview failed',
+      message: errorData.message || `HTTP ${response.status}`,
+      status: response.status,
+    };
+  }
+
+  return response.json();
+}
+
+export async function addWebSources(
+  notebookId: string,
+  urls: string[],
+  sourceName?: string
+): Promise<WebSourceAddResponse> {
+  const response = await fetch(`/api/notebooks/${notebookId}/web-sources`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      urls,
+      source_name: sourceName,  // Pass search query for document naming
+    }),
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw {
+      error: errorData.error || 'Failed to add web sources',
+      message: errorData.message || `HTTP ${response.status}`,
+      status: response.status,
+    };
+  }
+
+  return response.json();
+}
+
+// ============================================
+// Content Studio API
+// ============================================
+
+export async function getStudioGallery(options?: {
+  type?: string;
+  notebookId?: string;
+  limit?: number;
+  offset?: number;
+}): Promise<StudioGalleryResponse> {
+  const params = new URLSearchParams();
+  if (options?.type) params.set('type', options.type);
+  if (options?.notebookId) params.set('notebook_id', options.notebookId);
+  if (options?.limit) params.set('limit', options.limit.toString());
+  if (options?.offset) params.set('offset', options.offset.toString());
+
+  const queryString = params.toString();
+  const url = `/api/studio/gallery${queryString ? `?${queryString}` : ''}`;
+
+  const response = await fetch(url);
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw {
+      error: errorData.error || 'Failed to fetch gallery',
+      message: errorData.message || `HTTP ${response.status}`,
+      status: response.status,
+    };
+  }
+  return response.json();
+}
+
+export async function generateStudioContent(
+  request: StudioGenerateRequest
+): Promise<StudioGenerateResponse> {
+  const response = await fetch('/api/studio/generate', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(request),
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw {
+      error: errorData.error || 'Content generation failed',
+      message: errorData.message || `HTTP ${response.status}`,
+      status: response.status,
+    };
+  }
+
+  return response.json();
+}
+
+export async function getStudioContent(
+  contentId: string
+): Promise<{ success: boolean; content: GeneratedContent }> {
+  const response = await fetch(`/api/studio/content/${contentId}`);
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw {
+      error: errorData.error || 'Failed to fetch content',
+      message: errorData.message || `HTTP ${response.status}`,
+      status: response.status,
+    };
+  }
+
+  return response.json();
+}
+
+export async function deleteStudioContent(
+  contentId: string
+): Promise<{ success: boolean; message: string }> {
+  const response = await fetch(`/api/studio/content/${contentId}`, {
+    method: 'DELETE',
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw {
+      error: errorData.error || 'Failed to delete content',
+      message: errorData.message || `HTTP ${response.status}`,
+      status: response.status,
+    };
+  }
+
+  return response.json();
+}
+
+export async function getStudioGenerators(): Promise<StudioGeneratorsResponse> {
+  const response = await fetch('/api/studio/generators');
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw {
+      error: errorData.error || 'Failed to fetch generators',
+      message: errorData.message || `HTTP ${response.status}`,
+      status: response.status,
+    };
+  }
+
+  return response.json();
 }

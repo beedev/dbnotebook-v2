@@ -130,6 +130,91 @@ export interface ApiError {
   status: number;
 }
 
+// Web Search types
+export interface WebSearchResult {
+  url: string;
+  title: string;
+  description: string;
+  score?: number;
+}
+
+export interface WebSearchResponse {
+  success: boolean;
+  results: WebSearchResult[];
+  query: string;
+}
+
+export interface WebScrapePreviewResponse {
+  success: boolean;
+  url: string;
+  title: string;
+  content_preview: string;
+  word_count: number;
+}
+
+export interface WebSourceAddRequest {
+  urls: string[];
+}
+
+export interface WebSourceAdded {
+  source_id: string;
+  url: string;
+  title: string;
+  chunk_count: number;
+  word_count?: number;
+}
+
+export interface WebSourceAddResponse {
+  success: boolean;
+  sources_added: WebSourceAdded[];
+  total_added: number;
+}
+
+// Content Studio types
+export interface GeneratedContent {
+  content_id: string;
+  content_type: 'infographic' | 'mindmap' | 'summary';
+  title: string;
+  thumbnail_url?: string;
+  file_url?: string;
+  source_notebook_id?: string;
+  prompt_used?: string;
+  metadata?: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface StudioGalleryResponse {
+  success: boolean;
+  items: GeneratedContent[];
+  total: number;
+}
+
+export interface StudioGenerateRequest {
+  notebook_id: string;
+  type: 'infographic' | 'mindmap';
+  prompt?: string;
+  aspect_ratio?: string;
+}
+
+export interface StudioGenerateResponse {
+  success: boolean;
+  content: GeneratedContent;
+}
+
+export interface StudioGeneratorInfo {
+  content_type: string;
+  name: string;
+  available: boolean;
+  supported_aspect_ratios?: string[];
+  description?: string;
+  output_format?: string;
+}
+
+export interface StudioGeneratorsResponse {
+  success: boolean;
+  generators: StudioGeneratorInfo[];
+}
+
 // State types for hooks
 export interface ChatState {
   messages: Message[];

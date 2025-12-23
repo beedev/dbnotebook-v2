@@ -367,7 +367,8 @@ class NotebookManager:
                         "file_size": source.file_size,
                         "file_type": source.file_type,
                         "chunk_count": source.chunk_count,
-                        "upload_timestamp": source.upload_timestamp.isoformat()
+                        "upload_timestamp": source.upload_timestamp.isoformat(),
+                        "active": getattr(source, 'active', True)  # Default to True for backwards compatibility
                     })
 
                 logger.info(f"Retrieved {len(result)} documents from notebook {notebook_id}")
@@ -414,6 +415,62 @@ class NotebookManager:
 
         except Exception as e:
             logger.error(f"Failed to remove document {source_id}: {e}")
+            raise
+
+    def update_document_active(
+        self,
+        notebook_id: str,
+        source_id: str,
+        active: bool
+    ) -> Optional[Dict]:
+        """
+        Update the active status of a document.
+
+        Args:
+            notebook_id: UUID of the notebook
+            source_id: UUID of the document source
+            active: Whether the document should be active for RAG retrieval
+
+        Returns:
+            Dict containing updated document details, or None if not found
+        """
+        try:
+            with self.db.get_session() as session:
+                source = session.query(NotebookSource).filter(
+                    NotebookSource.source_id == UUID(source_id),
+                    NotebookSource.notebook_id == UUID(notebook_id)
+                ).first()
+
+                if not source:
+                    logger.warning(f"Document not found: {source_id} in notebook {notebook_id}")
+                    return None
+
+                source.active = active
+
+                # Update notebook's updated_at timestamp
+                notebook = session.query(Notebook).filter(
+                    Notebook.notebook_id == UUID(notebook_id)
+                ).first()
+                if notebook:
+                    notebook.updated_at = datetime.utcnow()
+
+                session.flush()
+
+                logger.info(f"Updated document {source_id} active status to {active}")
+                return {
+                    "source_id": str(source.source_id),
+                    "notebook_id": str(source.notebook_id),
+                    "file_name": source.file_name,
+                    "file_hash": source.file_hash,
+                    "file_size": source.file_size,
+                    "file_type": source.file_type,
+                    "chunk_count": source.chunk_count,
+                    "upload_timestamp": source.upload_timestamp.isoformat(),
+                    "active": source.active
+                }
+
+        except Exception as e:
+            logger.error(f"Failed to update document active status {source_id}: {e}")
             raise
 
     # =========================================================================

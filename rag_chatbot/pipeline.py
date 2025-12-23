@@ -180,24 +180,11 @@ class LocalRAGPipeline:
             logger.error(f"Failed to load conversation history: {e}")
             chat_history = []
 
-        # Step 4: Load all nodes from pgvector and filter by notebook_id
-        logger.info("Loading nodes from pgvector persistent storage")
-        all_nodes = self._vector_store.load_all_nodes()
-        logger.info(f"Loaded {len(all_nodes)} total nodes from pgvector")
-
-        # Filter by notebook_id
-        if all_nodes:
-            notebook_nodes = self._vector_store.get_nodes_by_notebook(
-                nodes=all_nodes,
-                notebook_id=notebook_id
-            )
-            logger.info(
-                f"Filtered {len(notebook_nodes)} nodes for notebook {notebook_id} "
-                f"from {len(all_nodes)} total"
-            )
-        else:
-            notebook_nodes = []
-            logger.warning("No nodes available in pgvector")
+        # Step 4: Load ONLY nodes for this notebook using SQL filtering (O(log n))
+        # This is much faster than loading all 69K+ nodes and filtering in Python
+        logger.info(f"Loading nodes for notebook {notebook_id} using SQL filter")
+        notebook_nodes = self._vector_store.get_nodes_by_notebook_sql(notebook_id)
+        logger.info(f"Loaded {len(notebook_nodes)} nodes for notebook {notebook_id}")
 
         # Step 5: Recreate engine with notebook context and chat history
         self._query_engine = self._engine.set_engine(
@@ -441,37 +428,39 @@ class LocalRAGPipeline:
             else:
                 logger.info("No existing engine to preserve history from")
 
-            # Load ALL nodes from pgvector (persistent storage)
-            logger.info("Loading nodes from pgvector persistent storage")
-            all_nodes = self._vector_store.load_all_nodes()
-            logger.info(f"Loaded {len(all_nodes)} total nodes from pgvector")
-
-            # Filter nodes by offering_filter if provided
+            # Load nodes using SQL filtering when possible (O(log n) vs O(n))
+            # This avoids loading 69K+ nodes into memory
             if offering_filter:
                 # offering_filter can contain notebook_ids, offering_names, or offering_ids
-                filtered_nodes = []
+                # Try SQL-based loading for notebook_ids (most common case)
+                nodes = []
+                for filter_id in offering_filter:
+                    # Try to load as notebook_id first (UUID format)
+                    notebook_nodes = self._vector_store.get_nodes_by_notebook_sql(filter_id)
+                    if notebook_nodes:
+                        nodes.extend(notebook_nodes)
+                        logger.info(f"Loaded {len(notebook_nodes)} nodes for notebook {filter_id}")
 
-                for node in all_nodes:
-                    metadata = node.metadata or {}
-                    node_notebook_id = metadata.get("notebook_id")
-                    node_offering_name = metadata.get("offering_name")
-                    node_offering_id = metadata.get("offering_id")
-
-                    # Match against notebook_id, offering_name, OR offering_id
-                    if (node_notebook_id and node_notebook_id in offering_filter) or \
-                       (node_offering_name and node_offering_name in offering_filter) or \
-                       (node_offering_id and node_offering_id in offering_filter):
-                        filtered_nodes.append(node)
-
-                nodes = filtered_nodes
-                logger.info(
-                    f"Filtered {len(nodes)} nodes from {len(all_nodes)} total "
-                    f"(filter={offering_filter})"
-                )
+                # If no nodes found via notebook_id, fall back to offering filter
+                # This handles legacy offering_name/offering_id filters
+                if not nodes:
+                    logger.info("No notebook nodes found, falling back to offering filter")
+                    all_nodes = self._vector_store.load_all_nodes()
+                    for node in all_nodes:
+                        metadata = node.metadata or {}
+                        node_offering_name = metadata.get("offering_name")
+                        node_offering_id = metadata.get("offering_id")
+                        if (node_offering_name and node_offering_name in offering_filter) or \
+                           (node_offering_id and node_offering_id in offering_filter):
+                            nodes.append(node)
+                    logger.info(f"Filtered {len(nodes)} nodes using offering filter")
+                else:
+                    logger.info(f"Loaded {len(nodes)} nodes using SQL filter (filter={offering_filter})")
             else:
-                # No filter - use all nodes
-                nodes = all_nodes
-                logger.info(f"Using all {len(nodes)} nodes (no filter)")
+                # No filter - load all nodes (only when truly needed)
+                logger.info("Loading all nodes from pgvector (no filter)")
+                nodes = self._vector_store.load_all_nodes()
+                logger.info(f"Loaded {len(nodes)} total nodes")
 
 
             # Create new engine WITH preserved chat history

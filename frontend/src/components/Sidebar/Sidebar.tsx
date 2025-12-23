@@ -3,6 +3,7 @@ import { Menu, X, Settings, Github, Zap } from 'lucide-react';
 import { NotebookSelector } from './NotebookSelector';
 import { ModelSelector } from './ModelSelector';
 import { DocumentsList } from './DocumentsList';
+import { WebSearchPanel } from './WebSearchPanel';
 import type { Notebook, ModelGroup, Document, ModelProvider } from '../../types';
 
 interface SidebarProps {
@@ -28,6 +29,9 @@ interface SidebarProps {
   onDeleteDocument: (sourceId: string) => Promise<boolean>;
   onToggleDocument: (sourceId: string, active: boolean) => Promise<boolean>;
   isLoadingDocs?: boolean;
+
+  // Web Search
+  onWebSourcesAdded?: () => void;
 }
 
 export function Sidebar({
@@ -48,6 +52,7 @@ export function Sidebar({
   onDeleteDocument,
   onToggleDocument,
   isLoadingDocs,
+  onWebSourcesAdded,
 }: SidebarProps) {
   const [isMobileOpen, setIsMobileOpen] = useState(false);
 
@@ -139,6 +144,15 @@ export function Sidebar({
             onToggleActive={onToggleDocument}
             isLoading={isLoadingDocs}
             notebookSelected={!!selectedNotebook}
+          />
+
+          {/* Divider */}
+          <div className="border-t border-void-surface" />
+
+          {/* Web Search */}
+          <WebSearchPanel
+            notebookId={selectedNotebook?.id || null}
+            onSourcesAdded={onWebSourcesAdded}
           />
         </div>
 

@@ -1,15 +1,17 @@
 import { MessageList } from './MessageList';
 import { InputBox } from './InputBox';
+import { ContentStudio } from './ContentStudio';
 import { useChat } from '../../hooks/useChat';
 
 interface ChatAreaProps {
   notebookId?: string;
+  notebookName?: string;
   selectedModel?: string;
   onCopy?: (content: string) => void;
   onFileUpload?: (file: File) => void;
 }
 
-export function ChatArea({ notebookId, selectedModel, onCopy, onFileUpload }: ChatAreaProps) {
+export function ChatArea({ notebookId, notebookName, selectedModel, onCopy, onFileUpload }: ChatAreaProps) {
   const {
     messages,
     isLoading,
@@ -22,6 +24,12 @@ export function ChatArea({ notebookId, selectedModel, onCopy, onFileUpload }: Ch
 
   return (
     <div className="flex flex-col h-full bg-void">
+      {/* Content Studio */}
+      <ContentStudio
+        notebookId={notebookId || null}
+        notebookName={notebookName}
+      />
+
       {/* Header with clear button */}
       {messages.length > 0 && (
         <div className="flex items-center justify-end px-4 py-2 border-b border-void-surface">

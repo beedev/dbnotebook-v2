@@ -5,6 +5,7 @@ from .llm import LLMProvider
 from .embedding import EmbeddingProvider
 from .processor import ContentProcessor
 from .image_generation import ImageGenerationProvider
+from .web_content import WebSearchProvider, WebScraperProvider, WebSearchResult, ScrapedContent
 
 __all__ = [
     "RetrievalStrategy",
@@ -12,4 +13,8 @@ __all__ = [
     "EmbeddingProvider",
     "ContentProcessor",
     "ImageGenerationProvider",
+    "WebSearchProvider",
+    "WebScraperProvider",
+    "WebSearchResult",
+    "ScrapedContent",
 ]
