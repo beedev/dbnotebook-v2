@@ -15,6 +15,7 @@ from ..core.metadata import MetadataManager
 from ..api.routes.chat import create_chat_routes
 from ..api.routes.web_content import create_web_content_routes
 from ..api.routes.studio import create_studio_routes
+from ..api.routes.vision import create_vision_routes
 from ..core.ingestion import WebContentIngestion, SynopsisManager
 from ..core.studio import StudioManager
 
@@ -1084,8 +1085,8 @@ Output ONLY valid JSON, nothing else."""
             can be auto-detected from the running server or filtered by whitelist.
             """
             try:
-                from rag_chatbot.core.model import LocalRAGModel
-                from rag_chatbot.setting import get_models_settings
+                from dbnotebook.core.model import LocalRAGModel
+                from dbnotebook.setting import get_models_settings
 
                 models = []
                 models_config = get_models_settings()
@@ -1275,6 +1276,13 @@ Output ONLY valid JSON, nothing else."""
         except Exception as e:
             logger.warning(f"Content Studio routes not available: {e}")
             self._studio_manager = None
+
+        # Register Vision API routes
+        try:
+            create_vision_routes(self._app, upload_folder=str(self._upload_dir))
+            logger.info("Vision API routes registered")
+        except Exception as e:
+            logger.warning(f"Vision API routes not available: {e}")
 
         # === Query Logging & Observability Endpoints ===
 

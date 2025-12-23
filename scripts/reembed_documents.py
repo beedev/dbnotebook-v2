@@ -20,8 +20,8 @@ from pathlib import Path
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
-from rag_chatbot.pipeline import LocalRAGPipeline
-from rag_chatbot.setting import get_settings
+from dbnotebook.pipeline import LocalRAGPipeline
+from dbnotebook.setting import get_settings
 
 # Setup logging
 logging.basicConfig(

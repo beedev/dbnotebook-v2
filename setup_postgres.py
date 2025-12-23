@@ -15,7 +15,7 @@ POSTGRES_PORT = 5432
 POSTGRES_USER = "postgres"
 POSTGRES_PASSWORD = "root"
 POSTGRES_DB_ADMIN = "postgres"  # Connect to default postgres db first
-POSTGRES_DB_DEV = "rag_chatbot_dev"  # Database to create
+POSTGRES_DB_DEV = "dbnotebook_dev"  # Database to create
 
 
 def test_connection():

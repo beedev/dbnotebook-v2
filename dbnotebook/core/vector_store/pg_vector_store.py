@@ -50,7 +50,7 @@ class PGVectorStore:
         # PostgreSQL connection settings from environment
         self._db_host = os.getenv("POSTGRES_HOST", "localhost")
         self._db_port = int(os.getenv("POSTGRES_PORT", "5433"))
-        self._db_name = os.getenv("POSTGRES_DB", "rag_chatbot_dev")
+        self._db_name = os.getenv("POSTGRES_DB", "dbnotebook_dev")
         self._db_user = os.getenv("POSTGRES_USER", "postgres")
         self._db_password = os.getenv("POSTGRES_PASSWORD", "root")
 

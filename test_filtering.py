@@ -7,12 +7,12 @@ from typing import List
 sys.path.insert(0, str(Path(__file__).parent))
 
 from llama_index.core.schema import Document, TextNode
-from rag_chatbot.core.ingestion import LocalDataIngestion
-from rag_chatbot.core.vector_store import LocalVectorStore
-from rag_chatbot.core.engine.retriever import LocalRetriever
-from rag_chatbot.core.metadata import MetadataManager
-from rag_chatbot.core.model import LocalRAGModel
-from rag_chatbot.setting import get_settings
+from dbnotebook.core.ingestion import LocalDataIngestion
+from dbnotebook.core.vector_store import LocalVectorStore
+from dbnotebook.core.engine.retriever import LocalRetriever
+from dbnotebook.core.metadata import MetadataManager
+from dbnotebook.core.model import LocalRAGModel
+from dbnotebook.setting import get_settings
 
 
 def create_test_documents() -> List[Document]:

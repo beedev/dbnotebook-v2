@@ -6,6 +6,7 @@ from .embedding import EmbeddingProvider
 from .processor import ContentProcessor
 from .image_generation import ImageGenerationProvider
 from .web_content import WebSearchProvider, WebScraperProvider, WebSearchResult, ScrapedContent
+from .vision import VisionProvider, VisionAnalysisResult
 
 __all__ = [
     "RetrievalStrategy",
@@ -17,4 +18,6 @@ __all__ = [
     "WebScraperProvider",
     "WebSearchResult",
     "ScrapedContent",
+    "VisionProvider",
+    "VisionAnalysisResult",
 ]

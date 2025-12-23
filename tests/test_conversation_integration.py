@@ -16,9 +16,9 @@ from pathlib import Path
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from rag_chatbot.pipeline import LocalRAGPipeline
-from rag_chatbot.core.db import DatabaseManager
-from rag_chatbot.core.notebook import NotebookManager
+from dbnotebook.pipeline import LocalRAGPipeline
+from dbnotebook.core.db import DatabaseManager
+from dbnotebook.core.notebook import NotebookManager
 from uuid import uuid4
 
 
@@ -29,7 +29,7 @@ def test_conversation_integration():
     print("=" * 60)
 
     # Database URL
-    DATABASE_URL = "postgresql://postgres:root@localhost:5432/rag_chatbot_dev"
+    DATABASE_URL = "postgresql://postgres:root@localhost:5432/dbnotebook_dev"
 
     # Step 1: Initialize pipeline with database
     print("\n[1/8] Initializing pipeline with database...")

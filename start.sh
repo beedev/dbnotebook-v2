@@ -1,6 +1,6 @@
 #!/bin/bash
 # =============================================================================
-# RAG Chatbot - Sales Enablement System
+# DBNotebook - Sales Enablement System
 # Startup Script with Environment Validation
 # =============================================================================
 
@@ -23,7 +23,7 @@ HOST=${2:-localhost}
 
 print_header() {
     echo -e "${BLUE}========================================${NC}"
-    echo -e "${BLUE}RAG Chatbot - Sales Enablement System${NC}"
+    echo -e "${BLUE}DBNotebook - Sales Enablement System${NC}"
     echo -e "${BLUE}========================================${NC}"
 }
 
@@ -93,10 +93,10 @@ validate_environment() {
 cleanup_existing_processes() {
     print_info "Checking for existing processes on port $PORT..."
 
-    # Kill any existing RAG chatbot processes
-    if pgrep -f "python -m rag_chatbot" > /dev/null; then
-        print_warning "Stopping existing RAG chatbot processes..."
-        pkill -f "python -m rag_chatbot" 2>/dev/null || true
+    # Kill any existing DBNotebook processes
+    if pgrep -f "python -m dbnotebook" > /dev/null; then
+        print_warning "Stopping existing DBNotebook processes..."
+        pkill -f "python -m dbnotebook" 2>/dev/null || true
         sleep 1
     fi
 
@@ -153,7 +153,7 @@ start_server() {
 
     echo ""
     print_header
-    print_success "Starting RAG Chatbot Sales Enablement System"
+    print_success "Starting DBNotebook Sales Enablement System"
     echo ""
     print_info "Configuration:"
     echo "  • Host: $HOST"
@@ -166,7 +166,7 @@ start_server() {
     echo ""
 
     # Start the application
-    python -m rag_chatbot --host $HOST --port $PORT
+    python -m dbnotebook --host $HOST --port $PORT
 }
 
 # =============================================================================

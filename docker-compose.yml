@@ -1,48 +1,54 @@
+version: '3.8'
+
 services:
-  app:
-    container_name: app
+  dbnotebook:
+    container_name: dbnotebook
     build: .
     ports:
-      - 7860:7860
-    volumes:
-      - .:/code
+      - "7860:7860"
     environment:
-      - DATABASE_URL=postgresql://postgres:root@postgres:5432/rag_chatbot_dev
+      - DATABASE_URL=postgresql://dbnotebook:dbnotebook@postgres:5432/dbnotebook_dev
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=dbnotebook_dev
+      - POSTGRES_USER=dbnotebook
+      - POSTGRES_PASSWORD=dbnotebook
+      - OLLAMA_HOST=host.docker.internal
+      - OLLAMA_PORT=11434
     depends_on:
       postgres:
         condition: service_healthy
+    volumes:
+      - ./data:/app/data
+      - ./outputs:/app/outputs
+      - ./uploads:/app/uploads
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     networks:
-      - local_network
+      - dbnotebook_network
 
   postgres:
-    container_name: postgres
+    container_name: dbnotebook_postgres
     image: pgvector/pgvector:pg16
     ports:
-      - 5433:5432
+      - "5433:5432"
     environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: root
-      POSTGRES_DB: rag_chatbot_dev
+      POSTGRES_USER: dbnotebook
+      POSTGRES_PASSWORD: dbnotebook
+      POSTGRES_DB: dbnotebook_dev
     volumes:
-      - ./data/postgres:/var/lib/postgresql/data
+      - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      test: ["CMD-SHELL", "pg_isready -U dbnotebook -d dbnotebook_dev"]
       interval: 5s
       timeout: 5s
       retries: 5
     networks:
-      - local_network
+      - dbnotebook_network
 
-  ollama:
-    container_name: ollama
-    image: ollama/ollama:latest
-    ports:
-      - 11434:11434
-    volumes:
-      - ./data/ollama:/root/.ollama
-    networks:
-      - local_network
+volumes:
+  postgres_data:
 
 networks:
-  local_network:
+  dbnotebook_network:
     driver: bridge

@@ -93,7 +93,7 @@ export function Sidebar({
             </div>
             <div>
               <h1 className="text-lg font-bold text-text font-[family-name:var(--font-display)]">
-                <span className="gradient-text">RAG</span> Chat
+                <span className="gradient-text">DB</span>Notebook
               </h1>
             </div>
           </div>

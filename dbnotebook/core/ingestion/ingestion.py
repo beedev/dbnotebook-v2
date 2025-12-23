@@ -32,12 +32,28 @@ class DocumentReader:
 
     SUPPORTED_TEXT_FORMATS = ('.pdf', '.epub', '.txt')
     SUPPORTED_MARKDOWN_FORMATS = ('.md', '.markdown')
-    SUPPORTED_IMAGE_FORMATS = ('.jpg', '.jpeg', '.tiff', '.png')
+    SUPPORTED_IMAGE_FORMATS = ('.jpg', '.jpeg', '.tiff', '.png', '.gif', '.webp')
 
     def __init__(self):
         self._textract_available = self._check_textract_available()
         self._docx_available = self._check_docx_available()
         self._pptx_available = self._check_pptx_available()
+        self._vision_manager = self._init_vision_manager()
+
+    def _init_vision_manager(self):
+        """Initialize VisionManager for image processing."""
+        try:
+            from ..vision import get_vision_manager
+            manager = get_vision_manager()
+            if manager.is_available():
+                logger.info("VisionManager initialized for image processing")
+                return manager
+            else:
+                logger.debug("VisionManager not available (no API keys configured)")
+                return None
+        except Exception as e:
+            logger.debug(f"VisionManager not available: {e}")
+            return None
 
     def _check_textract_available(self) -> bool:
         """Check if AWS Textract credentials are available."""
@@ -140,13 +156,41 @@ class DocumentReader:
             return ""
 
     def _read_image(self, file_path: str) -> str:
-        """Read image files using AWS Textract OCR."""
+        """Read image files using VisionManager or AWS Textract OCR.
+
+        Uses VisionManager (Gemini/OpenAI Vision) as primary method,
+        falls back to AWS Textract if vision providers are not available.
+        """
+        # Try VisionManager first (Gemini/OpenAI Vision)
+        if self._vision_manager:
+            try:
+                logger.debug(f"Processing image with VisionManager: {file_path}")
+                result = self._vision_manager.analyze_image(file_path)
+
+                # Combine description and extracted text
+                content_parts = []
+                if result.description:
+                    content_parts.append(f"Image Description: {result.description}")
+                if result.text_content and result.text_content.lower() != "no text found":
+                    content_parts.append(f"Extracted Text: {result.text_content}")
+
+                if content_parts:
+                    logger.info(f"Successfully processed image with {result.provider}: {file_path}")
+                    return "\n\n".join(content_parts)
+            except Exception as e:
+                logger.warning(f"VisionManager failed for {file_path}: {e}")
+                # Fall through to Textract
+
+        # Fall back to AWS Textract
         if not self._textract_available:
-            logger.warning(
-                "AWS Textract not configured. Set AWS_ACCESS_KEY_ID and "
-                "AWS_SECRET_ACCESS_KEY environment variables for image OCR."
-            )
+            if not self._vision_manager:
+                logger.warning(
+                    "Image processing not available. Configure either:\n"
+                    "- GOOGLE_API_KEY or OPENAI_API_KEY for Vision providers, or\n"
+                    "- AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY for Textract"
+                )
             return ""
+
         try:
             from langchain_community.document_loaders import AmazonTextractPDFLoader
             loader = AmazonTextractPDFLoader(file_path)

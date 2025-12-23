@@ -13,7 +13,7 @@ PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 
 # Define the usage function
 usage() {
-    echo -e "${CYAN}RAG Chatbot Runner${NC}"
+    echo -e "${CYAN}DBNotebook Runner${NC}"
     echo ""
     echo "Usage: $0 [OPTIONS]"
     echo ""
@@ -64,12 +64,12 @@ start_backend() {
 
     # Run Flask backend
     if [[ -n $NGROK ]]; then
-        python -m rag_chatbot --host localhost --port 7860 &
+        python -m dbnotebook --host localhost --port 7860 &
         BACKEND_PID=$!
         echo -e "${CYAN}Backend PID: $BACKEND_PID${NC}"
         ngrok http 7860
     else
-        python -m rag_chatbot --host localhost --port 7860 &
+        python -m dbnotebook --host localhost --port 7860 &
         BACKEND_PID=$!
         echo -e "${CYAN}Backend PID: $BACKEND_PID${NC}"
         echo -e "${GREEN}Flask backend running at http://localhost:7860${NC}"
@@ -165,7 +165,7 @@ fi
 # Print banner
 echo -e "${CYAN}"
 echo "╔═══════════════════════════════════════════╗"
-echo "║       RAG Chatbot - Deep Space Terminal   ║"
+echo "║       DBNotebook - Deep Space Terminal    ║"
 echo "╚═══════════════════════════════════════════╝"
 echo -e "${NC}"
 

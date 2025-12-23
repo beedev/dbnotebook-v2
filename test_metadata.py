@@ -5,7 +5,7 @@ from pathlib import Path
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent))
 
-from rag_chatbot.core.metadata import MetadataManager
+from dbnotebook.core.metadata import MetadataManager
 
 
 def test_metadata_manager():

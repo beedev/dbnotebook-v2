@@ -183,7 +183,7 @@ class DatabaseManager:
 def get_database_manager(
     host: str = "localhost",
     port: int = 5432,
-    database: str = "rag_chatbot_dev",
+    database: str = "dbnotebook_dev",
     user: str = "postgres",
     password: str = "root",
     **kwargs

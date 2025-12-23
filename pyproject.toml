@@ -1,9 +1,13 @@
 [tool.poetry]
-name = "rag-chatbot"
-version = "0.1.0"
-description = ""
+name = "dbnotebook"
+version = "0.2.0"
+description = "Local RAG chatbot with notebook management and vision capabilities"
 authors = ["Võ Đình Đạt <vodinhdat03@gmail.com>"]
 readme = "README.md"
+packages = [{include = "dbnotebook"}]
+
+[tool.poetry.scripts]
+dbnotebook = "dbnotebook.__main__:main"
 
 [tool.poetry.dependencies]
 python = "^3.10"

@@ -17,7 +17,7 @@ if config.config_file_name is not None:
 # add your model's MetaData object here
 # for 'autogenerate' support
 # Import our database models for autogenerate support
-from rag_chatbot.core.db.models import Base
+from dbnotebook.core.db.models import Base
 target_metadata = Base.metadata
 
 # other values from the config, defined by the needs of env.py,

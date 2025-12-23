@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-A multimodal RAG (Retrieval-Augmented Generation) Sales Enablement System using LlamaIndex, PostgreSQL/pgvector, and Flask. Features NotebookLM-style document organization, persistent conversations, hybrid retrieval (BM25 + vector), multi-provider LLM support (Ollama, OpenAI, Anthropic, Gemini), web search integration (Firecrawl + Jina), and Content Studio for multimodal content generation.
+**DBNotebook** - A multimodal RAG (Retrieval-Augmented Generation) Sales Enablement System using LlamaIndex, PostgreSQL/pgvector, and Flask. Features NotebookLM-style document organization, persistent conversations, hybrid retrieval (BM25 + vector), multi-provider LLM support (Ollama, OpenAI, Anthropic, Gemini), web search integration (Firecrawl + Jina), vision-based image understanding (OpenAI GPT-4V, Gemini Vision), and Content Studio for multimodal content generation.
 
 ## Development Commands
 
@@ -16,7 +16,7 @@ A multimodal RAG (Retrieval-Augmented Generation) Sales Enablement System using 
 
 # Manual execution
 source venv/bin/activate
-python -m rag_chatbot --host localhost --port 7860
+python -m dbnotebook --host localhost --port 7860
 
 # Frontend development (React + Vite)
 cd frontend
@@ -57,34 +57,35 @@ User Input → Flask UI (web.py) → LocalRAGPipeline (pipeline.py)
 
 ### Key Components
 
-**`rag_chatbot/pipeline.py`** (1139 lines) - Central orchestrator:
+**`dbnotebook/pipeline.py`** - Central orchestrator:
 - Manages LLM providers, embedding models, notebook context
 - Tracks `_current_notebook_id` and `_current_user_id` for document isolation
 - Coordinates vector store, chat engine, conversation history
 - Key methods: `switch_notebook()`, `store_nodes()`, `stream_chat()`, `set_chat_mode()`
 
-**`rag_chatbot/ui/web.py`** (1561 lines) - Flask web interface:
+**`dbnotebook/ui/web.py`** - Flask web interface:
 - REST API endpoints for chat, upload, notebooks, image generation
 - Streaming responses via Server-Sent Events (SSE)
 - Integrates with NotebookManager, MetadataManager, ImageProvider
 
-**`rag_chatbot/core/vector_store/pg_vector_store.py`** - PGVectorStore (replaces ChromaDB):
+**`dbnotebook/core/vector_store/pg_vector_store.py`** - PGVectorStore (replaces ChromaDB):
 - PostgreSQL + pgvector for O(log n) metadata filtering
 - Stores embeddings with `notebook_id`, `file_hash`, `it_practice`, `offering_id` metadata
 - Table: `data_embeddings` with JSONB metadata column
+- Duplicate prevention via md5(text) + notebook_id unique index
 
-**`rag_chatbot/core/engine/retriever.py`** - LocalRetriever:
+**`dbnotebook/core/engine/retriever.py`** - LocalRetriever:
 - ≤6 nodes: VectorIndexRetriever (pure semantic)
 - \>6 nodes: RouterRetriever selecting:
   - QueryFusionRetriever (ambiguous queries): generates 5 variations, fuses BM25 + vector
   - TwoStageRetriever (clear queries): BM25 + vector → reranker (`mixedbread-ai/mxbai-rerank-large-v1`)
 
-**`rag_chatbot/core/notebook/notebook_manager.py`** - NotebookManager:
+**`dbnotebook/core/notebook/notebook_manager.py`** - NotebookManager:
 - CRUD for notebooks (NotebookLM-style document organization)
 - Document tracking with MD5 hash duplicate detection
 - Multi-user support via `user_id`
 
-**`rag_chatbot/core/conversation/conversation_store.py`** - ConversationStore:
+**`dbnotebook/core/conversation/conversation_store.py`** - ConversationStore:
 - Persistent conversation history per notebook
 - Cross-session context preservation
 
@@ -96,23 +97,24 @@ PluginRegistry (core/registry.py)
 ├── Embedding Providers: HuggingFace, OpenAI
 ├── Retrieval Strategies: Hybrid, Semantic, Keyword
 ├── Image Providers: Gemini/Imagen
+├── Vision Providers: OpenAI GPT-4V, Gemini Vision
 ├── Web Search Providers: Firecrawl
 └── Web Scraper Providers: Jina Reader
 ```
 
-Providers are registered at startup and selected via environment variables (`LLM_PROVIDER`, `EMBEDDING_PROVIDER`, `RETRIEVAL_STRATEGY`).
+Providers are registered at startup and selected via environment variables (`LLM_PROVIDER`, `EMBEDDING_PROVIDER`, `RETRIEVAL_STRATEGY`, `VISION_PROVIDER`).
 
 ### Web Search Integration
 
-**`rag_chatbot/core/providers/firecrawl.py`** - FirecrawlSearchProvider:
+**`dbnotebook/core/providers/firecrawl.py`** - FirecrawlSearchProvider:
 - Web search via Firecrawl API
 - Returns structured results with URL, title, description
 
-**`rag_chatbot/core/providers/jina_reader.py`** - JinaReaderProvider:
+**`dbnotebook/core/providers/jina_reader.py`** - JinaReaderProvider:
 - Content scraping via Jina Reader (r.jina.ai/{url})
 - Extracts clean markdown content from web pages
 
-**`rag_chatbot/core/ingestion/web_ingestion.py`** - WebContentIngestion:
+**`dbnotebook/core/ingestion/web_ingestion.py`** - WebContentIngestion:
 - Orchestrates search → preview → scrape → embed workflow
 - User selects URLs to import after search results displayed
 
@@ -121,15 +123,33 @@ Providers are registered at startup and selected via environment variables (`LLM
 - `POST /api/web/scrape-preview` - Preview content before import
 - `POST /api/notebooks/{id}/web-sources` - Add selected URLs to notebook
 
+### Vision Processing
+
+**`dbnotebook/core/interfaces/vision.py`** - VisionProvider ABC:
+- Abstract interface for image understanding providers
+- Methods: `analyze_image()`, `extract_text()`, `validate()`
+
+**`dbnotebook/core/providers/gemini_vision.py`** - GeminiVisionProvider:
+- Uses Gemini Pro Vision for image understanding
+- Supports image analysis and OCR-like text extraction
+
+**`dbnotebook/core/providers/openai_vision.py`** - OpenAIVisionProvider:
+- Uses GPT-4V/GPT-4o for image understanding
+- High accuracy text extraction and visual analysis
+
+**API Endpoints**:
+- `POST /api/vision/analyze` - Analyze image with optional prompt
+- `GET /api/vision/providers` - List available vision providers
+
 ### Content Studio
 
-**`rag_chatbot/core/studio/`** - Multimodal content generation:
+**`dbnotebook/core/studio/`** - Multimodal content generation:
 - `StudioManager` - CRUD for generated content, gallery management
 - `ContentGenerator` (base) - Abstract class for generators
 - `InfographicGenerator` - Creates infographics using Gemini/Imagen
 - `MindMapGenerator` - Creates mind maps using Gemini/Imagen
 
-**`rag_chatbot/api/routes/studio.py`** - Studio API endpoints:
+**`dbnotebook/api/routes/studio.py`** - Studio API endpoints:
 - `GET /api/studio/gallery` - List generated content with filters
 - `POST /api/studio/generate` - Generate new content from notebook
 - `GET /api/studio/content/{id}` - Get content details
@@ -166,9 +186,10 @@ EMBEDDING_MODEL=nomic-ai/nomic-embed-text-v1.5
 RETRIEVAL_STRATEGY=hybrid        # hybrid|semantic|keyword
 
 # Database (required for persistence)
-DATABASE_URL=postgresql://user:pass@localhost:5432/rag_chatbot
+DATABASE_URL=postgresql://user:pass@localhost:5433/dbnotebook_dev
 POSTGRES_HOST=localhost
 POSTGRES_PORT=5433
+POSTGRES_DB=dbnotebook_dev
 
 # API keys (as needed)
 OPENAI_API_KEY=...
@@ -182,6 +203,11 @@ GEMINI_IMAGE_MODEL=imagen-4.0-generate-001
 # Web Search (optional)
 FIRECRAWL_API_KEY=...           # Required for web search
 JINA_API_KEY=...                # Optional (for higher rate limits)
+
+# Vision processing
+VISION_PROVIDER=gemini          # gemini|openai
+GEMINI_VISION_MODEL=gemini-2.0-flash-exp
+OPENAI_VISION_MODEL=gpt-4o
 ```
 
 ## Frontend (React + TypeScript)
@@ -203,11 +229,27 @@ Located in `/frontend/`:
 
 ## Document Processing
 
-Supported formats: PDF, EPUB, TXT, DOCX, PPTX, images (via OCR/Textract)
+Supported formats: PDF, EPUB, TXT, DOCX, PPTX, images (via Vision AI)
 
 Pipeline:
 1. Format-specific readers (PyMuPDF for PDFs, LangChain for Office docs)
-2. MD5 hash for duplicate detection
-3. SentenceSplitter (512 tokens, 32 overlap)
-4. HuggingFace embeddings (batch size 8)
-5. Store in PGVectorStore with metadata
+2. Vision providers for images (Gemini Vision, OpenAI GPT-4V)
+3. MD5 hash for duplicate detection
+4. SentenceSplitter (512 tokens, 32 overlap)
+5. HuggingFace embeddings (batch size 8)
+6. Store in PGVectorStore with metadata
+
+## Docker Deployment
+
+```bash
+# Start with Docker (external Ollama required)
+docker compose up --build
+
+# External Ollama must be running on host
+ollama serve
+```
+
+Docker Compose configuration:
+- `dbnotebook` service: Flask app + RAG pipeline
+- `postgres` service: PostgreSQL 16 + pgvector
+- External Ollama: Connects via `host.docker.internal:11434`

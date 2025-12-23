@@ -12,6 +12,7 @@ from .interfaces import (
     LLMProvider,
     EmbeddingProvider,
     ImageGenerationProvider,
+    VisionProvider,
 )
 from .strategies import (
     HybridRetrievalStrategy,
@@ -24,6 +25,8 @@ from .providers import (
     AnthropicLLMProvider,
     HuggingFaceEmbeddingProvider,
     GeminiImageProvider,
+    GeminiVisionProvider,
+    OpenAIVisionProvider,
 )
 
 load_dotenv()
@@ -57,6 +60,10 @@ def register_default_plugins() -> None:
 
     # Register image generation providers
     PluginRegistry.register_image_provider("gemini", GeminiImageProvider)
+
+    # Register vision providers
+    PluginRegistry.register_vision_provider("gemini", GeminiVisionProvider)
+    PluginRegistry.register_vision_provider("openai", OpenAIVisionProvider)
 
     _plugins_initialized = True
     logger.info(f"Registered plugins: {PluginRegistry.get_registry_stats()}")
@@ -150,6 +157,37 @@ def get_configured_image_provider(**override_kwargs) -> ImageGenerationProvider:
     return PluginRegistry.get_image_provider(provider, **kwargs)
 
 
+def get_configured_vision_provider(**override_kwargs) -> VisionProvider:
+    """
+    Get vision provider configured from environment.
+
+    Environment variables:
+        VISION_PROVIDER: Provider name (gemini, openai)
+        GEMINI_VISION_MODEL: Gemini vision model name
+        OPENAI_VISION_MODEL: OpenAI vision model name
+
+    Returns:
+        Configured VisionProvider instance
+    """
+    register_default_plugins()
+
+    provider = os.getenv("VISION_PROVIDER", "gemini").lower()
+
+    kwargs = {}
+    if provider == "gemini":
+        model = os.getenv("GEMINI_VISION_MODEL")
+        if model:
+            kwargs["model"] = model
+    elif provider == "openai":
+        model = os.getenv("OPENAI_VISION_MODEL")
+        if model:
+            kwargs["model"] = model
+
+    kwargs.update(override_kwargs)
+
+    return PluginRegistry.get_vision_provider(provider, **kwargs)
+
+
 def list_available_plugins() -> dict:
     """
     List all available plugins.
@@ -179,6 +217,8 @@ def get_plugin_info() -> dict:
             "retrieval_strategy": os.getenv("RETRIEVAL_STRATEGY", "hybrid"),
             "image_provider": os.getenv("IMAGE_GENERATION_PROVIDER", "gemini"),
             "image_model": os.getenv("GEMINI_IMAGE_MODEL", "gemini-2.0-flash-exp"),
+            "vision_provider": os.getenv("VISION_PROVIDER", "gemini"),
+            "vision_model": os.getenv("GEMINI_VISION_MODEL", "gemini-2.0-flash-exp"),
         },
         "available_plugins": PluginRegistry.discover_plugins(),
         "registry_stats": PluginRegistry.get_registry_stats(),

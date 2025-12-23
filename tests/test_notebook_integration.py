@@ -19,11 +19,11 @@ from uuid import uuid4
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from rag_chatbot.core.db import DatabaseManager
-from rag_chatbot.core.notebook import NotebookManager
-from rag_chatbot.core.ingestion import LocalDataIngestion
-from rag_chatbot.core.vector_store import LocalVectorStore
-from rag_chatbot.setting import get_settings
+from dbnotebook.core.db import DatabaseManager
+from dbnotebook.core.notebook import NotebookManager
+from dbnotebook.core.ingestion import LocalDataIngestion
+from dbnotebook.core.vector_store import LocalVectorStore
+from dbnotebook.setting import get_settings
 
 
 def test_notebook_integration():
@@ -34,7 +34,7 @@ def test_notebook_integration():
 
     # Step 1: Database setup
     print("\n[1/7] Setting up database connection...")
-    DATABASE_URL = "postgresql://postgres:root@localhost:5432/rag_chatbot_dev"
+    DATABASE_URL = "postgresql://postgres:root@localhost:5432/dbnotebook_dev"
     db_manager = DatabaseManager(DATABASE_URL)
     db_manager.init_db()
     print("✅ Database connected")

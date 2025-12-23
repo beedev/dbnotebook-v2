@@ -10,6 +10,7 @@ from .interfaces import (
     EmbeddingProvider,
     ContentProcessor,
     ImageGenerationProvider,
+    VisionProvider,
 )
 
 logger = logging.getLogger(__name__)
@@ -40,6 +41,7 @@ class PluginRegistry:
     _embedding_providers: Dict[str, Type[EmbeddingProvider]] = {}
     _processors: Dict[str, Type[ContentProcessor]] = {}
     _image_providers: Dict[str, Type[ImageGenerationProvider]] = {}
+    _vision_providers: Dict[str, Type[VisionProvider]] = {}
 
     # =========================================================================
     # Retrieval Strategy Registration
@@ -394,6 +396,84 @@ class PluginRegistry:
         return list(cls._image_providers.keys())
 
     # =========================================================================
+    # Vision Provider Registration
+    # =========================================================================
+
+    @classmethod
+    def register_vision_provider(
+        cls, name: str, provider: Type[VisionProvider]
+    ) -> None:
+        """
+        Register a vision provider.
+
+        Args:
+            name: Provider identifier (e.g., "gemini", "openai")
+            provider: Provider class (not instance)
+        """
+        cls._vision_providers[name.lower()] = provider
+        logger.debug(f"Registered vision provider: {name}")
+
+    @classmethod
+    def get_vision_provider(cls, name: str, **kwargs) -> VisionProvider:
+        """
+        Get a vision provider instance.
+
+        Args:
+            name: Provider identifier
+            **kwargs: Configuration options passed to constructor
+
+        Returns:
+            Configured VisionProvider instance
+
+        Raises:
+            KeyError: If provider not found
+        """
+        name = name.lower()
+        if name not in cls._vision_providers:
+            available = ", ".join(cls._vision_providers.keys())
+            raise KeyError(
+                f"Unknown vision provider: {name}. "
+                f"Available: {available}"
+            )
+        return cls._vision_providers[name](**kwargs)
+
+    @classmethod
+    def get_configured_vision_provider(cls, **override_kwargs) -> VisionProvider:
+        """
+        Get a vision provider configured from environment.
+
+        Environment variables:
+            VISION_PROVIDER: Provider name (default: "gemini")
+            GEMINI_VISION_MODEL: Gemini model name
+            OPENAI_VISION_MODEL: OpenAI model name
+
+        Args:
+            **override_kwargs: Override environment configuration
+
+        Returns:
+            Configured VisionProvider instance
+        """
+        provider_name = os.getenv("VISION_PROVIDER", "gemini")
+
+        kwargs = {}
+        if provider_name == "gemini":
+            model = os.getenv("GEMINI_VISION_MODEL")
+            if model:
+                kwargs["model"] = model
+        elif provider_name == "openai":
+            model = os.getenv("OPENAI_VISION_MODEL")
+            if model:
+                kwargs["model"] = model
+
+        kwargs.update(override_kwargs)
+        return cls.get_vision_provider(provider_name, **kwargs)
+
+    @classmethod
+    def list_vision_providers(cls) -> List[str]:
+        """Return list of registered vision provider names."""
+        return list(cls._vision_providers.keys())
+
+    # =========================================================================
     # Utility Methods
     # =========================================================================
 
@@ -405,6 +485,7 @@ class PluginRegistry:
         cls._embedding_providers.clear()
         cls._processors.clear()
         cls._image_providers.clear()
+        cls._vision_providers.clear()
         logger.debug("Cleared all plugin registries")
 
     @classmethod
@@ -416,6 +497,7 @@ class PluginRegistry:
             "embedding_providers": len(cls._embedding_providers),
             "processors": len(cls._processors),
             "image_providers": len(cls._image_providers),
+            "vision_providers": len(cls._vision_providers),
         }
 
     @classmethod
@@ -432,4 +514,5 @@ class PluginRegistry:
             "embedding_providers": cls.list_embedding_providers(),
             "content_processors": cls.list_processors(),
             "image_providers": cls.list_image_providers(),
+            "vision_providers": cls.list_vision_providers(),
         }
