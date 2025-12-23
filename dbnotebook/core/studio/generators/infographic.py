@@ -68,7 +68,7 @@ class InfographicGenerator(ContentGenerator):
             content: Source content to visualize
             prompt: Optional additional instructions
             output_dir: Override output directory
-            **kwargs: Additional options (aspect_ratio, etc.)
+            **kwargs: Additional options (aspect_ratio, brand_info, etc.)
 
         Returns:
             Dictionary with file_path, title, metadata
@@ -78,8 +78,11 @@ class InfographicGenerator(ContentGenerator):
 
         target_dir = output_dir or self._output_dir
 
-        # Build the generation prompt
-        full_prompt = self.build_prompt(content, prompt)
+        # Get brand info if provided (extracted from reference image)
+        brand_info = kwargs.get("brand_info")
+
+        # Build the generation prompt with brand info
+        full_prompt = self.build_prompt(content, prompt, brand_info=brand_info)
 
         # Get aspect ratio (default to 16:9 for infographics)
         aspect_ratio = kwargs.get("aspect_ratio", "16:9")
@@ -128,6 +131,63 @@ class InfographicGenerator(ContentGenerator):
             "description": "Creates visual infographics from text content",
             "output_format": "png",
         }
+
+    def build_prompt(
+        self,
+        content: str,
+        user_prompt: Optional[str] = None,
+        brand_info: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        """
+        Build the full generation prompt with brand info support.
+
+        Args:
+            content: Source content
+            user_prompt: Optional user-provided prompt
+            brand_info: Optional brand information extracted from reference image
+
+        Returns:
+            Combined prompt string
+        """
+        base_prompt = self._get_base_prompt()
+
+        # Combine prompts
+        parts = [base_prompt]
+
+        # Add brand guidelines if provided
+        if brand_info:
+            brand_section = self._format_brand_info(brand_info)
+            if brand_section:
+                parts.append(f"\n\nBRAND GUIDELINES (MUST FOLLOW):\n{brand_section}")
+
+        if user_prompt:
+            parts.append(f"\nAdditional instructions: {user_prompt}")
+
+        parts.append(f"\n\nSource content:\n{content[:3500]}")  # Increased limit
+
+        return "\n".join(parts)
+
+    def _format_brand_info(self, brand_info: Dict[str, Any]) -> str:
+        """Format brand info for the prompt."""
+        lines = []
+
+        if brand_info.get("colors"):
+            colors = brand_info["colors"]
+            lines.append(f"- PRIMARY COLORS: Use these exact colors: {colors}")
+
+        if brand_info.get("company_name"):
+            lines.append(f"- COMPANY NAME: {brand_info['company_name']}")
+
+        if brand_info.get("logo_description"):
+            lines.append(f"- LOGO STYLE: {brand_info['logo_description']}")
+
+        if brand_info.get("style_notes"):
+            lines.append(f"- DESIGN STYLE: {brand_info['style_notes']}")
+
+        if brand_info.get("fonts"):
+            lines.append(f"- FONT STYLE: {brand_info['fonts']}")
+
+        return "\n".join(lines) if lines else ""
 
     def _get_base_prompt(self) -> str:
         """Get the base prompt for infographic generation."""

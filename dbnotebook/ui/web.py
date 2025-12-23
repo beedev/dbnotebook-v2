@@ -1267,12 +1267,17 @@ Output ONLY valid JSON, nothing else."""
         try:
             self._studio_manager = StudioManager(self._db_manager)
             self._synopsis_manager = SynopsisManager()  # Create fresh instance
+            # Get vector store from pipeline for direct content retrieval
+            vector_store = self._pipeline._vector_store if self._pipeline else None
             create_studio_routes(
                 self._app,
                 self._studio_manager,
                 self._synopsis_manager,
+                vector_store=vector_store,
             )
             logger.info("Content Studio routes registered")
+            if vector_store:
+                logger.info("Content Studio using vector store for content retrieval")
         except Exception as e:
             logger.warning(f"Content Studio routes not available: {e}")
             self._studio_manager = None

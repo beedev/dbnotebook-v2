@@ -194,6 +194,7 @@ export interface StudioGenerateRequest {
   type: 'infographic' | 'mindmap';
   prompt?: string;
   aspect_ratio?: string;
+  reference_image?: string; // Base64 encoded image for brand extraction
 }
 
 export interface StudioGenerateResponse {

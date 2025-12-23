@@ -2,30 +2,108 @@
 
 import logging
 import os
+import base64
+import tempfile
 from flask import request, jsonify, send_file
 from pathlib import Path
 
 from ...core.studio import StudioManager, InfographicGenerator, MindMapGenerator
 from ...core.ingestion import SynopsisManager
+from ...core.vision import VisionManager
 
 logger = logging.getLogger(__name__)
 
+# Brand extraction prompt for Vision API
+BRAND_EXTRACTION_PROMPT = """Analyze this image and extract branding information for use in infographic generation.
+
+Please identify and return:
+1. COLORS: List the dominant colors in hex format (e.g., #FF5733, #2E86AB). Focus on brand colors, not background.
+2. COMPANY_NAME: If a company/brand name is visible, extract it exactly as shown.
+3. LOGO_DESCRIPTION: Describe the logo style (e.g., "modern minimalist icon", "wordmark with geometric shapes")
+4. STYLE_NOTES: Describe the overall design style (e.g., "corporate professional", "modern tech", "playful colorful")
+5. FONTS: Describe the font style if visible (e.g., "sans-serif bold", "serif elegant")
+
+Format your response as:
+COLORS: #hex1, #hex2, #hex3
+COMPANY_NAME: [name or "Not visible"]
+LOGO_DESCRIPTION: [description]
+STYLE_NOTES: [description]
+FONTS: [description or "Not determined"]
+"""
+
 # Project root directory for resolving relative paths
 PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
+
+
+def _parse_brand_extraction_response(response_text: str) -> dict:
+    """Parse the brand extraction response from Vision API."""
+    brand_info = {}
+
+    lines = response_text.strip().split('\n')
+    for line in lines:
+        line = line.strip()
+        if line.startswith('COLORS:'):
+            colors = line.replace('COLORS:', '').strip()
+            brand_info['colors'] = colors
+        elif line.startswith('COMPANY_NAME:'):
+            name = line.replace('COMPANY_NAME:', '').strip()
+            if name.lower() not in ['not visible', 'n/a', 'none', '']:
+                brand_info['company_name'] = name
+        elif line.startswith('LOGO_DESCRIPTION:'):
+            desc = line.replace('LOGO_DESCRIPTION:', '').strip()
+            brand_info['logo_description'] = desc
+        elif line.startswith('STYLE_NOTES:'):
+            notes = line.replace('STYLE_NOTES:', '').strip()
+            brand_info['style_notes'] = notes
+        elif line.startswith('FONTS:'):
+            fonts = line.replace('FONTS:', '').strip()
+            if fonts.lower() not in ['not determined', 'n/a', 'none', '']:
+                brand_info['fonts'] = fonts
+
+    return brand_info
+
+
+def _extract_brand_from_image(vision_manager: VisionManager, image_path: str) -> dict:
+    """Extract brand information from a reference image using Vision API."""
+    try:
+        result = vision_manager.analyze_image(
+            image_path=image_path,
+            prompt=BRAND_EXTRACTION_PROMPT
+        )
+
+        if result and result.description:
+            brand_info = _parse_brand_extraction_response(result.description)
+            logger.info(f"Extracted brand info: {brand_info}")
+            return brand_info
+
+    except Exception as e:
+        logger.warning(f"Failed to extract brand info from image: {e}")
+
+    return {}
 
 
 def create_studio_routes(
     app,
     studio_manager: StudioManager,
     synopsis_manager: SynopsisManager = None,
+    vector_store=None,
 ):
     """Create Content Studio API routes.
 
     Args:
         app: Flask application instance
         studio_manager: StudioManager instance
-        synopsis_manager: SynopsisManager for getting notebook content
+        synopsis_manager: SynopsisManager for getting notebook content (fallback)
+        vector_store: Vector store for retrieving notebook document content (primary)
     """
+
+    # Initialize vision manager for brand extraction
+    vision_manager = None
+    try:
+        vision_manager = VisionManager()
+        logger.info("Vision manager initialized for brand extraction")
+    except Exception as e:
+        logger.warning(f"Vision manager not available for brand extraction: {e}")
 
     # Initialize generators
     generators = {}
@@ -107,7 +185,8 @@ def create_studio_routes(
                 "notebook_id": "uuid",
                 "type": "infographic" | "mindmap",
                 "prompt": "Optional additional instructions",
-                "aspect_ratio": "16:9" (optional)
+                "aspect_ratio": "16:9" (optional),
+                "reference_image": "base64 encoded image" (optional - for brand extraction)
             }
 
         Response JSON:
@@ -148,22 +227,63 @@ def create_studio_routes(
                     "error": f"Generator {content_type} is not available. Check API keys."
                 }), 503
 
-            # Get notebook content
+            # Get notebook content from vector store (primary) or synopsis (fallback)
             content = ""
-            if synopsis_manager:
+
+            # Primary: Try to get actual document content from vector store
+            if vector_store:
+                try:
+                    nodes = vector_store.get_nodes_by_notebook_sql(notebook_id)
+                    if nodes:
+                        # Combine all node text, limit to 4000 chars for context
+                        all_text = "\n\n".join([
+                            node.get_content() if hasattr(node, 'get_content') else str(node.text)
+                            for node in nodes
+                        ])
+                        content = all_text[:4000]  # Gemini can handle more than synopsis
+                        logger.info(f"Retrieved {len(nodes)} nodes ({len(content)} chars) for notebook {notebook_id}")
+                except Exception as e:
+                    logger.warning(f"Could not get notebook content from vector store: {e}")
+
+            # Fallback: Try synopsis manager for legacy offerings
+            if not content and synopsis_manager:
                 try:
                     synopsis = synopsis_manager.get_synopsis(notebook_id)
                     content = synopsis.get("synopsis", "") if synopsis else ""
+                    if content:
+                        logger.info(f"Using synopsis for notebook {notebook_id}")
                 except Exception as e:
                     logger.warning(f"Could not get synopsis: {e}")
 
             if not content:
+                logger.warning(f"No content found for notebook {notebook_id}, using generic prompt")
                 content = f"Generate a {content_type} about the notebook content."
 
             # Generate the content
             kwargs = {}
             if aspect_ratio:
                 kwargs["aspect_ratio"] = aspect_ratio
+
+            # Extract brand info from reference image if provided
+            reference_image = data.get("reference_image")
+            if reference_image and vision_manager:
+                try:
+                    # Decode base64 image and save to temp file
+                    image_data = base64.b64decode(reference_image)
+                    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp_file:
+                        tmp_file.write(image_data)
+                        tmp_path = tmp_file.name
+
+                    # Extract brand info using Vision API
+                    brand_info = _extract_brand_from_image(vision_manager, tmp_path)
+                    if brand_info:
+                        kwargs["brand_info"] = brand_info
+                        logger.info(f"Extracted brand info from reference image: {brand_info}")
+
+                    # Clean up temp file
+                    os.unlink(tmp_path)
+                except Exception as e:
+                    logger.warning(f"Could not extract brand info from reference image: {e}")
 
             result = generator.generate(
                 content=content,

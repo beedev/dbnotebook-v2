@@ -11,6 +11,8 @@ import {
   X,
   ExternalLink,
   RefreshCw,
+  Upload,
+  Palette,
 } from 'lucide-react';
 import type { GeneratedContent, StudioGeneratorInfo } from '../../types';
 import {
@@ -40,6 +42,8 @@ export function ContentStudio({ notebookId, notebookName }: ContentStudioProps) 
   const [isLoadingGallery, setIsLoadingGallery] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [previewContent, setPreviewContent] = useState<GeneratedContent | null>(null);
+  const [referenceImage, setReferenceImage] = useState<string | null>(null);
+  const [referenceImageName, setReferenceImageName] = useState<string | null>(null);
 
   // Load generators on mount
   useEffect(() => {
@@ -76,6 +80,54 @@ export function ContentStudio({ notebookId, notebookName }: ContentStudioProps) 
     }
   };
 
+  // Convert file to base64
+  const fileToBase64 = (file: File): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.readAsDataURL(file);
+      reader.onload = () => {
+        const result = reader.result as string;
+        // Remove data URL prefix (e.g., "data:image/png;base64,")
+        const base64 = result.split(',')[1];
+        resolve(base64);
+      };
+      reader.onerror = error => reject(error);
+    });
+  };
+
+  // Handle reference image upload
+  const handleReferenceImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    // Validate file type
+    if (!file.type.startsWith('image/')) {
+      setError('Please upload an image file (PNG, JPG, etc.)');
+      return;
+    }
+
+    // Validate file size (max 5MB)
+    if (file.size > 5 * 1024 * 1024) {
+      setError('Image file must be less than 5MB');
+      return;
+    }
+
+    try {
+      const base64 = await fileToBase64(file);
+      setReferenceImage(base64);
+      setReferenceImageName(file.name);
+      setError(null);
+    } catch {
+      setError('Failed to process image');
+    }
+  };
+
+  // Clear reference image
+  const clearReferenceImage = () => {
+    setReferenceImage(null);
+    setReferenceImageName(null);
+  };
+
   const handleGenerate = async () => {
     if (!notebookId) return;
 
@@ -87,6 +139,7 @@ export function ContentStudio({ notebookId, notebookName }: ContentStudioProps) 
         notebook_id: notebookId,
         type: selectedGenerator as 'infographic' | 'mindmap',
         prompt: customPrompt || undefined,
+        reference_image: referenceImage || undefined,
       });
 
       // Add to gallery at the beginning
@@ -193,6 +246,42 @@ export function ContentStudio({ notebookId, notebookName }: ContentStudioProps) 
                 rows={2}
                 disabled={isGenerating}
               />
+            </div>
+
+            {/* Reference image for brand extraction */}
+            <div className="space-y-2">
+              <label className="text-xs font-medium text-text-muted uppercase tracking-wider flex items-center gap-1">
+                <Palette className="w-3 h-3" />
+                Brand Reference (optional)
+              </label>
+              {referenceImage ? (
+                <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-void-surface border border-glow/30">
+                  <ImageIcon className="w-4 h-4 text-glow" />
+                  <span className="text-sm text-text truncate flex-1">{referenceImageName}</span>
+                  <button
+                    onClick={clearReferenceImage}
+                    className="p-1 rounded hover:bg-void-lighter text-text-dim hover:text-text transition-colors"
+                    title="Remove reference image"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                </div>
+              ) : (
+                <label className="flex items-center gap-2 px-3 py-2 rounded-lg bg-void-surface border border-void-lighter border-dashed cursor-pointer hover:border-glow/50 hover:bg-void-lighter transition-colors">
+                  <Upload className="w-4 h-4 text-text-dim" />
+                  <span className="text-sm text-text-dim">Upload logo/brand image for color extraction</span>
+                  <input
+                    type="file"
+                    accept="image/*"
+                    onChange={handleReferenceImageUpload}
+                    className="hidden"
+                    disabled={isGenerating}
+                  />
+                </label>
+              )}
+              <p className="text-xs text-text-dim">
+                Colors and style will be extracted from the image
+              </p>
             </div>
 
             {/* Generate button */}
