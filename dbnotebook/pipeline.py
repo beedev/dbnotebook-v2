@@ -1,4 +1,5 @@
 import logging
+import os
 import time
 from typing import Optional
 
@@ -39,6 +40,7 @@ class LocalRAGPipeline:
         database_url: Optional[str] = None
     ) -> None:
         self._host = host
+        self._ollama_host = os.getenv("OLLAMA_HOST", host)
         self._language = "eng"
         self._model_name = ""
         self._system_prompt = get_system_prompt("eng", is_rag_prompt=False)
@@ -231,7 +233,7 @@ class LocalRAGPipeline:
         self._default_model = LocalRAGModel.set(
             model_name=self._model_name,
             system_prompt=self._system_prompt,
-            host=self._host,
+            host=self._ollama_host,
             setting=self._settings
         )
         Settings.llm = self._default_model
@@ -270,7 +272,7 @@ class LocalRAGPipeline:
         """Update the embedding model."""
         Settings.embed_model = LocalEmbedding.set(
             model_name=model_name,
-            host=self._host,
+            host=self._ollama_host,
             setting=self._settings
         )
         logger.info(f"Embedding model updated: {model_name}")
@@ -278,20 +280,20 @@ class LocalRAGPipeline:
     def pull_model(self, model_name: str):
         """Pull an LLM model from Ollama."""
         logger.info(f"Pulling model: {model_name}")
-        return LocalRAGModel.pull(self._host, model_name)
+        return LocalRAGModel.pull(self._ollama_host, model_name)
 
     def pull_embed_model(self, model_name: str):
         """Pull an embedding model from Ollama."""
         logger.info(f"Pulling embedding model: {model_name}")
-        return LocalEmbedding.pull(self._host, model_name)
+        return LocalEmbedding.pull(self._ollama_host, model_name)
 
     def check_exist(self, model_name: str) -> bool:
         """Check if an LLM model exists on Ollama."""
-        return LocalRAGModel.check_model_exist(self._host, model_name)
+        return LocalRAGModel.check_model_exist(self._ollama_host, model_name)
 
     def check_exist_embed(self, model_name: str) -> bool:
         """Check if an embedding model exists on Ollama."""
-        return LocalEmbedding.check_model_exist(self._host, model_name)
+        return LocalEmbedding.check_model_exist(self._ollama_host, model_name)
 
     def store_nodes(
         self,
@@ -726,8 +728,19 @@ class LocalRAGPipeline:
         # Create SimpleChatEngine on first use (lazy initialization)
         if self._simple_chat_engine is None:
             logger.info("Initializing SimpleChatEngine for general chat mode")
+            # Get dynamic token limit based on LLM's context window
+            try:
+                model_context_window = getattr(self._default_model.metadata, 'context_window', None)
+                if model_context_window and model_context_window > 0:
+                    token_limit = int(model_context_window * 0.6)
+                    logger.debug(f"Dynamic token limit: {token_limit} (60% of {model_context_window})")
+                else:
+                    token_limit = self._settings.ollama.chat_token_limit
+            except Exception:
+                token_limit = self._settings.ollama.chat_token_limit
+
             memory = ChatMemoryBuffer.from_defaults(
-                token_limit=self._settings.ollama.chat_token_limit
+                token_limit=token_limit
             )
             self._simple_chat_engine = SimpleChatEngine.from_defaults(
                 llm=self._default_model,

@@ -36,6 +36,7 @@ class FlaskChatbotUI:
     ):
         self._pipeline = pipeline
         self._host = host
+        self._ollama_host = os.getenv("OLLAMA_HOST", "localhost")
         self._data_dir = Path(data_dir)
         self._upload_dir = Path(upload_dir)
         self._processed_files: list[str] = []  # Track processed files
@@ -849,7 +850,7 @@ Output ONLY valid JSON, nothing else."""
 
             # Check Ollama connection
             try:
-                ollama_url = f"http://{self._host}:11434/api/tags"
+                ollama_url = f"http://{self._ollama_host}:11434/api/tags"
                 response = requests.get(ollama_url, timeout=5)
                 if response.status_code == 200:
                     models = response.json().get("models", [])
@@ -1113,7 +1114,7 @@ Output ONLY valid JSON, nothing else."""
 
                     if provider_key == "ollama":
                         # For Ollama, auto-detect models from server
-                        ollama_models = LocalRAGModel.list_available_models(self._host)
+                        ollama_models = LocalRAGModel.list_available_models(self._ollama_host)
 
                         # If whitelist is defined in config, filter models
                         whitelist = [m.name for m in provider_config.models] if provider_config.models else None
