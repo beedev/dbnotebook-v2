@@ -85,7 +85,7 @@ class LocalRAGPipeline:
         self._ingestion = LocalDataIngestion(
             setting=self._settings,
             max_workers=4,
-            use_cache=True,
+            use_cache=False,  # Disabled - using pgvector for persistence
             db_manager=self._db_manager,
             vector_store=self._vector_store
         )
