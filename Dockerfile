@@ -12,8 +12,12 @@ RUN apt-get update && apt-get install -y \
 RUN python -m venv /app/venv
 ENV PATH="/app/venv/bin:$PATH"
 
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Install CPU-only PyTorch first (much smaller than CUDA version)
+RUN pip install --no-cache-dir torch==2.9.1 --index-url https://download.pytorch.org/whl/cpu
+
+# Install remaining dependencies (without torch)
+COPY requirements-docker.txt .
+RUN pip install --no-cache-dir -r requirements-docker.txt
 
 # Runtime stage
 FROM python:3.11-slim
