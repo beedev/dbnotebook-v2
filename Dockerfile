@@ -18,6 +18,12 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Runtime stage
 FROM python:3.11-slim
 
+# OCI labels for GitHub Container Registry
+LABEL org.opencontainers.image.source="https://github.com/beedev/dbnotebook"
+LABEL org.opencontainers.image.description="Multimodal RAG Sales Enablement System"
+LABEL org.opencontainers.image.licenses="Apache-2.0"
+LABEL org.opencontainers.image.version="1.0.0"
+
 WORKDIR /app
 
 RUN apt-get update && apt-get install -y \
