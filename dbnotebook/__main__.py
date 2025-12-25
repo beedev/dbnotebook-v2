@@ -77,12 +77,15 @@ def main():
     upload_path.mkdir(parents=True, exist_ok=True)
     logger.debug(f"Data directory: {data_path.absolute()}")
 
-    # Start Ollama server if running locally
-    if args.host != "host.docker.internal":
+    # Start Ollama server if running locally (not in Docker)
+    ollama_host = os.getenv("OLLAMA_HOST", "localhost")
+    if "host.docker.internal" not in ollama_host:
         port_number = 11434
         if not is_port_open(port_number):
             logger.info("Starting Ollama server...")
             run_ollama_server()
+    else:
+        logger.info(f"Running in Docker - using external Ollama at {ollama_host}")
 
     # Initialize settings
     from .setting import get_settings
