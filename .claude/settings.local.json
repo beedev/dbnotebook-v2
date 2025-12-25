@@ -39,7 +39,19 @@
       "Bash(alembic upgrade:*)",
       "Bash(docker exec:*)",
       "Bash(docker ps:*)",
-      "Bash(docker inspect:*)"
+      "Bash(docker inspect:*)",
+      "Bash(python3:*)",
+      "Bash(pip show:*)",
+      "Bash(git log:*)",
+      "Bash(pip index:*)",
+      "Bash(git diff:*)",
+      "Bash(git checkout:*)",
+      "Bash(ls:*)",
+      "Bash(pip freeze:*)",
+      "Bash(docker compose build:*)",
+      "Bash(docker info:*)",
+      "Bash(docker pull python:3.11-slim)",
+      "Bash(docker compose:*)"
     ],
     "deny": [],
     "ask": []

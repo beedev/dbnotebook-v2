@@ -1,31 +1,37 @@
-version: '3.8'
-
 services:
   dbnotebook:
+    image: dbnotebook:latest
     container_name: dbnotebook
     build: .
     ports:
       - "7860:7860"
+    env_file:
+      - .env
     environment:
+      # Docker-specific overrides (these take precedence over .env)
       - DATABASE_URL=postgresql://dbnotebook:dbnotebook@postgres:5432/dbnotebook_dev
       - POSTGRES_HOST=postgres
       - POSTGRES_PORT=5432
-      - POSTGRES_DB=dbnotebook_dev
-      - POSTGRES_USER=dbnotebook
-      - POSTGRES_PASSWORD=dbnotebook
       - OLLAMA_HOST=host.docker.internal
-      - OLLAMA_PORT=11434
     depends_on:
       postgres:
         condition: service_healthy
     volumes:
-      - ./data:/app/data
-      - ./outputs:/app/outputs
-      - ./uploads:/app/uploads
+      - ./config:/app/config:ro         # models.yaml - editable
+      - ./data:/app/data                # documents, cache
+      - ./outputs:/app/outputs          # generated content
+      - ./uploads:/app/uploads          # user uploads
     extra_hosts:
       - "host.docker.internal:host-gateway"
     networks:
       - dbnotebook_network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:7860/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
 
   postgres:
     container_name: dbnotebook_postgres
@@ -45,6 +51,7 @@ services:
       retries: 5
     networks:
       - dbnotebook_network
+    restart: unless-stopped
 
 volumes:
   postgres_data:

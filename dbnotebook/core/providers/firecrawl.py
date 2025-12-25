@@ -46,9 +46,9 @@ class FirecrawlSearchProvider(WebSearchProvider):
     def _initialize(self) -> None:
         """Initialize the Firecrawl client."""
         try:
-            from firecrawl import Firecrawl
+            from firecrawl import FirecrawlApp
 
-            self._client = Firecrawl(api_key=self._api_key)
+            self._client = FirecrawlApp(api_key=self._api_key)
             logger.debug("Initialized Firecrawl Search provider")
         except ImportError:
             raise ImportError(
@@ -79,11 +79,10 @@ class FirecrawlSearchProvider(WebSearchProvider):
         num_results = max(1, min(num_results, 20))
 
         try:
-            # Firecrawl search API (v2)
+            # Firecrawl search API
             response = self._client.search(
                 query=query,
-                limit=num_results,
-                **kwargs
+                params={"limit": num_results}
             )
 
             results = []

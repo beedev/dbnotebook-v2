@@ -20,9 +20,9 @@ providers:
     requires_api_key: false
     # Models are auto-detected from running Ollama server
     # You can optionally specify a whitelist to filter:
-    # models:
-    #   - name: "llama3.1:latest"
-    #   - name: "mistral:latest"
+    models:
+    - name: "llama3.1:latest"
+    - name: "qwen2:7b"
 
   openai:
     enabled: true
@@ -64,6 +64,10 @@ providers:
     requires_api_key: true
     env_key: "GOOGLE_API_KEY"
     models:
+      - name: "gemini-2.5-pro"
+        display_name: "Gemini 2.5 Pro"
+      - name: "gemini-2.5-flash"
+        display_name: "Gemini 2.5 Flash"
       - name: "gemini-2.0-flash-exp"
         display_name: "Gemini 2.0 Flash"
       - name: "gemini-1.5-pro"

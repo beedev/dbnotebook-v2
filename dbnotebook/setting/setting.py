@@ -50,13 +50,15 @@ class OllamaSettings(BaseModel):
         default=11434, description="Port number"
     )
     context_window: int = Field(
-        default=8000, description="Context window size"
+        default_factory=lambda: int(os.getenv("CONTEXT_WINDOW", "128000")),
+        description="Context window size"
     )
     temperature: float = Field(
         default=0.1, description="Temperature"
     )
     chat_token_limit: int = Field(
-        default=8000, description="Chat memory limit"
+        default_factory=lambda: int(os.getenv("CHAT_TOKEN_LIMIT", "32000")),
+        description="Chat memory limit"
     )
 
 
@@ -84,8 +86,8 @@ class RetrieverSettings(BaseModel):
 
 class IngestionSettings(BaseModel):
     embed_llm: str = Field(
-        ##default="BAAI/bge-large-en-v1.5", description="Embedding LLM model"
-        default="nomic-ai/nomic-embed-text-v1.5", description="Embedding LLM model"
+        default_factory=lambda: os.getenv("DEFAULT_EMBEDDING_MODEL", "text-embedding-3-small"),
+        description="Embedding LLM model"
     )
     embed_batch_size: int = Field(
         default=8, description="Embedding batch size"

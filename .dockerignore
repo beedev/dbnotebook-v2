@@ -1,5 +1,31 @@
-dist/
-data/
-assets/
+# Mounted volumes (not copied into image)
+.env
+.env.*
+config/
+
+# Development
+venv/
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.git/
+.gitignore
+
+# IDE
 .vscode/
+.idea/
+
+# Build artifacts
+*.egg-info/
 *.ipynb
+assets/
+dist/
+
+# Docs
+docs/
+*.md
+!README.md
+
+# Tests
+tests/

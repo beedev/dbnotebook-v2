@@ -5,7 +5,7 @@ from llama_index.core.chat_engine import CondensePlusContextChatEngine, SimpleCh
 from llama_index.core.memory import ChatMemoryBuffer
 from llama_index.core.llms.llm import LLM
 from llama_index.core.schema import BaseNode
-from llama_index.core.prompts import PromptTemplate
+# PromptTemplate not needed - llama-index 0.10.x expects string for prompts
 
 from .retriever import LocalRetriever
 from ..prompt import get_condense_prompt
@@ -55,9 +55,24 @@ class LocalChatEngine:
         Returns:
             Configured chat engine
         """
+        # Get dynamic token limit based on LLM's context window
+        # Use 60% of context window for memory to leave room for retrieved context + response
+        try:
+            model_context_window = getattr(llm.metadata, 'context_window', None)
+            if model_context_window and model_context_window > 0:
+                # Use 60% for memory, leaving 40% for retrieved context + response
+                token_limit = int(model_context_window * 0.6)
+                logger.debug(f"Dynamic token limit: {token_limit} (60% of {model_context_window})")
+            else:
+                token_limit = self._setting.ollama.chat_token_limit
+                logger.debug(f"Using default token limit: {token_limit}")
+        except Exception as e:
+            token_limit = self._setting.ollama.chat_token_limit
+            logger.debug(f"Fallback to default token limit: {token_limit} (error: {e})")
+
         # Create memory buffer with optional preserved history
         memory = ChatMemoryBuffer(
-            token_limit=self._setting.ollama.chat_token_limit,
+            token_limit=token_limit,
             chat_history=chat_history or []
         )
 
@@ -81,14 +96,14 @@ class LocalChatEngine:
         )
 
         # Get custom condense prompt for preserving customer context
+        # Note: llama-index 0.10.x expects string, not PromptTemplate
         condense_prompt_str = get_condense_prompt(language)
-        condense_prompt = PromptTemplate(condense_prompt_str)
 
         return CondensePlusContextChatEngine.from_defaults(
             retriever=retriever,
             llm=llm,
             memory=memory,
-            condense_prompt=condense_prompt
+            condense_prompt=condense_prompt_str
         )
 
     def clear_retriever_cache(self) -> None:

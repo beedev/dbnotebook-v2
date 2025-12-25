@@ -48,12 +48,14 @@ class LocalEmbedding:
             return _embedding_cache[cache_key]
 
         # Create new embedding model
-        if model_name == "text-embedding-ada-002":
+        # OpenAI embedding models (text-embedding-ada-002, text-embedding-3-small, text-embedding-3-large)
+        openai_embed_models = {"text-embedding-ada-002", "text-embedding-3-small", "text-embedding-3-large"}
+        if model_name in openai_embed_models:
             if not os.getenv("OPENAI_API_KEY"):
                 logger.warning(
                     "OPENAI_API_KEY not set. OpenAI embeddings may fail."
                 )
-            model = OpenAIEmbedding()
+            model = OpenAIEmbedding(model=model_name)
         else:
             cache_folder = os.path.join(
                 os.getcwd(),
