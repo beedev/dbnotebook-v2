@@ -12,6 +12,9 @@ services:
       - DATABASE_URL=postgresql://dbnotebook:dbnotebook@postgres:5432/dbnotebook_dev
       - POSTGRES_HOST=postgres
       - POSTGRES_PORT=5432
+      - POSTGRES_DB=dbnotebook_dev
+      - POSTGRES_USER=dbnotebook
+      - POSTGRES_PASSWORD=dbnotebook
       - OLLAMA_HOST=host.docker.internal
     depends_on:
       postgres:

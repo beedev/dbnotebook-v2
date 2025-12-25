@@ -278,7 +278,7 @@ class LocalDataIngestion:
         self,
         setting: RAGSettings | None = None,
         max_workers: int = 4,
-        use_cache: bool = True,
+        use_cache: bool = False,  # Disabled by default - use fresh DB queries instead
         db_manager: Optional[DatabaseManager] = None,
         vector_store = None
     ) -> None:
@@ -287,10 +287,13 @@ class LocalDataIngestion:
         self._ingested_file: List[str] = []
         self._max_workers = max_workers
 
+        # Clean up deprecated cache files on startup
+        self._cleanup_old_cache()
+
         # Initialize components
         self._reader = DocumentReader()
         self._processor = TextProcessor()
-        self._cache = NodeCache() if use_cache else None
+        self._cache = NodeCache() if use_cache else None  # Disabled - causes stale data issues
         self._synopsis_manager = SynopsisManager()
 
         # Notebook integration
@@ -307,6 +310,20 @@ class LocalDataIngestion:
             paragraph_separator=self._setting.ingestion.paragraph_sep,
             secondary_chunking_regex=self._setting.ingestion.chunking_regex
         )
+
+    def _cleanup_old_cache(self) -> None:
+        """Clean up deprecated node cache files on startup."""
+        cache_dir = Path("data/node_cache")
+        if cache_dir.exists():
+            deleted_count = 0
+            for cache_file in cache_dir.glob("*.pkl"):
+                try:
+                    cache_file.unlink()
+                    deleted_count += 1
+                except Exception as e:
+                    logger.warning(f"Error deleting cache file {cache_file}: {e}")
+            if deleted_count > 0:
+                logger.info(f"Cleaned up {deleted_count} deprecated node cache files")
 
     def _calculate_file_hash(self, file_path: str) -> str:
         """Calculate SHA256 hash of file contents for duplicate detection."""
@@ -503,60 +520,25 @@ class LocalDataIngestion:
                     input_file = futures[future]
                     logger.error(f"Error processing {input_file}: {e}")
 
-        # Persist all nodes to pgvector if vector store is available
-        # IMPORTANT: Load existing nodes first to preserve them when adding new files
+        # Persist new nodes to pgvector using incremental add (with duplicate detection)
+        # This is O(n) for n new nodes and handles duplicates gracefully
         if self._vector_store and notebook_id and return_nodes:
             try:
-                # Load existing nodes from pgvector
-                logger.debug(f"Loading existing nodes from pgvector for notebook {notebook_id}")
-                existing_nodes = self._vector_store.load_all_nodes()
+                logger.info(f"Adding {len(return_nodes)} new nodes to pgvector for notebook {notebook_id}")
 
-                # Filter to get only THIS notebook's existing nodes
-                existing_notebook_nodes = self._vector_store.get_nodes_by_notebook(
-                    existing_nodes, notebook_id
+                # Use add_nodes() for incremental add - handles duplicates automatically
+                added_count = self._vector_store.add_nodes(return_nodes, notebook_id=notebook_id)
+
+                # Verify nodes are persisted
+                notebook_nodes = self._vector_store.get_nodes_by_notebook_sql(notebook_id)
+                logger.info(
+                    f"✓ Added {added_count} nodes to pgvector "
+                    f"(total {len(notebook_nodes)} nodes for notebook {notebook_id})"
                 )
-                logger.debug(f"Found {len(existing_notebook_nodes)} existing nodes for notebook {notebook_id}")
-
-                # Combine existing + new nodes
-                all_nodes = existing_notebook_nodes + return_nodes
-                logger.info(f"Persisting {len(all_nodes)} total nodes ({len(existing_notebook_nodes)} existing + {len(return_nodes)} new) to pgvector for notebook {notebook_id}")
-
-                # Persist ALL nodes together (forces rebuild to ensure all are stored)
-                self._vector_store.get_index(all_nodes, force_rebuild=True)
-
-                # CRITICAL: Verify nodes are persisted and readable from pgvector
-                # pgvector writes are synchronous but we verify for safety
-                import time
-                max_retries = 5
-                retry_delay = 0.3  # 300ms (faster for pgvector)
-
-                for attempt in range(max_retries):
-                    loaded_nodes = self._vector_store.load_all_nodes()
-                    notebook_loaded = self._vector_store.get_nodes_by_notebook(
-                        loaded_nodes, notebook_id
-                    )
-
-                    if len(notebook_loaded) >= len(all_nodes):
-                        logger.info(
-                            f"✓ Verified {len(notebook_loaded)} nodes persisted to pgvector "
-                            f"(attempt {attempt + 1}/{max_retries})"
-                        )
-                        break
-                    elif attempt < max_retries - 1:
-                        logger.debug(
-                            f"Waiting for pgvector commit... "
-                            f"(found {len(notebook_loaded)}/{len(all_nodes)} nodes, "
-                            f"attempt {attempt + 1}/{max_retries})"
-                        )
-                        time.sleep(retry_delay)
-                    else:
-                        logger.warning(
-                            f"pgvector verification timeout: "
-                            f"only {len(notebook_loaded)}/{len(all_nodes)} nodes readable "
-                            f"after {max_retries * retry_delay}s"
-                        )
             except Exception as e:
                 logger.error(f"Error persisting nodes to pgvector: {e}")
+                import traceback
+                logger.error(traceback.format_exc())
 
         logger.info(f"Total nodes created: {len(return_nodes)}")
         return return_nodes

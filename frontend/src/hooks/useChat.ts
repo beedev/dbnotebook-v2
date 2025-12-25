@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
 import type { Message, ChatState, SourceCitation } from '../types';
 import * as api from '../services/api';
 
@@ -18,6 +18,55 @@ function generateId(): string {
 export function useChat(notebookId?: string, model?: string) {
   const [state, setState] = useState<ChatState>(initialState);
   const abortControllerRef = useRef<AbortController | null>(null);
+  const loadedNotebookRef = useRef<string | null>(null);
+
+  // Load conversation history when notebook changes
+  useEffect(() => {
+    if (!notebookId || loadedNotebookRef.current === notebookId) {
+      return;
+    }
+
+    const loadHistory = async () => {
+      try {
+        setState(prev => ({ ...prev, isLoading: true, error: null }));
+        const response = await api.getConversationHistory(notebookId);
+
+        if (response.success && response.messages.length > 0) {
+          const loadedMessages: Message[] = response.messages.map(msg => ({
+            id: msg.id || generateId(),
+            role: msg.role,
+            content: msg.content,
+            timestamp: new Date(msg.timestamp),
+          }));
+
+          setState(prev => ({
+            ...prev,
+            messages: loadedMessages,
+            isLoading: false,
+          }));
+        } else {
+          // No history, start fresh
+          setState(prev => ({
+            ...prev,
+            messages: [],
+            isLoading: false,
+          }));
+        }
+        loadedNotebookRef.current = notebookId;
+      } catch (error) {
+        console.error('Failed to load conversation history:', error);
+        // Don't show error to user, just start with empty chat
+        setState(prev => ({
+          ...prev,
+          messages: [],
+          isLoading: false,
+        }));
+        loadedNotebookRef.current = notebookId;
+      }
+    };
+
+    loadHistory();
+  }, [notebookId]);
 
   // Add a user message
   const addUserMessage = useCallback((content: string): Message => {
@@ -162,10 +211,13 @@ export function useChat(notebookId?: string, model?: string) {
     try {
       await api.clearChat();
       setState(initialState);
+      // Reset loaded notebook ref so history can be reloaded if needed
+      loadedNotebookRef.current = null;
     } catch (error) {
       console.error('Failed to clear chat:', error);
       // Clear locally anyway
       setState(initialState);
+      loadedNotebookRef.current = null;
     }
   }, []);
 

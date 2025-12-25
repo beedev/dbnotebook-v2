@@ -530,6 +530,18 @@ Output ONLY valid JSON, nothing else."""
                             err_msg = f"\n Image generation failed: {str(img_error)}\n"
                             yield f"data: {json.dumps({'token': err_msg})}\n\n"
 
+                        # Save conversation for image generation
+                        if notebook_id:
+                            try:
+                                self._pipeline.save_conversation_exchange(
+                                    notebook_id=notebook_id,
+                                    user_id="00000000-0000-0000-0000-000000000001",
+                                    user_message=message,
+                                    assistant_message=document_context
+                                )
+                            except Exception as save_err:
+                                logger.warning(f"Failed to save conversation: {save_err}")
+
                         yield f"data: {json.dumps({'done': True})}\n\n"
 
                     elif self._is_image_generation_request(message) and not self._image_provider:
@@ -539,6 +551,19 @@ Output ONLY valid JSON, nothing else."""
                         # Fall through to return the text response
                         for token in document_context:
                             yield f"data: {json.dumps({'token': token})}\n\n"
+
+                        # Save conversation
+                        if notebook_id:
+                            try:
+                                self._pipeline.save_conversation_exchange(
+                                    notebook_id=notebook_id,
+                                    user_id="00000000-0000-0000-0000-000000000001",
+                                    user_message=message,
+                                    assistant_message=document_context
+                                )
+                            except Exception as save_err:
+                                logger.warning(f"Failed to save conversation: {save_err}")
+
                         yield f"data: {json.dumps({'done': True})}\n\n"
 
                     else:
@@ -593,6 +618,18 @@ Output ONLY valid JSON, nothing else."""
                                 logger.info(f"Found {len(sources)} unique sources for response")
                         except Exception as src_err:
                             logger.warning(f"Error extracting sources: {src_err}")
+
+                        # Save conversation to database
+                        if notebook_id:
+                            try:
+                                self._pipeline.save_conversation_exchange(
+                                    notebook_id=notebook_id,
+                                    user_id="00000000-0000-0000-0000-000000000001",
+                                    user_message=message,
+                                    assistant_message=document_context
+                                )
+                            except Exception as save_err:
+                                logger.warning(f"Failed to save conversation: {save_err}")
 
                         # Send sources with the done signal
                         yield f"data: {json.dumps({'done': True, 'sources': sources})}\n\n"
@@ -1268,17 +1305,16 @@ Output ONLY valid JSON, nothing else."""
         try:
             self._studio_manager = StudioManager(self._db_manager)
             self._synopsis_manager = SynopsisManager()  # Create fresh instance
-            # Get vector store from pipeline for direct content retrieval
-            vector_store = self._pipeline._vector_store if self._pipeline else None
+            # Pass pipeline for retrieval-based content selection (same as Chat)
             create_studio_routes(
                 self._app,
                 self._studio_manager,
                 self._synopsis_manager,
-                vector_store=vector_store,
+                pipeline=self._pipeline,
             )
             logger.info("Content Studio routes registered")
-            if vector_store:
-                logger.info("Content Studio using vector store for content retrieval")
+            if self._pipeline:
+                logger.info("Content Studio using pipeline retriever for content selection")
         except Exception as e:
             logger.warning(f"Content Studio routes not available: {e}")
             self._studio_manager = None
@@ -1695,6 +1731,68 @@ Output ONLY valid JSON, nothing else."""
                 })
             except Exception as e:
                 logger.error(f"Error updating notebook document: {e}")
+                return jsonify({"success": False, "error": str(e)}), 500
+
+        @self._app.route("/api/notebooks/<notebook_id>/conversations", methods=["GET"])
+        def get_notebook_conversations(notebook_id):
+            """Get conversation history for a notebook."""
+            try:
+                # Use the same default user UUID as the rest of the system
+                default_user_id = "00000000-0000-0000-0000-000000000001"
+                user_id = request.args.get("user_id", default_user_id)
+                limit = request.args.get("limit", 100, type=int)
+                offset = request.args.get("offset", 0, type=int)
+
+                # Get conversation history from the store
+                history = self._pipeline._conversation_store.get_conversation_history(
+                    notebook_id=notebook_id,
+                    user_id=user_id,
+                    limit=limit,
+                    offset=offset
+                )
+
+                # Transform to frontend-friendly format
+                messages = []
+                for entry in history:
+                    messages.append({
+                        "id": entry.get("conversation_id", ""),
+                        "role": entry.get("role", "user"),
+                        "content": entry.get("content", ""),
+                        "timestamp": entry.get("timestamp", "").isoformat() if hasattr(entry.get("timestamp", ""), "isoformat") else str(entry.get("timestamp", ""))
+                    })
+
+                return jsonify({
+                    "success": True,
+                    "messages": messages,
+                    "count": len(messages)
+                })
+            except Exception as e:
+                logger.error(f"Error getting conversation history: {e}")
+                return jsonify({"success": False, "error": str(e)}), 500
+
+        @self._app.route("/api/notebooks/<notebook_id>/clear-chat", methods=["POST"])
+        def clear_notebook_chat(notebook_id):
+            """Clear all conversation history for a notebook."""
+            try:
+                # Use the same default user UUID as the rest of the system
+                default_user_id = "00000000-0000-0000-0000-000000000001"
+                user_id = request.json.get("user_id", default_user_id) if request.json else default_user_id
+
+                # Clear conversation history from the store
+                deleted_count = self._pipeline._conversation_store.clear_notebook_history(
+                    notebook_id=notebook_id,
+                    user_id=user_id
+                )
+
+                logger.info(f"Cleared {deleted_count} conversations for notebook {notebook_id}")
+
+                return jsonify({
+                    "success": True,
+                    "cleared": deleted_count,
+                    "message": f"Cleared {deleted_count} conversation entries"
+                })
+            except Exception as e:
+                logger.error(f"Error clearing conversation history: {e}")
                 return jsonify({"success": False, "error": str(e)}), 500
 
         # React SPA catch-all route - must be last to not interfere with API routes

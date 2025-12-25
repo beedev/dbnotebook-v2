@@ -47,22 +47,35 @@ class PGVectorStore:
         self._host = host
         self._persist = persist
 
-        # PostgreSQL connection settings from environment
-        self._db_host = os.getenv("POSTGRES_HOST", "localhost")
-        self._db_port = int(os.getenv("POSTGRES_PORT", "5433"))
-        self._db_name = os.getenv("POSTGRES_DB", "dbnotebook_dev")
-        self._db_user = os.getenv("POSTGRES_USER", "postgres")
-        self._db_password = os.getenv("POSTGRES_PASSWORD", "root")
+        # Use DATABASE_URL directly (same as DatabaseManager) for consistency
+        # Falls back to building from individual vars for backwards compatibility
+        database_url = os.getenv("DATABASE_URL")
+        if database_url:
+            # Parse DATABASE_URL: postgresql://user:password@host:port/database
+            from urllib.parse import urlparse
+            parsed = urlparse(database_url)
+            self._db_host = parsed.hostname or "localhost"
+            self._db_port = parsed.port or 5432
+            self._db_name = parsed.path.lstrip('/') if parsed.path else "dbnotebook_dev"
+            self._db_user = parsed.username or "postgres"
+            self._db_password = parsed.password or ""
+        else:
+            # Fallback: use individual environment variables
+            self._db_host = os.getenv("POSTGRES_HOST", "localhost")
+            self._db_port = int(os.getenv("POSTGRES_PORT", "5433"))
+            self._db_name = os.getenv("POSTGRES_DB", "dbnotebook_dev")
+            self._db_user = os.getenv("POSTGRES_USER", "postgres")
+            self._db_password = os.getenv("POSTGRES_PASSWORD", "root")
 
-        # pgvector settings
-        self._table_name = os.getenv("PGVECTOR_TABLE_NAME", "embeddings")
-        self._embed_dim = int(os.getenv("PGVECTOR_EMBED_DIM", "768"))
-
-        # Build connection URL
+        # Build connection string for SQLAlchemy
         self._connection_string = (
             f"postgresql://{self._db_user}:{self._db_password}@"
             f"{self._db_host}:{self._db_port}/{self._db_name}"
         )
+
+        # pgvector settings
+        self._table_name = os.getenv("PGVECTOR_TABLE_NAME", "embeddings")
+        self._embed_dim = int(os.getenv("PGVECTOR_EMBED_DIM", "768"))
 
         # Initialize SQLAlchemy engine for direct queries
         self._engine = create_engine(self._connection_string)

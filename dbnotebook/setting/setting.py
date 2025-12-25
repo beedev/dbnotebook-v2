@@ -64,7 +64,7 @@ class OllamaSettings(BaseModel):
 
 class RetrieverSettings(BaseModel):
     num_queries: int = Field(
-        default=5, description="Number of generated queries"
+        default=3, description="Number of generated queries"
     )
     similarity_top_k: int = Field(
         default=10, description="Top k documents"

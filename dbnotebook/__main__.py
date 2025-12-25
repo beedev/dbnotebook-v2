@@ -88,7 +88,7 @@ def main():
     from .setting import get_settings
     settings = get_settings()
 
-    # Use simple logging
+    # Use simple logging for observability
     llama_index.core.set_global_handler("simple")
     logger.info("Using simple logging for observability")
 

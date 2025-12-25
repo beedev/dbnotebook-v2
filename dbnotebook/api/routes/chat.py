@@ -68,17 +68,26 @@ def create_chat_routes(app, pipeline):
 
             logger.info(f"Chat request: mode={mode}, notebook_ids={notebook_ids}, stream={stream}")
 
-            # Load notebook documents if specified
+            # Configure pipeline settings
+            pipeline.set_language(pipeline._language)
+            pipeline.set_model()
+
+            # Initialize chat engine WITH notebook filter so it uses the right documents
+            # This is critical - set_engine() loads nodes from the specified notebooks
             if notebook_ids:
-                logger.info(f"Loading documents for notebooks: {notebook_ids}")
-                doc_count = pipeline.load_notebook_documents(notebook_ids)
-                logger.info(f"Loaded {doc_count} documents from notebooks {notebook_ids}")
+                pipeline.set_engine(offering_filter=notebook_ids, force_reset=True)
+                logger.info(f"Engine configured with notebook filter: {notebook_ids}")
+            else:
+                pipeline.set_engine(force_reset=True)
+                logger.info("Engine configured without notebook filter")
 
-            # Always initialize chat engine (works with or without documents)
-            pipeline.set_chat_mode(force_reset=True)
-
-            # Get nodes for source extraction
-            nodes = pipeline._ingestion._node_store
+            # Get fresh nodes from database for source attribution
+            nodes = []
+            if notebook_ids and hasattr(pipeline, '_vector_store') and pipeline._vector_store:
+                for nb_id in notebook_ids:
+                    nb_nodes = pipeline._vector_store.get_nodes_by_notebook_sql(nb_id)
+                    nodes.extend(nb_nodes)
+                logger.info(f"Retrieved {len(nodes)} nodes for source attribution")
 
             # Perform retrieval to get source metadata BEFORE chat response
             sources = []

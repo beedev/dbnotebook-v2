@@ -86,7 +86,7 @@ def create_studio_routes(
     app,
     studio_manager: StudioManager,
     synopsis_manager: SynopsisManager = None,
-    vector_store=None,
+    pipeline=None,
 ):
     """Create Content Studio API routes.
 
@@ -94,7 +94,7 @@ def create_studio_routes(
         app: Flask application instance
         studio_manager: StudioManager instance
         synopsis_manager: SynopsisManager for getting notebook content (fallback)
-        vector_store: Vector store for retrieving notebook document content (primary)
+        pipeline: LocalRAGPipeline for retrieval-based content selection (same as Chat)
     """
 
     # Initialize vision manager for brand extraction
@@ -227,23 +227,51 @@ def create_studio_routes(
                     "error": f"Generator {content_type} is not available. Check API keys."
                 }), 503
 
-            # Get notebook content from vector store (primary) or synopsis (fallback)
+            # Get notebook content using retrieval (same mechanism as Chat)
             content = ""
+            retrieval_query = prompt or f"Generate a {content_type} about the main topics and key information"
 
-            # Primary: Try to get actual document content from vector store
-            if vector_store:
+            # Primary: Use pipeline retriever for prompt-based content selection
+            if pipeline and hasattr(pipeline, '_vector_store') and pipeline._vector_store:
                 try:
-                    nodes = vector_store.get_nodes_by_notebook_sql(notebook_id)
+                    from llama_index.core.schema import QueryBundle
+                    from llama_index.core import Settings
+
+                    # Get nodes for this notebook
+                    nodes = pipeline._vector_store.get_nodes_by_notebook_sql(notebook_id)
+
                     if nodes:
-                        # Combine all node text, limit to 4000 chars for context
-                        all_text = "\n\n".join([
-                            node.get_content() if hasattr(node, 'get_content') else str(node.text)
-                            for node in nodes
+                        # Configure retriever with notebook filter (same as Chat)
+                        pipeline.set_engine(offering_filter=[notebook_id], force_reset=True)
+
+                        # Get retriever and retrieve relevant chunks based on prompt
+                        retriever = pipeline._engine._retriever.get_retrievers(
+                            llm=Settings.llm,
+                            language="eng",
+                            nodes=nodes,
+                            offering_filter=[notebook_id],
+                            vector_store=pipeline._vector_store
+                        )
+
+                        # Retrieve relevant chunks based on the generation prompt
+                        query_bundle = QueryBundle(query_str=retrieval_query)
+                        retrieval_results = retriever.retrieve(query_bundle)
+
+                        logger.info(f"Retrieved {len(retrieval_results)} relevant chunks for Content Studio (query: '{retrieval_query[:50]}...')")
+
+                        # Combine retrieved chunks, limit to 6000 chars for generation
+                        retrieved_text = "\n\n".join([
+                            node_with_score.node.get_content()
+                            if hasattr(node_with_score.node, 'get_content')
+                            else str(node_with_score.node.text)
+                            for node_with_score in retrieval_results
                         ])
-                        content = all_text[:4000]  # Gemini can handle more than synopsis
-                        logger.info(f"Retrieved {len(nodes)} nodes ({len(content)} chars) for notebook {notebook_id}")
+                        content = retrieved_text[:6000]
+                        logger.info(f"Content Studio using {len(content)} chars from {len(retrieval_results)} retrieved chunks")
                 except Exception as e:
-                    logger.warning(f"Could not get notebook content from vector store: {e}")
+                    logger.warning(f"Could not retrieve content using pipeline: {e}")
+                    import traceback
+                    logger.warning(traceback.format_exc())
 
             # Fallback: Try synopsis manager for legacy offerings
             if not content and synopsis_manager:

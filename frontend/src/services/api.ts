@@ -659,3 +659,44 @@ export async function getStudioGenerators(): Promise<StudioGeneratorsResponse> {
 
   return response.json();
 }
+
+// ============================================
+// Conversation History API
+// ============================================
+
+export interface ConversationMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  timestamp: string;
+}
+
+export interface ConversationHistoryResponse {
+  success: boolean;
+  messages: ConversationMessage[];
+  count: number;
+}
+
+export async function getConversationHistory(
+  notebookId: string,
+  options?: { limit?: number; offset?: number; userId?: string }
+): Promise<ConversationHistoryResponse> {
+  const params = new URLSearchParams();
+  if (options?.limit) params.set('limit', options.limit.toString());
+  if (options?.offset) params.set('offset', options.offset.toString());
+  if (options?.userId) params.set('user_id', options.userId);
+
+  const queryString = params.toString();
+  const url = `/api/notebooks/${notebookId}/conversations${queryString ? `?${queryString}` : ''}`;
+
+  const response = await fetch(url);
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw {
+      error: errorData.error || 'Failed to fetch conversation history',
+      message: errorData.message || `HTTP ${response.status}`,
+      status: response.status,
+    };
+  }
+  return response.json();
+}
