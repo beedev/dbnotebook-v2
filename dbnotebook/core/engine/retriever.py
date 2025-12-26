@@ -1,5 +1,7 @@
 import logging
-from typing import List, Optional
+import re
+from enum import Enum
+from typing import List, Optional, Tuple
 
 from dotenv import load_dotenv
 from llama_index.core.retrievers import (
@@ -24,6 +26,48 @@ from ...setting import get_settings, RAGSettings
 load_dotenv()
 
 logger = logging.getLogger(__name__)
+
+
+class QueryIntent(Enum):
+    """Types of query intent for transformation-aware retrieval."""
+    SUMMARY = "summary"       # User wants document overview/summary
+    INSIGHTS = "insights"     # User wants key takeaways/insights
+    QUESTIONS = "questions"   # User wants reflection questions
+    SEARCH = "search"         # Default: semantic search across all content
+
+
+# Intent detection patterns
+INTENT_PATTERNS = {
+    QueryIntent.SUMMARY: [
+        r'\bsummar(y|ize|ise)\b',
+        r'\boverview\b',
+        r'\bwhat\s+is\s+(this|the\s+document)\s+about\b',
+        r'\bgive\s+me\s+(a\s+)?summary\b',
+        r'\btl;?dr\b',
+        r'\bin\s+brief\b',
+        r'\bhigh[- ]?level\b',
+        r'\bmain\s+(points?|idea)\b',
+    ],
+    QueryIntent.INSIGHTS: [
+        r'\bkey\s+(points?|takeaways?|insights?)\b',
+        r'\bimportant\s+(points?|takeaways?|things?)\b',
+        r'\bwhat\s+(are|were)\s+the\s+(key|main|important)\b',
+        r'\binsights?\b',
+        r'\btakeaways?\b',
+        r'\blessons?\s+learned\b',
+        r'\bactionable\b',
+        r'\bwhat\s+should\s+i\s+(know|remember)\b',
+    ],
+    QueryIntent.QUESTIONS: [
+        r'\bquestions?\s+(to|for)\s+(ask|explore|consider)\b',
+        r'\breflection\s+questions?\b',
+        r'\bwhat\s+questions?\s+(should|can|could)\b',
+        r'\bhelp\s+me\s+(think|explore)\b',
+        r'\bthink\s+(about|deeper)\b',
+        r'\bexplore\s+further\b',
+        r'\bdiscussion\s+questions?\b',
+    ],
+}
 
 
 class TwoStageRetriever(QueryFusionRetriever):
@@ -103,6 +147,120 @@ class LocalRetriever:
         self._index_cache: Optional[VectorStoreIndex] = None
         self._cached_node_count: int = 0
         logger.debug("LocalRetriever initialized")
+
+    def detect_intent(self, query: str) -> Tuple[QueryIntent, float]:
+        """
+        Detect query intent based on keyword patterns.
+
+        Returns:
+            Tuple of (QueryIntent, confidence_score)
+            confidence_score: 0.0-1.0 indicating pattern match strength
+        """
+        query_lower = query.lower().strip()
+
+        # Check each intent type
+        intent_scores = {}
+
+        for intent, patterns in INTENT_PATTERNS.items():
+            matches = 0
+            for pattern in patterns:
+                if re.search(pattern, query_lower, re.IGNORECASE):
+                    matches += 1
+
+            if matches > 0:
+                # Score based on number of pattern matches
+                intent_scores[intent] = min(matches / 2.0, 1.0)
+
+        if not intent_scores:
+            # No patterns matched - default to search
+            return QueryIntent.SEARCH, 0.0
+
+        # Return highest scoring intent
+        best_intent = max(intent_scores, key=intent_scores.get)
+        confidence = intent_scores[best_intent]
+
+        logger.debug(f"Detected intent: {best_intent.value} (confidence: {confidence:.2f}) for query: {query[:50]}...")
+        return best_intent, confidence
+
+    def get_node_types_for_intent(self, intent: QueryIntent) -> List[str]:
+        """
+        Get the node types to prioritize based on detected intent.
+
+        Returns:
+            List of node_type values to filter by
+        """
+        if intent == QueryIntent.SUMMARY:
+            # Summary queries: prioritize summary nodes, fall back to chunks
+            return ["summary", "chunk"]
+        elif intent == QueryIntent.INSIGHTS:
+            # Insight queries: prioritize insight nodes, include summary and chunks
+            return ["insight", "summary", "chunk"]
+        elif intent == QueryIntent.QUESTIONS:
+            # Question queries: prioritize question nodes
+            return ["question", "insight", "chunk"]
+        else:
+            # Default search: all node types (chunks first for semantic search)
+            return ["chunk", "summary", "insight", "question"]
+
+    def get_intent_aware_nodes(
+        self,
+        query: str,
+        nodes: List[BaseNode],
+        vector_store=None,
+        notebook_id: Optional[str] = None
+    ) -> Tuple[List[BaseNode], QueryIntent]:
+        """
+        Get nodes filtered/prioritized by detected query intent.
+
+        For transformation-aware retrieval:
+        - Summary queries → prioritize summary nodes
+        - Insight queries → prioritize insight nodes
+        - Question queries → prioritize question nodes
+        - Search queries → use all nodes with standard retrieval
+
+        Args:
+            query: The user's query string
+            nodes: Base nodes (chunks) available for retrieval
+            vector_store: Optional PGVectorStore for fetching transformation nodes
+            notebook_id: Notebook ID for filtering transformation nodes
+
+        Returns:
+            Tuple of (filtered_nodes, detected_intent)
+        """
+        intent, confidence = self.detect_intent(query)
+
+        # If no strong intent detected or no vector store, use standard nodes
+        if intent == QueryIntent.SEARCH or confidence < 0.3 or not vector_store:
+            return nodes, intent
+
+        # Get node types to prioritize
+        node_types = self.get_node_types_for_intent(intent)
+        logger.info(f"Intent-aware retrieval: {intent.value} → prioritizing {node_types}")
+
+        # Try to get transformation nodes from vector store
+        if hasattr(vector_store, 'get_nodes_by_notebook_and_types') and notebook_id:
+            try:
+                # Get transformation nodes for this notebook
+                transformation_nodes = vector_store.get_nodes_by_notebook_and_types(
+                    notebook_id=notebook_id,
+                    node_types=node_types[:2]  # Primary types for this intent
+                )
+
+                if transformation_nodes:
+                    logger.info(
+                        f"Found {len(transformation_nodes)} transformation nodes "
+                        f"for intent {intent.value}"
+                    )
+                    # Combine transformation nodes with regular chunks
+                    # Transformation nodes first (higher priority)
+                    combined = transformation_nodes + nodes
+                    return combined, intent
+
+            except Exception as e:
+                logger.warning(f"Error fetching transformation nodes: {e}")
+
+        # Fall back to regular nodes
+        return nodes, intent
 
     def _get_or_create_index(
         self,

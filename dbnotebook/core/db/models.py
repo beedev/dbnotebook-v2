@@ -118,11 +118,21 @@ class NotebookSource(Base):
     upload_timestamp = Column(TIMESTAMP, default=datetime.utcnow, nullable=False)
     active = Column(Boolean, default=True, nullable=False)  # Toggle for including in RAG retrieval
 
+    # AI Transformations
+    dense_summary = Column(Text, nullable=True)  # 300-500 word comprehensive summary
+    key_insights = Column(JSONB, nullable=True)  # ["insight1", "insight2", ...] - 5-10 actionable insights
+    reflection_questions = Column(JSONB, nullable=True)  # ["q1", "q2", ...] - 5-7 thought-provoking questions
+
+    # Transformation processing status
+    transformation_status = Column(String(20), default='pending', nullable=False)  # pending|processing|completed|failed
+    transformation_error = Column(Text, nullable=True)  # Error message if transformation failed
+    transformed_at = Column(TIMESTAMP, nullable=True)  # When transformation completed
+
     # Relationships
     notebook = relationship("Notebook", back_populates="sources")
 
     def __repr__(self):
-        return f"<NotebookSource(source_id={self.source_id}, file_name='{self.file_name}', chunks={self.chunk_count}, active={self.active})>"
+        return f"<NotebookSource(source_id={self.source_id}, file_name='{self.file_name}', chunks={self.chunk_count}, active={self.active}, transform_status='{self.transformation_status}')>"
 
 
 class Conversation(Base):
@@ -202,3 +212,23 @@ class GeneratedContent(Base):
 
     def __repr__(self):
         return f"<GeneratedContent(content_id={self.content_id}, type='{self.content_type}', title='{self.title}')>"
+
+
+class EmbeddingConfig(Base):
+    """Tracks active embedding model to prevent mixing incompatible embeddings.
+
+    CRITICAL: Different embedding models produce incompatible vector spaces even with
+    the same dimensions. This table ensures only one model is used across all documents.
+    Switching models requires re-embedding all documents.
+    """
+    __tablename__ = "embedding_config"
+
+    id = Column(Integer, primary_key=True)
+    model_name = Column(String(255), nullable=False)  # e.g., "text-embedding-3-small", "nomic-embed-text-v1.5"
+    provider = Column(String(50), nullable=False)  # e.g., "openai", "huggingface"
+    dimensions = Column(Integer, nullable=False)  # Vector dimensions (768, 1536, etc.)
+    created_at = Column(TIMESTAMP, default=datetime.utcnow, nullable=False)
+    updated_at = Column(TIMESTAMP, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    def __repr__(self):
+        return f"<EmbeddingConfig(provider='{self.provider}', model='{self.model_name}', dim={self.dimensions})>"

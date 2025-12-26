@@ -1,6 +1,8 @@
 from .engine import LocalChatEngine
-from .retriever import LocalRetriever
+from .retriever import LocalRetriever, QueryIntent
+
 __all__ = [
     "LocalChatEngine",
-    "LocalRetriever"
+    "LocalRetriever",
+    "QueryIntent",
 ]

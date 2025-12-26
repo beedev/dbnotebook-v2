@@ -280,7 +280,8 @@ class LocalDataIngestion:
         max_workers: int = 4,
         use_cache: bool = False,  # Disabled by default - use fresh DB queries instead
         db_manager: Optional[DatabaseManager] = None,
-        vector_store = None
+        vector_store = None,
+        transformation_callback: Optional[callable] = None,
     ) -> None:
         self._setting = setting or get_settings()
         self._node_store: dict[str, List[BaseNode]] = {}
@@ -302,6 +303,10 @@ class LocalDataIngestion:
 
         # Vector store for pgvector persistence
         self._vector_store = vector_store
+
+        # Callback for queuing AI transformations after upload
+        # Signature: callback(source_id: str, document_text: str, notebook_id: str, file_name: str)
+        self._transformation_callback = transformation_callback
 
         # Create splitter once
         self._splitter = SentenceSplitter.from_defaults(
@@ -342,8 +347,8 @@ class LocalDataIngestion:
         input_file: str,
         embed_nodes: bool = True,
         embed_model: Any | None = None
-    ) -> tuple[str, List[BaseNode]]:
-        """Process a single file and return (filename, nodes).
+    ) -> tuple[str, List[BaseNode], str]:
+        """Process a single file and return (filename, nodes, document_text).
 
         Args:
             input_file: Path to the file
@@ -351,27 +356,27 @@ class LocalDataIngestion:
             embed_model: Embedding model to use
 
         Returns:
-            Tuple of (filename, nodes)
+            Tuple of (filename, nodes, document_text)
         """
         file_name = Path(input_file).name
         file_path = Path(input_file)
 
         # Check memory cache first
         if file_name in self._node_store:
-            return file_name, self._node_store[file_name]
+            return file_name, self._node_store[file_name], ""
 
         # Check disk cache
         if self._cache:
             cached_nodes = self._cache.get(input_file)
             if cached_nodes:
                 logger.debug(f"Using cached nodes for {file_name}")
-                return file_name, cached_nodes
+                return file_name, cached_nodes, ""
 
         # Read and process document
         raw_text = self._reader.read(input_file)
         if not raw_text:
             logger.warning(f"No text extracted from {file_name}")
-            return file_name, []
+            return file_name, [], ""
 
         filtered_text = self._processor.filter_text(raw_text)
 
@@ -409,7 +414,7 @@ class LocalDataIngestion:
         if self._cache and nodes:
             self._cache.set(input_file, nodes)
 
-        return file_name, nodes
+        return file_name, nodes, filtered_text
 
     def store_nodes(
         self,
@@ -466,7 +471,7 @@ class LocalDataIngestion:
                 desc="Ingesting documents"
             ):
                 try:
-                    file_name, nodes = future.result()
+                    file_name, nodes, document_text = future.result()
                     if nodes:
                         # Register document in notebook database if notebook_id provided
                         source_id = None
@@ -489,6 +494,20 @@ class LocalDataIngestion:
                                     chunk_count=len(nodes)
                                 )
                                 logger.info(f"Registered {file_name} in notebook {notebook_id} (source_id: {source_id})")
+
+                                # Queue AI transformations if callback is set
+                                if self._transformation_callback and source_id and document_text:
+                                    try:
+                                        self._transformation_callback(
+                                            source_id=source_id,
+                                            document_text=document_text,
+                                            notebook_id=notebook_id,
+                                            file_name=file_name
+                                        )
+                                        logger.debug(f"Queued transformations for {file_name}")
+                                    except Exception as te:
+                                        logger.warning(f"Failed to queue transformations for {file_name}: {te}")
+
                             except ValueError as e:
                                 # Duplicate document detected
                                 logger.warning(f"Skipping {file_name}: {e}")
@@ -572,3 +591,13 @@ class LocalDataIngestion:
             if file in self._node_store:
                 return_nodes.extend(self._node_store[file])
         return return_nodes
+
+    def set_transformation_callback(self, callback: callable) -> None:
+        """Set callback for queuing AI transformations after document upload.
+
+        Args:
+            callback: Function with signature:
+                callback(source_id: str, document_text: str, notebook_id: str, file_name: str)
+        """
+        self._transformation_callback = callback
+        logger.info("Transformation callback set for document processing")

@@ -19,6 +19,7 @@ from .core.db import DatabaseManager
 from .core.notebook import NotebookManager
 from .core.conversation import ConversationStore
 from .core.observability import QueryLogger, get_token_counter
+from .core.transformations import TransformationWorker, TransformationJob
 from .setting import get_settings
 
 logger = logging.getLogger(__name__)
@@ -50,6 +51,7 @@ class LocalRAGPipeline:
 
         # Engine state management for conversation history preservation
         self._engine_initialized: bool = False
+        self._current_offering_filter: Optional[list[str]] = None  # Track current filter for isolation
 
         # Notebook context tracking (NotebookLM architecture)
         self._current_notebook_id: Optional[str] = None
@@ -60,6 +62,7 @@ class LocalRAGPipeline:
         self._notebook_manager: Optional[NotebookManager] = None
         self._conversation_store: Optional[ConversationStore] = None
         self._query_logger: Optional[QueryLogger] = None
+        self._transformation_worker: Optional[TransformationWorker] = None
         if database_url:
             self._db_manager = DatabaseManager(database_url)
             self._db_manager.init_db()
@@ -82,12 +85,38 @@ class LocalRAGPipeline:
             setting=self._settings,
             host=host
         )
+
+        # Initialize TransformationWorker for AI transformations (if database available)
+        transformation_callback = None
+        if self._db_manager:
+            self._transformation_worker = TransformationWorker(
+                db_manager=self._db_manager,
+                embed_callback=self._embed_transformation,  # Will embed transformation content
+                poll_interval=10.0,
+                max_concurrent=2,
+            )
+            self._transformation_worker.start()
+            logger.info("TransformationWorker started for AI transformations")
+
+            # Create callback for ingestion to queue transformation jobs
+            def transformation_callback(source_id: str, document_text: str, notebook_id: str, file_name: str):
+                """Queue a transformation job when a document is ingested."""
+                job = TransformationJob(
+                    source_id=source_id,
+                    document_text=document_text,
+                    notebook_id=notebook_id,
+                    file_name=file_name,
+                )
+                self._transformation_worker.queue_job(job)
+                logger.debug(f"Queued transformation job for source: {source_id}")
+
         self._ingestion = LocalDataIngestion(
             setting=self._settings,
             max_workers=4,
             use_cache=False,  # Disabled - using pgvector for persistence
             db_manager=self._db_manager,
-            vector_store=self._vector_store
+            vector_store=self._vector_store,
+            transformation_callback=transformation_callback,
         )
 
         # Initialize models once and cache in Settings
@@ -295,6 +324,86 @@ class LocalRAGPipeline:
         """Check if an embedding model exists on Ollama."""
         return LocalEmbedding.check_model_exist(self._ollama_host, model_name)
 
+    def _embed_transformation(
+        self,
+        text: str,
+        node_type: str,
+        source_id: str,
+        notebook_id: str
+    ) -> None:
+        """
+        Embed transformation content and store in vector store.
+
+        Called by TransformationWorker after generating transformations.
+        This allows transformation content (summaries, insights, questions)
+        to be retrieved alongside regular document chunks.
+
+        Args:
+            text: The transformation text to embed
+            node_type: Type of transformation ("summary", "insight", "question")
+            source_id: Source document UUID
+            notebook_id: Notebook UUID for filtering
+        """
+        try:
+            from llama_index.core.schema import TextNode
+            from uuid import UUID
+            import uuid
+
+            # Look up the source document to get file_name
+            file_name = None
+            if self._db_manager:
+                try:
+                    with self._db_manager.get_session() as session:
+                        from .core.db.models import NotebookSource
+                        source = session.query(NotebookSource).filter(
+                            NotebookSource.source_id == UUID(source_id)
+                        ).first()
+                        if source:
+                            file_name = source.file_name
+                except Exception as e:
+                    logger.warning(f"Could not lookup file_name for source {source_id}: {e}")
+
+            # Create a TextNode with transformation metadata including file_name
+            node = TextNode(
+                text=text,
+                id_=str(uuid.uuid4()),
+                metadata={
+                    "source_id": source_id,
+                    "notebook_id": notebook_id,
+                    "node_type": node_type,
+                    "file_name": file_name,  # Parent document name for source display
+                }
+            )
+
+            # Generate embedding for the node using Settings.embed_model
+            embed_model = Settings.embed_model
+            if embed_model:
+                try:
+                    # Generate embedding for this node
+                    embedding = embed_model.get_text_embedding(text)
+                    node.embedding = embedding
+                    logger.debug(f"Generated embedding for {node_type} (dim={len(embedding)})")
+                except Exception as e:
+                    logger.error(f"Error generating embedding for {node_type}: {e}")
+                    return  # Don't add node without embedding
+            else:
+                logger.warning("No embed model available for transformation embedding")
+                return
+
+            # Add to vector store with proper metadata
+            if hasattr(self._vector_store, 'add_transformation_nodes'):
+                self._vector_store.add_transformation_nodes(
+                    nodes=[node],
+                    notebook_id=notebook_id,
+                    source_id=source_id
+                )
+                logger.debug(f"Embedded {node_type} for source {source_id}")
+            else:
+                logger.warning("Vector store does not support add_transformation_nodes")
+
+        except Exception as e:
+            logger.error(f"Error embedding transformation for source {source_id}: {e}")
+
     def store_nodes(
         self,
         input_files: Optional[list[str]] = None,
@@ -403,8 +512,13 @@ class LocalRAGPipeline:
             offering_filter: List of offering names/IDs or notebook IDs to filter by
             force_reset: Force recreation of engine even if filter unchanged
         """
-        # Recreate engine if not initialized or force_reset requested
-        if not self._engine_initialized or force_reset:
+        # Check if filter has changed (critical for notebook isolation)
+        filter_changed = offering_filter != self._current_offering_filter
+        if filter_changed:
+            logger.info(f"Filter changed: {self._current_offering_filter} -> {offering_filter}")
+
+        # Recreate engine if not initialized, filter changed, or force_reset requested
+        if not self._engine_initialized or filter_changed or force_reset:
             logger.info(f"Creating new engine with filter: {offering_filter}")
 
             # PRESERVE chat history from existing engine before recreating
@@ -487,6 +601,7 @@ class LocalRAGPipeline:
 
             # Update state
             self._engine_initialized = True
+            self._current_offering_filter = offering_filter  # Track current filter for isolation
 
             filter_msg = f" (filtered by {len(offering_filter)} offerings)" if offering_filter else ""
             logger.info(f"New engine created with {len(nodes)} nodes{filter_msg}")
@@ -1139,3 +1254,26 @@ Refined Implementation Plan:"""
         output += "## 📝 Detailed Information\n\n"
 
         return output
+
+    @property
+    def transformation_worker(self) -> Optional[TransformationWorker]:
+        """Get the TransformationWorker instance for API integration."""
+        return self._transformation_worker
+
+    def shutdown(self) -> None:
+        """
+        Gracefully shutdown the pipeline and its components.
+
+        Stops background workers and releases resources.
+        """
+        logger.info("Shutting down RAG pipeline...")
+
+        # Stop transformation worker
+        if self._transformation_worker:
+            try:
+                self._transformation_worker.stop()
+                logger.info("TransformationWorker stopped")
+            except Exception as e:
+                logger.error(f"Error stopping TransformationWorker: {e}")
+
+        logger.info("Pipeline shutdown complete")
