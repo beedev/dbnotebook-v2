@@ -208,15 +208,38 @@ export async function deleteDocument(
   });
 }
 
+interface BackendToggleDocumentResponse {
+  success: boolean;
+  document: {
+    source_id: string;
+    file_name: string;
+    file_type?: string;
+    chunk_count?: number;
+    active: boolean;
+  };
+  message: string;
+}
+
 export async function toggleDocumentActive(
   notebookId: string,
   sourceId: string,
   active: boolean
 ): Promise<Document> {
-  return fetchApi<Document>(`/notebooks/${notebookId}/documents/${sourceId}`, {
-    method: 'PATCH',
-    body: JSON.stringify({ active }),
-  });
+  const response = await fetchApi<BackendToggleDocumentResponse>(
+    `/notebooks/${notebookId}/documents/${sourceId}`,
+    {
+      method: 'PATCH',
+      body: JSON.stringify({ active }),
+    }
+  );
+  // Map backend snake_case to frontend camelCase
+  return {
+    source_id: response.document.source_id,
+    filename: response.document.file_name,
+    file_type: response.document.file_type,
+    chunk_count: response.document.chunk_count,
+    active: response.document.active,
+  };
 }
 
 // ============================================

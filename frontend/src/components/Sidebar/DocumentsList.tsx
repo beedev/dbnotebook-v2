@@ -69,16 +69,20 @@ export function DocumentsList({
     e.preventDefault();
     setIsDragging(false);
 
-    const file = e.dataTransfer.files[0];
-    if (file) {
-      await handleUpload(file);
+    const files = Array.from(e.dataTransfer.files);
+    if (files.length > 0) {
+      for (const file of files) {
+        await handleUpload(file);
+      }
     }
   };
 
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      await handleUpload(file);
+    const files = Array.from(e.target.files || []);
+    if (files.length > 0) {
+      for (const file of files) {
+        await handleUpload(file);
+      }
     }
     // Reset input
     if (fileInputRef.current) {
@@ -140,6 +144,7 @@ export function DocumentsList({
         <input
           ref={fileInputRef}
           type="file"
+          multiple
           accept=".pdf,.txt,.md,.docx,.doc,.epub,.pptx,.ppt,.xlsx,.xls,.csv,.png,.jpg,.jpeg,.webp"
           className="hidden"
           onChange={handleFileSelect}

@@ -16,6 +16,7 @@ from ..api.routes.chat import create_chat_routes
 from ..api.routes.web_content import create_web_content_routes
 from ..api.routes.studio import create_studio_routes
 from ..api.routes.vision import create_vision_routes
+from ..api.routes.transformations import create_transformation_routes
 from ..core.ingestion import WebContentIngestion, SynopsisManager
 from ..core.studio import StudioManager
 
@@ -456,7 +457,9 @@ Output ONLY valid JSON, nothing else."""
                     if selected_notebooks:
                         # NOTEBOOK MODE: Use simple query() method for direct Q&A with notebook documents
                         # Set engine with notebook filter before querying
-                        self._pipeline.set_engine(offering_filter=selected_notebooks)
+                        # force_reset=True ensures fresh document load (respects active toggle)
+                        # while preserving session chat history in engine memory
+                        self._pipeline.set_engine(offering_filter=selected_notebooks, force_reset=True)
                         rag_response = self._pipeline.query(
                             mode=mode,
                             message=message,
@@ -530,17 +533,18 @@ Output ONLY valid JSON, nothing else."""
                             err_msg = f"\n Image generation failed: {str(img_error)}\n"
                             yield f"data: {json.dumps({'token': err_msg})}\n\n"
 
-                        # Save conversation for image generation
-                        if notebook_id:
-                            try:
-                                self._pipeline.save_conversation_exchange(
-                                    notebook_id=notebook_id,
-                                    user_id="00000000-0000-0000-0000-000000000001",
-                                    user_message=message,
-                                    assistant_message=document_context
-                                )
-                            except Exception as save_err:
-                                logger.warning(f"Failed to save conversation: {save_err}")
+                        # DB persistence disabled - session-only chat history
+                        # Engine memory maintains history within session
+                        # if notebook_id:
+                        #     try:
+                        #         self._pipeline.save_conversation_exchange(
+                        #             notebook_id=notebook_id,
+                        #             user_id="00000000-0000-0000-0000-000000000001",
+                        #             user_message=message,
+                        #             assistant_message=document_context
+                        #         )
+                        #     except Exception as save_err:
+                        #         logger.warning(f"Failed to save conversation: {save_err}")
 
                         yield f"data: {json.dumps({'done': True})}\n\n"
 
@@ -552,17 +556,17 @@ Output ONLY valid JSON, nothing else."""
                         for token in document_context:
                             yield f"data: {json.dumps({'token': token})}\n\n"
 
-                        # Save conversation
-                        if notebook_id:
-                            try:
-                                self._pipeline.save_conversation_exchange(
-                                    notebook_id=notebook_id,
-                                    user_id="00000000-0000-0000-0000-000000000001",
-                                    user_message=message,
-                                    assistant_message=document_context
-                                )
-                            except Exception as save_err:
-                                logger.warning(f"Failed to save conversation: {save_err}")
+                        # DB persistence disabled - session-only chat history
+                        # if notebook_id:
+                        #     try:
+                        #         self._pipeline.save_conversation_exchange(
+                        #             notebook_id=notebook_id,
+                        #             user_id="00000000-0000-0000-0000-000000000001",
+                        #             user_message=message,
+                        #             assistant_message=document_context
+                        #         )
+                        #     except Exception as save_err:
+                        #         logger.warning(f"Failed to save conversation: {save_err}")
 
                         yield f"data: {json.dumps({'done': True})}\n\n"
 
@@ -580,6 +584,11 @@ Output ONLY valid JSON, nothing else."""
                                 for node in source_nodes:
                                     # Extract metadata from the node
                                     metadata = getattr(node.node, 'metadata', {}) if hasattr(node, 'node') else {}
+
+                                    # Skip transformation nodes - they help retrieval but shouldn't appear as sources
+                                    node_type = metadata.get('node_type', 'chunk')
+                                    if node_type in ('summary', 'insight', 'question'):
+                                        continue
 
                                     # Get filename from various possible metadata keys
                                     filename = (
@@ -619,17 +628,17 @@ Output ONLY valid JSON, nothing else."""
                         except Exception as src_err:
                             logger.warning(f"Error extracting sources: {src_err}")
 
-                        # Save conversation to database
-                        if notebook_id:
-                            try:
-                                self._pipeline.save_conversation_exchange(
-                                    notebook_id=notebook_id,
-                                    user_id="00000000-0000-0000-0000-000000000001",
-                                    user_message=message,
-                                    assistant_message=document_context
-                                )
-                            except Exception as save_err:
-                                logger.warning(f"Failed to save conversation: {save_err}")
+                        # DB persistence disabled - session-only chat history
+                        # if notebook_id:
+                        #     try:
+                        #         self._pipeline.save_conversation_exchange(
+                        #             notebook_id=notebook_id,
+                        #             user_id="00000000-0000-0000-0000-000000000001",
+                        #             user_message=message,
+                        #             assistant_message=document_context
+                        #         )
+                        #     except Exception as save_err:
+                        #         logger.warning(f"Failed to save conversation: {save_err}")
 
                         # Send sources with the done signal
                         yield f"data: {json.dumps({'done': True, 'sources': sources})}\n\n"
@@ -1325,6 +1334,25 @@ Output ONLY valid JSON, nothing else."""
             logger.info("Vision API routes registered")
         except Exception as e:
             logger.warning(f"Vision API routes not available: {e}")
+
+        # Register AI Transformation routes
+        try:
+            if self._db_manager:
+                # Get transformation worker from pipeline if available
+                transformation_worker = None
+                if hasattr(self._pipeline, 'transformation_worker'):
+                    transformation_worker = self._pipeline.transformation_worker
+
+                create_transformation_routes(
+                    self._app,
+                    self._db_manager,
+                    transformation_worker=transformation_worker
+                )
+                logger.info("Transformation API routes registered")
+                if transformation_worker:
+                    logger.info("Transformation retry enabled via TransformationWorker")
+        except Exception as e:
+            logger.warning(f"Transformation API routes not available: {e}")
 
         # === Query Logging & Observability Endpoints ===
 

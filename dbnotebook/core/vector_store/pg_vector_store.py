@@ -113,6 +113,12 @@ class PGVectorStore:
                     CREATE INDEX IF NOT EXISTS idx_{self._table_name}_source_id
                     ON {self._actual_table_name} ((metadata_->>'source_id'))
                 """))
+                # Create index on node_type for transformation filtering
+                # Supports values: 'chunk', 'summary', 'insight', 'question'
+                session.execute(text(f"""
+                    CREATE INDEX IF NOT EXISTS idx_{self._table_name}_node_type
+                    ON {self._actual_table_name} ((metadata_->>'node_type'))
+                """))
                 # Create unique index on text + notebook_id to prevent duplicates
                 # This prevents the same text chunk from being added multiple times
                 session.execute(text(f"""
@@ -713,20 +719,26 @@ class PGVectorStore:
         Load nodes for a specific notebook using SQL filtering.
 
         O(log n) operation using SQL WHERE with indexed column.
+        Only returns nodes from active sources (respects document toggle).
 
         Args:
             notebook_id: Notebook UUID to filter by
 
         Returns:
-            List of nodes belonging to the specified notebook
+            List of nodes belonging to the specified notebook (active sources only)
         """
         try:
             with self._Session() as session:
+                # Join with notebook_sources to filter by active status
+                # This respects the eye icon toggle in the UI
                 result = session.execute(
                     text(f"""
-                        SELECT id, text, metadata_, embedding
-                        FROM {self._actual_table_name}
-                        WHERE metadata_->>'notebook_id' = :notebook_id
+                        SELECT e.id, e.text, e.metadata_, e.embedding
+                        FROM {self._actual_table_name} e
+                        LEFT JOIN notebook_sources ns
+                            ON e.metadata_->>'source_id' = ns.source_id::text
+                        WHERE e.metadata_->>'notebook_id' = :notebook_id
+                        AND (ns.active = true OR ns.active IS NULL)
                     """),
                     {"notebook_id": notebook_id}
                 )
@@ -765,3 +777,135 @@ class PGVectorStore:
         except Exception as e:
             logger.error(f"Error loading notebook nodes from pgvector: {e}")
             return []
+
+    def get_nodes_by_notebook_and_types(
+        self,
+        notebook_id: str,
+        node_types: Optional[List[str]] = None
+    ) -> List[BaseNode]:
+        """
+        Load nodes for a specific notebook, optionally filtered by node type.
+
+        O(log n) operation using SQL WHERE with indexed columns.
+        Only returns nodes from active sources (respects document toggle).
+        For transformation nodes, checks parent_source_id for active status.
+
+        Args:
+            notebook_id: Notebook UUID to filter by
+            node_types: Optional list of node types to include
+                       Valid types: 'chunk', 'summary', 'insight', 'question'
+                       If None, returns all node types
+
+        Returns:
+            List of nodes matching the criteria (active sources only)
+        """
+        try:
+            with self._Session() as session:
+                if node_types:
+                    # Filter by both notebook_id and node_type
+                    # Join with notebook_sources to filter by active status
+                    # Use COALESCE to check parent_source_id for transformation nodes
+                    placeholders = ", ".join([f":type_{i}" for i in range(len(node_types))])
+                    params = {"notebook_id": notebook_id}
+                    for i, t in enumerate(node_types):
+                        params[f"type_{i}"] = t
+
+                    query = text(f"""
+                        SELECT e.id, e.text, e.metadata_, e.embedding
+                        FROM {self._actual_table_name} e
+                        LEFT JOIN notebook_sources ns
+                            ON COALESCE(
+                                e.metadata_->>'parent_source_id',
+                                e.metadata_->>'source_id'
+                            ) = ns.source_id::text
+                        WHERE e.metadata_->>'notebook_id' = :notebook_id
+                        AND (
+                            e.metadata_->>'node_type' IN ({placeholders})
+                            OR e.metadata_->>'node_type' IS NULL
+                        )
+                        AND (ns.active = true OR ns.active IS NULL)
+                    """)
+                else:
+                    # No type filter - get all nodes
+                    # Join with notebook_sources to filter by active status
+                    params = {"notebook_id": notebook_id}
+                    query = text(f"""
+                        SELECT e.id, e.text, e.metadata_, e.embedding
+                        FROM {self._actual_table_name} e
+                        LEFT JOIN notebook_sources ns
+                            ON COALESCE(
+                                e.metadata_->>'parent_source_id',
+                                e.metadata_->>'source_id'
+                            ) = ns.source_id::text
+                        WHERE e.metadata_->>'notebook_id' = :notebook_id
+                        AND (ns.active = true OR ns.active IS NULL)
+                    """)
+
+                result = session.execute(query, params)
+                rows = result.fetchall()
+
+                nodes = []
+                for row in rows:
+                    node_id, text_content, metadata, embedding = row
+
+                    if isinstance(metadata, str):
+                        import json
+                        metadata = json.loads(metadata)
+
+                    # Parse embedding - pgvector returns as string representation
+                    parsed_embedding = None
+                    if embedding is not None:
+                        if isinstance(embedding, str):
+                            import json
+                            parsed_embedding = json.loads(embedding)
+                        elif hasattr(embedding, 'tolist'):
+                            parsed_embedding = embedding.tolist()
+                        else:
+                            parsed_embedding = list(embedding)
+
+                    node = TextNode(
+                        id_=str(node_id),
+                        text=text_content or "",
+                        metadata=metadata or {},
+                        embedding=parsed_embedding
+                    )
+                    nodes.append(node)
+
+                type_str = str(node_types) if node_types else "all"
+                logger.debug(f"Loaded {len(nodes)} nodes for notebook {notebook_id} (types: {type_str})")
+                return nodes
+
+        except Exception as e:
+            logger.error(f"Error loading notebook nodes by type from pgvector: {e}")
+            return []
+
+    def add_transformation_nodes(
+        self,
+        nodes: List[BaseNode],
+        notebook_id: str,
+        source_id: str
+    ) -> int:
+        """
+        Add transformation nodes (summary, insights, questions) to the vector store.
+
+        Handles proper node_type metadata assignment.
+
+        Args:
+            nodes: List of nodes with node_type in metadata
+            notebook_id: Notebook UUID for the nodes
+            source_id: Source document UUID
+
+        Returns:
+            Number of nodes successfully added
+        """
+        if not nodes:
+            return 0
+
+        # Ensure metadata is set correctly
+        for node in nodes:
+            if hasattr(node, 'metadata'):
+                node.metadata["notebook_id"] = notebook_id
+                node.metadata["source_id"] = source_id
+                # node_type should already be set by caller
+
+        return self.add_nodes(nodes, notebook_id=notebook_id)
