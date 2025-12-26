@@ -1,4 +1,15 @@
-# Build stage
+# Frontend build stage
+FROM node:20-slim AS frontend-builder
+
+WORKDIR /app/frontend
+
+COPY frontend/package*.json ./
+RUN npm ci
+
+COPY frontend/ ./
+RUN npm run build
+
+# Python build stage
 FROM python:3.11-slim AS builder
 
 WORKDIR /app
@@ -26,7 +37,7 @@ FROM python:3.11-slim
 LABEL org.opencontainers.image.source="https://github.com/beedev/dbnotebook"
 LABEL org.opencontainers.image.description="Multimodal RAG Sales Enablement System"
 LABEL org.opencontainers.image.licenses="Apache-2.0"
-LABEL org.opencontainers.image.version="1.0.0"
+LABEL org.opencontainers.image.version="1.1.0"
 
 WORKDIR /app
 
@@ -41,7 +52,7 @@ ENV PATH="/app/venv/bin:$PATH"
 
 # Copy application code
 COPY dbnotebook/ dbnotebook/
-COPY frontend/dist/ frontend/dist/
+COPY --from=frontend-builder /app/frontend/dist frontend/dist/
 COPY alembic/ alembic/
 COPY alembic.ini .
 
