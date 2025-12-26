@@ -42,12 +42,11 @@ ENV PATH="/app/venv/bin:$PATH"
 # Copy application code
 COPY dbnotebook/ dbnotebook/
 COPY frontend/dist/ frontend/dist/
-COPY data/config/ data/config/
 COPY alembic/ alembic/
 COPY alembic.ini .
 
-# Create mount point directories
-RUN mkdir -p config data outputs/studio uploads
+# Create mount point directories (config files created at runtime)
+RUN mkdir -p config data/config outputs/studio uploads
 
 EXPOSE 7860
 
