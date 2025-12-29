@@ -1,5 +1,6 @@
 import { memo, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import { User, Bot, Copy, Check, ChevronDown, ChevronUp } from 'lucide-react';
 import type { Message, SourceCitation } from '../../types';
 
@@ -64,6 +65,7 @@ export const MessageBubble = memo(function MessageBubble({
             <TypingIndicator />
           ) : (
             <ReactMarkdown
+              remarkPlugins={[remarkGfm]}
               components={{
                 p: ({ children }) => (
                   <p className="text-text leading-relaxed mb-3 last:mb-0">
@@ -141,6 +143,32 @@ export const MessageBubble = memo(function MessageBubble({
                   <h3 className="text-base font-bold text-text mt-2 mb-1 font-[family-name:var(--font-display)]">
                     {children}
                   </h3>
+                ),
+                table: ({ children }) => (
+                  <div className="overflow-x-auto my-4">
+                    <table className="min-w-full border-collapse border border-void-surface rounded-lg overflow-hidden">
+                      {children}
+                    </table>
+                  </div>
+                ),
+                thead: ({ children }) => (
+                  <thead className="bg-void-surface/50">{children}</thead>
+                ),
+                tbody: ({ children }) => (
+                  <tbody className="divide-y divide-void-surface">{children}</tbody>
+                ),
+                tr: ({ children }) => (
+                  <tr className="hover:bg-void-light/30 transition-colors">{children}</tr>
+                ),
+                th: ({ children }) => (
+                  <th className="px-4 py-2.5 text-left text-xs font-semibold text-glow uppercase tracking-wider border-b border-void-surface">
+                    {children}
+                  </th>
+                ),
+                td: ({ children }) => (
+                  <td className="px-4 py-3 text-sm text-text border-r border-void-surface/50 last:border-r-0">
+                    {children}
+                  </td>
                 ),
               }}
             >

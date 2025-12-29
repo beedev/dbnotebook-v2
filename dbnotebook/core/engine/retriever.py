@@ -21,7 +21,7 @@ from llama_index.retrievers.bm25 import BM25Retriever
 from llama_index.core import Settings, VectorStoreIndex
 
 from ..prompt import get_query_gen_prompt
-from ...setting import get_settings, RAGSettings
+from ...setting import get_settings, RAGSettings, QueryTimeSettings
 from ..raptor import RAPTORRetriever, has_raptor_tree, RAPTORConfig
 
 load_dotenv()
@@ -136,6 +136,10 @@ class LocalRetriever:
     Strategies:
     - Small collections (≤ top_k_rerank): Simple vector retriever
     - Large collections: Router with fusion and two-stage options
+
+    Query-Time Settings:
+    - Call set_query_settings() before each query to apply per-request overrides
+    - Settings affect similarity_top_k, retriever_weights, etc.
     """
 
     def __init__(
@@ -147,7 +151,42 @@ class LocalRetriever:
         self._host = host
         self._index_cache: Optional[VectorStoreIndex] = None
         self._cached_node_count: int = 0
+        # Query-time settings (updated per-request, cleared after use)
+        self._query_settings: Optional[QueryTimeSettings] = None
         logger.debug("LocalRetriever initialized")
+
+    def set_query_settings(self, settings: Optional[QueryTimeSettings]) -> None:
+        """Set query-time settings for the next retrieval operation.
+
+        These settings override defaults from config files for a single query.
+        Settings are automatically cleared after retrieval.
+
+        Args:
+            settings: QueryTimeSettings instance, or None to use defaults
+        """
+        self._query_settings = settings
+        if settings:
+            logger.debug(
+                f"Query settings applied: bm25={settings.bm25_weight:.2f}, "
+                f"vector={settings.vector_weight:.2f}, top_k={settings.similarity_top_k}, "
+                f"temp={settings.temperature:.2f}"
+            )
+
+    def clear_query_settings(self) -> None:
+        """Clear query-time settings, reverting to defaults."""
+        self._query_settings = None
+
+    def _get_similarity_top_k(self) -> int:
+        """Get similarity_top_k, preferring query-time settings."""
+        if self._query_settings:
+            return self._query_settings.similarity_top_k
+        return self._setting.retriever.similarity_top_k
+
+    def _get_retriever_weights(self) -> List[float]:
+        """Get retriever weights [bm25, vector], preferring query-time settings."""
+        if self._query_settings:
+            return [self._query_settings.bm25_weight, self._query_settings.vector_weight]
+        return self._setting.retriever.retriever_weights
 
     def detect_intent(self, query: str) -> Tuple[QueryIntent, float]:
         """
@@ -291,7 +330,7 @@ class LocalRetriever:
         """Create simple vector retriever for small collections."""
         return VectorIndexRetriever(
             index=vector_index,
-            similarity_top_k=self._setting.retriever.similarity_top_k,
+            similarity_top_k=self._get_similarity_top_k(),
             embed_model=Settings.embed_model,
             verbose=False
         )
@@ -303,13 +342,18 @@ class LocalRetriever:
         language: str = "eng",
         gen_query: bool = True
     ) -> BaseRetriever:
-        """Create hybrid BM25 + vector retriever."""
+        """Create hybrid BM25 + vector retriever.
+
+        Uses query-time settings if set, otherwise falls back to config defaults.
+        """
         llm = llm or Settings.llm
+        similarity_top_k = self._get_similarity_top_k()
+        weights = self._get_retriever_weights()
 
         # Vector retriever
         vector_retriever = VectorIndexRetriever(
             index=vector_index,
-            similarity_top_k=self._setting.retriever.similarity_top_k,
+            similarity_top_k=similarity_top_k,
             embed_model=Settings.embed_model,
             verbose=False
         )
@@ -317,12 +361,11 @@ class LocalRetriever:
         # BM25 retriever
         bm25_retriever = BM25Retriever.from_defaults(
             index=vector_index,
-            similarity_top_k=self._setting.retriever.similarity_top_k,
+            similarity_top_k=similarity_top_k,
             verbose=False
         )
 
         retrievers = [bm25_retriever, vector_retriever]
-        weights = self._setting.retriever.retriever_weights
 
         if gen_query:
             # Fusion retriever with query generation
@@ -344,7 +387,7 @@ class LocalRetriever:
                 setting=self._setting,
                 llm=llm,
                 query_gen_prompt=None,
-                similarity_top_k=self._setting.retriever.similarity_top_k,
+                similarity_top_k=similarity_top_k,
                 num_queries=1,
                 mode=self._setting.retriever.fusion_mode,
                 verbose=False
@@ -582,13 +625,13 @@ class LocalRetriever:
         )
 
         # Create RAPTOR retriever
-        # Use similarity_top_k (10) for initial retrieval, not top_k_rerank (6)
+        # Use query-time similarity_top_k for initial retrieval
         return RAPTORRetriever(
             vector_store=vector_store,
             notebook_id=notebook_id,
             source_ids=sources_with_raptor,
             config=raptor_config,
-            similarity_top_k=self._setting.retriever.similarity_top_k,
+            similarity_top_k=self._get_similarity_top_k(),
         )
 
     def get_combined_raptor_retriever(
@@ -652,7 +695,7 @@ class LocalRetriever:
                 vector_store=vector_store,
                 notebook_id=notebook_id,
                 source_ids=raptor_sources,
-                similarity_top_k=self._setting.retriever.similarity_top_k,
+                similarity_top_k=self._get_similarity_top_k(),
             )
 
         # If no sources have RAPTOR, use standard retrieval

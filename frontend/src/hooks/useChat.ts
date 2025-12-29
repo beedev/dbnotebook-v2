@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
-import type { Message, ChatState, SourceCitation } from '../types';
+import type { Message, ChatState, SourceCitation, QuerySettings } from '../types';
 import * as api from '../services/api';
 
 const initialState: ChatState = {
@@ -102,9 +102,9 @@ export function useChat(notebookId?: string, model?: string) {
     }));
   }, []);
 
-  // Send a message
+  // Send a message with optional query settings
   const sendMessage = useCallback(
-    async (content: string) => {
+    async (content: string, querySettings?: QuerySettings) => {
       if (!content.trim()) return;
 
       // Cancel any ongoing request
@@ -130,6 +130,7 @@ export function useChat(notebookId?: string, model?: string) {
             notebook_id: notebookId,
             model: model,
             stream: true,
+            query_settings: querySettings,
           },
           {
             onToken: (token) => {

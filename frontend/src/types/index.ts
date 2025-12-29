@@ -72,12 +72,20 @@ export interface ModelsResponse {
   currentProvider: ModelProvider;
 }
 
+// Query settings for per-request tuning
+export interface QuerySettings {
+  search_style: number; // 0-100: 0 = keyword, 100 = semantic
+  result_depth: 'focused' | 'balanced' | 'comprehensive';
+  temperature: number; // 0-100: maps to 0-2.0
+}
+
 // Chat API types
 export interface ChatRequest {
   message: string;
   notebook_id?: string;
   model?: string;
   stream?: boolean;
+  query_settings?: QuerySettings;
 }
 
 export interface ChatResponse {

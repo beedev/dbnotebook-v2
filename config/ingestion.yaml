@@ -1,0 +1,94 @@
+# =============================================================================
+# Document Ingestion Configuration
+# Controls how documents are processed, chunked, and embedded
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# CHUNKING
+# Controls how documents are split into chunks
+# -----------------------------------------------------------------------------
+chunking:
+  chunk_size: 512             # Document chunk size in tokens
+  chunk_overlap: 32           # Overlap between adjacent chunks
+  chunking_regex: "[^,.;。？！]+[,.;。？！]?"  # Sentence boundary regex
+  paragraph_sep: "\n \n"      # Paragraph separator pattern
+
+# -----------------------------------------------------------------------------
+# EMBEDDING
+# Controls embedding generation
+# -----------------------------------------------------------------------------
+embedding:
+  batch_size: 8               # Number of embeddings to generate at once
+  cache_folder: "data/huggingface"  # Cache directory for models
+  num_workers: 0              # Parallel workers for embedding (0 = auto)
+
+# -----------------------------------------------------------------------------
+# CONTEXTUAL RETRIEVAL (Anthropic approach)
+# Enriches chunks with LLM-generated context during ingestion
+# Improves retrieval for structured content like tables, lists, and technical data
+# Note: This increases ingestion time but improves retrieval quality
+# -----------------------------------------------------------------------------
+contextual_retrieval:
+  enabled: false              # Enable contextual retrieval enrichment
+  batch_size: 5               # Number of chunks to process in each batch
+  max_concurrency: 3          # Maximum concurrent LLM calls for context generation
+  max_chunk_chars: 2000       # Maximum characters from chunk to send to LLM
+
+  # Context generation prompt
+  context_prompt: |
+    <document>
+    {doc_content}
+    </document>
+
+    Here is a chunk from the document:
+    <chunk>
+    {chunk_content}
+    </chunk>
+
+    Please provide a brief context (1-2 sentences) that situates this chunk within the overall document.
+    Focus on what information this chunk contains and how it relates to the document's main topics.
+    Do not summarize the chunk itself, just provide context about where it fits.
+
+# -----------------------------------------------------------------------------
+# RETRIEVER SETTINGS
+# Default settings for the retrieval pipeline
+# -----------------------------------------------------------------------------
+retriever:
+  # Number of generated queries for query expansion
+  num_queries: 3
+
+  # Initial retrieval
+  similarity_top_k: 20        # Top k documents for initial retrieval
+
+  # Retriever weights for hybrid search [BM25, Vector]
+  retriever_weights: [0.5, 0.5]
+
+  # Reranking
+  top_k_rerank: 10            # Top k after reranking (final results to LLM)
+  rerank_model: "mixedbread-ai/mxbai-rerank-large-v1"
+
+  # Fusion mode for combining results
+  fusion_mode: "dist_based_score"
+
+# -----------------------------------------------------------------------------
+# LLM SETTINGS (Ollama defaults)
+# These can be overridden by environment variables
+# -----------------------------------------------------------------------------
+llm:
+  keep_alive: "1h"            # Keep model loaded in memory
+  tfs_z: 1.0                  # TFS normalization factor
+  top_k: 40                   # Top k sampling
+  top_p: 0.9                  # Top p (nucleus) sampling
+  repeat_last_n: 64           # Repeat last n tokens for penalty
+  repeat_penalty: 1.1         # Repeat penalty factor
+  request_timeout: 300        # Request timeout in seconds
+  temperature: 0.1            # Default temperature (precise)
+
+# -----------------------------------------------------------------------------
+# STORAGE
+# Vector store and data persistence settings
+# -----------------------------------------------------------------------------
+storage:
+  persist_dir_chroma: "data/chroma"    # ChromaDB directory (legacy)
+  persist_dir_storage: "data/storage"   # General storage directory
+  collection_name: "collection"         # Default collection name

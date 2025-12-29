@@ -70,10 +70,11 @@ class TestRetrievalConfig:
     """Tests for RetrievalConfig."""
 
     def test_default_values(self):
-        """Test default configuration values."""
+        """Test default configuration values (from config/raptor.yaml)."""
         config = RetrievalConfig()
 
-        assert config.summary_query_levels == [2, 3]
+        # Summary queries include all levels for better coverage
+        assert config.summary_query_levels == [0, 1, 2, 3]
         assert 0 in config.detail_query_levels
         assert "summarize" in config.summary_keywords
         assert "specific" in config.detail_keywords
@@ -93,15 +94,15 @@ class TestRAPTORConfig:
         assert isinstance(config.summarization, SummarizationConfig)
 
     def test_fast_preset(self):
-        """Test fast configuration preset."""
+        """Test fast configuration preset (from config/raptor.yaml presets.fast)."""
         config = RAPTORConfig.fast()
 
         # Fast preset should have larger cluster sizes
         assert config.clustering.max_cluster_size == 15
         # And smaller summaries
         assert config.summarization.summary_max_tokens == 300
-        # And shallower tree
-        assert config.tree_building.max_tree_depth == 3
+        # And shallower tree (config/raptor.yaml sets max_tree_depth: 2)
+        assert config.tree_building.max_tree_depth == 2
 
     def test_thorough_preset(self):
         """Test thorough configuration preset."""

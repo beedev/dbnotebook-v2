@@ -10,6 +10,7 @@ from typing import Generator
 from flask import Flask, render_template, request, jsonify, Response, stream_with_context, send_file, send_from_directory
 
 from ..pipeline import LocalRAGPipeline
+from ..setting import QueryTimeSettings
 from ..core.plugins import get_configured_image_provider, register_default_plugins
 from ..core.metadata import MetadataManager
 from ..api.routes.chat import create_chat_routes
@@ -418,6 +419,21 @@ Output ONLY valid JSON, nothing else."""
             selected_offerings = data.get("selected_offerings", [])
             selected_notebooks = data.get("selected_notebooks", [])
 
+            # Query settings for per-request tuning
+            query_settings_raw = data.get("query_settings", {})
+            # Create QueryTimeSettings from frontend values using the class factory method
+            # This handles the conversion: search_style → weights, result_depth → top_k, temperature → 0-2.0
+            query_settings_obj = QueryTimeSettings.from_frontend(
+                search_style=query_settings_raw.get("search_style", 50),
+                result_depth=query_settings_raw.get("result_depth", "balanced"),
+                temperature=query_settings_raw.get("temperature", 20)
+            )
+
+            logger.debug(f"Query settings: bm25={query_settings_obj.bm25_weight:.2f}, "
+                        f"vec={query_settings_obj.vector_weight:.2f}, "
+                        f"top_k={query_settings_obj.similarity_top_k}, "
+                        f"temp={query_settings_obj.temperature:.2f}")
+
             # Support React frontend's notebook_id (singular) format
             notebook_id = data.get("notebook_id")
             if notebook_id and not selected_notebooks:
@@ -473,7 +489,8 @@ Output ONLY valid JSON, nothing else."""
                         rag_response = self._pipeline.query(
                             mode=mode,
                             message=message,
-                            chatbot=history
+                            chatbot=history,
+                            query_settings=query_settings_obj
                         )
                     elif selected_offerings:
                         # SALES MODE: Use query_sales_mode for intelligent classification
@@ -489,7 +506,8 @@ Output ONLY valid JSON, nothing else."""
                         # Uses SimpleChatEngine without loading any documents
                         rag_response = self._pipeline.chat_without_retrieval(
                             message=message,
-                            chatbot=history
+                            chatbot=history,
+                            query_settings=query_settings_obj
                         )
 
                     # Get the full response text from RAG

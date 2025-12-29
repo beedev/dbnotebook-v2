@@ -1,3 +1,9 @@
+"""RAG Settings Module.
+
+Loads configuration from YAML files with environment variable and Python defaults as fallback.
+Config files: config/ingestion.yaml, config/models.yaml
+"""
+
 import os
 import yaml
 from pathlib import Path
@@ -5,6 +11,16 @@ from functools import lru_cache
 from pydantic import BaseModel, Field
 from typing import List, Dict, Any, Optional
 from dotenv import load_dotenv
+
+from dbnotebook.core.config.config_loader import (
+    load_ingestion_config,
+    get_chunking_config,
+    get_embedding_config,
+    get_contextual_retrieval_config,
+    get_retriever_settings,
+    get_llm_settings,
+    get_storage_settings,
+)
 
 load_dotenv()
 
@@ -21,30 +37,44 @@ def _get_config_path() -> Path:
     return Path.cwd() / "config"
 
 
+def _get(config: Dict[str, Any], key: str, default: Any) -> Any:
+    """Get config value with fallback to default."""
+    return config.get(key, default)
+
+
 class OllamaSettings(BaseModel):
+    """Ollama LLM settings (loaded from config/ingestion.yaml llm section)."""
+
     llm: str = Field(
         default="gpt-4.1", description="LLM model"
     )
     keep_alive: str = Field(
-        default="1h", description="Keep alive time for the server"
+        default_factory=lambda: _get(get_llm_settings(), "keep_alive", "1h"),
+        description="Keep alive time for the server"
     )
     tfs_z: float = Field(
-        default=1.0, description="TFS normalization factor"
+        default_factory=lambda: _get(get_llm_settings(), "tfs_z", 1.0),
+        description="TFS normalization factor"
     )
     top_k: int = Field(
-        default=40, description="Top k sampling"
+        default_factory=lambda: _get(get_llm_settings(), "top_k", 40),
+        description="Top k sampling"
     )
     top_p: float = Field(
-        default=0.9, description="Top p sampling"
+        default_factory=lambda: _get(get_llm_settings(), "top_p", 0.9),
+        description="Top p sampling"
     )
     repeat_last_n: int = Field(
-        default=64, description="Repeat last n tokens"
+        default_factory=lambda: _get(get_llm_settings(), "repeat_last_n", 64),
+        description="Repeat last n tokens"
     )
     repeat_penalty: float = Field(
-        default=1.1, description="Repeat penalty"
+        default_factory=lambda: _get(get_llm_settings(), "repeat_penalty", 1.1),
+        description="Repeat penalty"
     )
     request_timeout: float = Field(
-        default=300, description="Request timeout"
+        default_factory=lambda: _get(get_llm_settings(), "request_timeout", 300),
+        description="Request timeout"
     )
     port: int = Field(
         default=11434, description="Port number"
@@ -54,7 +84,8 @@ class OllamaSettings(BaseModel):
         description="Context window size"
     )
     temperature: float = Field(
-        default=0.1, description="Temperature"
+        default_factory=lambda: _get(get_llm_settings(), "temperature", 0.1),
+        description="Temperature"
     )
     chat_token_limit: int = Field(
         default_factory=lambda: int(os.getenv("CHAT_TOKEN_LIMIT", "32000")),
@@ -63,88 +94,109 @@ class OllamaSettings(BaseModel):
 
 
 class RetrieverSettings(BaseModel):
+    """Retriever settings (loaded from config/ingestion.yaml retriever section)."""
+
     num_queries: int = Field(
-        default=3, description="Number of generated queries"
+        default_factory=lambda: _get(get_retriever_settings(), "num_queries", 3),
+        description="Number of generated queries"
     )
     similarity_top_k: int = Field(
-        default=20, description="Top k documents for initial retrieval"
+        default_factory=lambda: _get(get_retriever_settings(), "similarity_top_k", 20),
+        description="Top k documents for initial retrieval"
     )
     retriever_weights: List[float] = Field(
-        default=[0.5, 0.5], description="Weights for retriever (BM25, Vector)"
+        default_factory=lambda: _get(get_retriever_settings(), "retriever_weights", [0.5, 0.5]),
+        description="Weights for retriever (BM25, Vector)"
     )
     top_k_rerank: int = Field(
-        default=10, description="Top k after reranking (final results to LLM)"
+        default_factory=lambda: _get(get_retriever_settings(), "top_k_rerank", 10),
+        description="Top k after reranking (final results to LLM)"
     )
     rerank_llm: str = Field(
-       ##default="BAAI/bge-reranker-large", description="Rerank LLM model"
-        default="mixedbread-ai/mxbai-rerank-large-v1", description="Rerank LLM model" 
+        default_factory=lambda: _get(get_retriever_settings(), "rerank_model", "mixedbread-ai/mxbai-rerank-large-v1"),
+        description="Rerank LLM model"
     )
     fusion_mode: str = Field(
-        default="dist_based_score", description="Fusion mode"
+        default_factory=lambda: _get(get_retriever_settings(), "fusion_mode", "dist_based_score"),
+        description="Fusion mode"
     )
 
 
 class IngestionSettings(BaseModel):
+    """Ingestion settings (loaded from config/ingestion.yaml chunking/embedding sections)."""
+
     embed_llm: str = Field(
         default_factory=lambda: os.getenv("DEFAULT_EMBEDDING_MODEL", "text-embedding-3-small"),
         description="Embedding LLM model"
     )
     embed_batch_size: int = Field(
-        default=8, description="Embedding batch size"
+        default_factory=lambda: _get(get_embedding_config(), "batch_size", 8),
+        description="Embedding batch size"
     )
     cache_folder: str = Field(
-        default="data/huggingface", description="Cache folder"
+        default_factory=lambda: _get(get_embedding_config(), "cache_folder", "data/huggingface"),
+        description="Cache folder"
     )
     chunk_size: int = Field(
-        default=512, description="Document chunk size"
+        default_factory=lambda: _get(get_chunking_config(), "chunk_size", 512),
+        description="Document chunk size"
     )
     chunk_overlap: int = Field(
-        default=32, description="Document chunk overlap"
+        default_factory=lambda: _get(get_chunking_config(), "chunk_overlap", 32),
+        description="Document chunk overlap"
     )
     chunking_regex: str = Field(
-        default="[^,.;。？！]+[,.;。？！]?", description="Chunking regex"
+        default_factory=lambda: _get(get_chunking_config(), "chunking_regex", "[^,.;。？！]+[,.;。？！]?"),
+        description="Chunking regex"
     )
     paragraph_sep: str = Field(
-        default="\n \n", description="Paragraph separator"
+        default_factory=lambda: _get(get_chunking_config(), "paragraph_sep", "\n \n"),
+        description="Paragraph separator"
     )
     num_workers: int = Field(
-        default=0, description="Number of workers"
+        default_factory=lambda: _get(get_embedding_config(), "num_workers", 0),
+        description="Number of workers"
     )
 
 
 class ContextualRetrievalSettings(BaseModel):
-    """Settings for Contextual Retrieval (Anthropic approach).
+    """Settings for Contextual Retrieval (loaded from config/ingestion.yaml contextual_retrieval section).
 
     Enriches chunks with LLM-generated context during ingestion to improve
     retrieval for structured content like tables, lists, and technical data.
     """
     enabled: bool = Field(
-        default_factory=lambda: os.getenv("CONTEXTUAL_RETRIEVAL_ENABLED", "false").lower() == "true",
+        default_factory=lambda: _get(get_contextual_retrieval_config(), "enabled", False),
         description="Enable contextual retrieval enrichment during ingestion"
     )
     batch_size: int = Field(
-        default_factory=lambda: int(os.getenv("CONTEXTUAL_BATCH_SIZE", "5")),
+        default_factory=lambda: _get(get_contextual_retrieval_config(), "batch_size", 5),
         description="Number of chunks to process in each batch"
     )
     max_concurrency: int = Field(
-        default_factory=lambda: int(os.getenv("CONTEXTUAL_MAX_CONCURRENCY", "3")),
+        default_factory=lambda: _get(get_contextual_retrieval_config(), "max_concurrency", 3),
         description="Maximum concurrent LLM calls for context generation"
     )
     max_chunk_chars: int = Field(
-        default_factory=lambda: int(os.getenv("CONTEXTUAL_MAX_CHUNK_CHARS", "2000")),
+        default_factory=lambda: _get(get_contextual_retrieval_config(), "max_chunk_chars", 2000),
         description="Maximum characters from chunk to send to LLM"
     )
 
 
 class StorageSettings(BaseModel):
+    """Storage settings (loaded from config/ingestion.yaml storage section)."""
+
     persist_dir_chroma: str = Field(
-        default="data/chroma", description="Chroma directory"
+        default_factory=lambda: _get(get_storage_settings(), "persist_dir_chroma", "data/chroma"),
+        description="Chroma directory"
     )
     persist_dir_storage: str = Field(
-        default="data/storage", description="Storage directory"
+        default_factory=lambda: _get(get_storage_settings(), "persist_dir_storage", "data/storage"),
+        description="Storage directory"
     )
     collection_name: str = Field(
-        default="collection", description="Collection name"
+        default_factory=lambda: _get(get_storage_settings(), "collection_name", "collection"),
+        description="Collection name"
     )
     port: int = Field(
         default=8000, description="Port number"
@@ -339,15 +391,73 @@ def reload_models_settings() -> ModelsSettings:
     return _models_settings_instance
 
 
+class QueryTimeSettings(BaseModel):
+    """Per-request query settings from UI controls.
+
+    These settings are passed with each query and override the defaults
+    loaded from config files. They are NOT persisted.
+
+    Frontend → Backend Mapping:
+    - search_style (0-100): 0=keyword (BM25), 100=semantic (vector)
+    - result_depth: focused=10 results, balanced=20, comprehensive=40
+    - temperature (0-100): maps to 0.0-2.0 for LLM
+    """
+
+    # Retrieval weights (computed from search_style)
+    bm25_weight: float = Field(default=0.5, ge=0.0, le=1.0, description="BM25 keyword weight")
+    vector_weight: float = Field(default=0.5, ge=0.0, le=1.0, description="Vector semantic weight")
+
+    # Result depth (similarity_top_k)
+    similarity_top_k: int = Field(default=20, ge=5, le=100, description="Number of results to retrieve")
+
+    # LLM temperature
+    temperature: float = Field(default=0.4, ge=0.0, le=2.0, description="LLM response temperature")
+
+    @classmethod
+    def from_frontend(
+        cls,
+        search_style: int = 50,
+        result_depth: str = "balanced",
+        temperature: int = 20
+    ) -> "QueryTimeSettings":
+        """Create settings from frontend UI values.
+
+        Args:
+            search_style: 0-100 slider (0=keyword, 100=semantic)
+            result_depth: "focused" | "balanced" | "comprehensive"
+            temperature: 0-100 slider (maps to 0.0-2.0)
+
+        Returns:
+            QueryTimeSettings instance
+        """
+        # Convert search_style to weights
+        bm25_weight = (100 - search_style) / 100
+        vector_weight = search_style / 100
+
+        # Convert result_depth to similarity_top_k
+        top_k_map = {"focused": 10, "balanced": 20, "comprehensive": 40}
+        similarity_top_k = top_k_map.get(result_depth, 20)
+
+        # Convert temperature slider to float (0-100 → 0.0-2.0)
+        temp_float = temperature / 50  # 0→0, 50→1.0, 100→2.0
+
+        return cls(
+            bm25_weight=bm25_weight,
+            vector_weight=vector_weight,
+            similarity_top_k=similarity_top_k,
+            temperature=temp_float
+        )
+
+
 class RAGSettings(BaseModel):
-    ollama: OllamaSettings = OllamaSettings()
-    retriever: RetrieverSettings = RetrieverSettings()
-    ingestion: IngestionSettings = IngestionSettings()
-    storage: StorageSettings = StorageSettings()
-    anthropic: AnthropicSettings = AnthropicSettings()
-    gemini: GeminiSettings = GeminiSettings()
-    image_generation: ImageGenerationSettings = ImageGenerationSettings()
-    contextual_retrieval: ContextualRetrievalSettings = ContextualRetrievalSettings()
+    ollama: OllamaSettings = Field(default_factory=OllamaSettings)
+    retriever: RetrieverSettings = Field(default_factory=RetrieverSettings)
+    ingestion: IngestionSettings = Field(default_factory=IngestionSettings)
+    storage: StorageSettings = Field(default_factory=StorageSettings)
+    anthropic: AnthropicSettings = Field(default_factory=AnthropicSettings)
+    gemini: GeminiSettings = Field(default_factory=GeminiSettings)
+    image_generation: ImageGenerationSettings = Field(default_factory=ImageGenerationSettings)
+    contextual_retrieval: ContextualRetrievalSettings = Field(default_factory=ContextualRetrievalSettings)
 
 
 # Singleton pattern for settings - use this instead of creating new instances

@@ -9,7 +9,7 @@ from llama_index.core.schema import BaseNode
 
 from .retriever import LocalRetriever
 from ..prompt import get_condense_prompt
-from ...setting import get_settings, RAGSettings
+from ...setting import get_settings, RAGSettings, QueryTimeSettings
 
 logger = logging.getLogger(__name__)
 
@@ -138,3 +138,18 @@ class LocalChatEngine:
         """Clear the retriever's index cache."""
         self._retriever.clear_cache()
         logger.debug("Retriever cache cleared")
+
+    def set_query_settings(self, settings: Optional[QueryTimeSettings]) -> None:
+        """Set query-time settings for the next retrieval operation.
+
+        These settings override defaults from config files for a single query.
+        Call this before each stream_chat() call to apply per-request settings.
+
+        Args:
+            settings: QueryTimeSettings instance, or None to use defaults
+        """
+        self._retriever.set_query_settings(settings)
+
+    def clear_query_settings(self) -> None:
+        """Clear query-time settings, reverting to defaults."""
+        self._retriever.clear_query_settings()

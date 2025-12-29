@@ -4,6 +4,7 @@ from .setting import (
     ModelsSettings,
     get_models_settings,
     reload_models_settings,
+    QueryTimeSettings,
 )
 
 __all__ = [
@@ -12,4 +13,5 @@ __all__ = [
     "ModelsSettings",
     "get_models_settings",
     "reload_models_settings",
+    "QueryTimeSettings",
 ]

@@ -21,7 +21,7 @@ from .core.conversation import ConversationStore
 from .core.observability import QueryLogger, get_token_counter
 from .core.transformations import TransformationWorker, TransformationJob
 from .core.raptor import RAPTORWorker, RAPTORJob
-from .setting import get_settings
+from .setting import get_settings, QueryTimeSettings
 
 logger = logging.getLogger(__name__)
 
@@ -763,7 +763,8 @@ class LocalRAGPipeline:
         self,
         mode: str,
         message: str,
-        chatbot: list[list[str]]
+        chatbot: list[list[str]],
+        query_settings: Optional[QueryTimeSettings] = None
     ) -> StreamingAgentChatResponse:
         """
         Execute a query against the chat engine.
@@ -776,50 +777,76 @@ class LocalRAGPipeline:
             mode: "chat" for conversational, other for single Q&A
             message: User message
             chatbot: Conversation history
+            query_settings: Optional per-request settings (search style, depth, temperature)
 
         Returns:
             Streaming response from the chat engine
         """
         logger.debug(f"Query mode: {mode}, message length: {len(message)}")
 
+        # Apply query-time settings if provided
+        if query_settings:
+            logger.debug(
+                f"Query settings: bm25={query_settings.bm25_weight:.2f}, "
+                f"vector={query_settings.vector_weight:.2f}, "
+                f"top_k={query_settings.similarity_top_k}, "
+                f"temp={query_settings.temperature:.2f}"
+            )
+            # Apply retrieval settings to engine
+            self._engine.set_query_settings(query_settings)
+
+            # Apply temperature to LLM if different from default
+            # Note: This updates the model for this query
+            if hasattr(self._default_model, 'temperature'):
+                original_temp = getattr(self._default_model, 'temperature', 0.7)
+                if abs(query_settings.temperature - original_temp) > 0.01:
+                    self._default_model.temperature = query_settings.temperature
+                    logger.debug(f"LLM temperature adjusted: {original_temp} -> {query_settings.temperature}")
+
         # Start timing for query logging
         start_time = time.time()
 
-        # Execute query
-        if mode == "chat":
-            # ChatMemoryBuffer automatically manages conversation history
-            # DO NOT pass history parameter - it replaces internal memory
-            response = self._query_engine.stream_chat(message)
-        else:
-            # Reset memory for single Q&A mode
-            self._query_engine.reset()
-            response = self._query_engine.stream_chat(message)
+        try:
+            # Execute query
+            if mode == "chat":
+                # ChatMemoryBuffer automatically manages conversation history
+                # DO NOT pass history parameter - it replaces internal memory
+                response = self._query_engine.stream_chat(message)
+            else:
+                # Reset memory for single Q&A mode
+                self._query_engine.reset()
+                response = self._query_engine.stream_chat(message)
 
-        # Log query execution with token counting
-        # Note: Prompt tokens counted immediately, completion tokens require post-stream analysis
-        if self._query_logger:
-            response_time_ms = int((time.time() - start_time) * 1000)
+            # Log query execution with token counting
+            # Note: Prompt tokens counted immediately, completion tokens require post-stream analysis
+            if self._query_logger:
+                response_time_ms = int((time.time() - start_time) * 1000)
 
-            # Count prompt tokens using TokenCounter
-            token_counter = get_token_counter()
-            prompt_tokens = token_counter.count_tokens(message)
+                # Count prompt tokens using TokenCounter
+                token_counter = get_token_counter()
+                prompt_tokens = token_counter.count_tokens(message)
 
-            self._query_logger.log_query(
-                notebook_id=self._current_notebook_id,  # Use current notebook or None
-                user_id=self._current_user_id,
-                query_text=message,
-                model_name=self._default_model.model,
-                prompt_tokens=prompt_tokens,
-                completion_tokens=0,  # TODO: Count after stream completes (requires UI-side counting)
-                response_time_ms=response_time_ms
-            )
+                self._query_logger.log_query(
+                    notebook_id=self._current_notebook_id,  # Use current notebook or None
+                    user_id=self._current_user_id,
+                    query_text=message,
+                    model_name=self._default_model.model,
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=0,  # TODO: Count after stream completes (requires UI-side counting)
+                    response_time_ms=response_time_ms
+                )
 
-        return response
+            return response
+        finally:
+            # Clear query settings after use (revert to defaults)
+            if query_settings:
+                self._engine.clear_query_settings()
 
     def chat_without_retrieval(
         self,
         message: str,
-        chatbot: list[list[str]]
+        chatbot: list[list[str]],
+        query_settings: Optional[QueryTimeSettings] = None
     ) -> StreamingAgentChatResponse:
         """
         Direct chat with LLM without any document retrieval.
@@ -831,6 +858,7 @@ class LocalRAGPipeline:
         Args:
             message: User message
             chatbot: Conversation history (for context, though SimpleChatEngine manages its own memory)
+            query_settings: Optional per-request settings (only temperature applies for non-RAG chat)
 
         Returns:
             Streaming response from SimpleChatEngine
@@ -839,6 +867,13 @@ class LocalRAGPipeline:
         from llama_index.core.memory import ChatMemoryBuffer
 
         logger.debug(f"General chat (no retrieval): message length {len(message)}")
+
+        # Apply temperature from query settings if provided
+        if query_settings and hasattr(self._default_model, 'temperature'):
+            original_temp = getattr(self._default_model, 'temperature', 0.7)
+            if abs(query_settings.temperature - original_temp) > 0.01:
+                self._default_model.temperature = query_settings.temperature
+                logger.debug(f"LLM temperature adjusted: {original_temp} -> {query_settings.temperature}")
 
         # Create SimpleChatEngine on first use (lazy initialization)
         if self._simple_chat_engine is None:
