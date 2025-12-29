@@ -3,6 +3,7 @@ import re
 import logging
 import hashlib
 import pickle
+import asyncio
 from datetime import datetime
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -10,7 +11,7 @@ from typing import Any, List, Optional
 
 import pymupdf
 from llama_index.core import Document, Settings
-from llama_index.core.schema import BaseNode
+from llama_index.core.schema import BaseNode, TextNode
 from llama_index.core.node_parser import SentenceSplitter
 from llama_index.core.llms.llm import LLM
 from dotenv import load_dotenv
@@ -20,6 +21,7 @@ from ...setting import get_settings, RAGSettings
 from .synopsis_manager import SynopsisManager
 from ..db import DatabaseManager
 from ..notebook import NotebookManager
+from ..transformations.context_service import ContextualRetrievalService
 
 load_dotenv()
 
@@ -308,6 +310,17 @@ class LocalDataIngestion:
         # Signature: callback(source_id: str, document_text: str, notebook_id: str, file_name: str)
         self._transformation_callback = transformation_callback
 
+        # Contextual retrieval enrichment (Anthropic approach)
+        # Enriches chunks with LLM-generated context to improve retrieval for structured content
+        self._contextual_retrieval_enabled = self._setting.contextual_retrieval.enabled
+        self._context_service: Optional[ContextualRetrievalService] = None
+        if self._contextual_retrieval_enabled:
+            self._context_service = ContextualRetrievalService(
+                batch_size=self._setting.contextual_retrieval.batch_size,
+                max_concurrency=self._setting.contextual_retrieval.max_concurrency
+            )
+            logger.info("Contextual retrieval enabled - chunks will be enriched with LLM context")
+
         # Create splitter once
         self._splitter = SentenceSplitter.from_defaults(
             chunk_size=self._setting.ingestion.chunk_size,
@@ -341,6 +354,65 @@ class LocalDataIngestion:
         except Exception as e:
             logger.warning(f"Error calculating hash for {file_path}: {e}")
             return ""
+
+    def _enrich_nodes_with_context(
+        self,
+        nodes: List[BaseNode],
+        doc_title: str
+    ) -> List[BaseNode]:
+        """Enrich nodes with LLM-generated contextual content.
+
+        Uses the ContextualRetrievalService to generate context descriptions
+        for each chunk, which improves retrieval for structured content.
+
+        Args:
+            nodes: List of nodes to enrich
+            doc_title: Document title/filename for context
+
+        Returns:
+            List of enriched nodes (or original nodes if enrichment fails)
+        """
+        if not self._context_service:
+            return nodes
+
+        # Convert to TextNodes if needed
+        text_nodes = []
+        for node in nodes:
+            if isinstance(node, TextNode):
+                text_nodes.append(node)
+            else:
+                # Convert BaseNode to TextNode
+                text_nodes.append(TextNode(
+                    text=node.get_content(),
+                    metadata=node.metadata.copy() if hasattr(node, 'metadata') else {}
+                ))
+
+        # Run async enrichment in sync context
+        try:
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+
+        try:
+            result = loop.run_until_complete(
+                self._context_service.enrich_chunks(text_nodes, doc_title)
+            )
+
+            if result.success_count > 0:
+                logger.info(
+                    f"Context enrichment: {result.success_count}/{len(nodes)} chunks enriched"
+                )
+                if result.errors:
+                    logger.warning(f"Context enrichment errors: {result.errors[:3]}")
+                return result.enriched_nodes
+            else:
+                logger.warning("Context enrichment produced no results, using original nodes")
+                return nodes
+
+        except Exception as e:
+            logger.error(f"Context enrichment async error: {e}")
+            return nodes
 
     def _process_single_file(
         self,
@@ -400,6 +472,16 @@ class LocalDataIngestion:
         )
 
         nodes = self._splitter([document], show_progress=False)
+
+        # Apply contextual retrieval enrichment if enabled
+        # This adds LLM-generated context to each chunk to improve retrieval
+        if self._context_service and nodes:
+            try:
+                logger.info(f"Enriching {len(nodes)} chunks with contextual content for {file_name}")
+                nodes = self._enrich_nodes_with_context(nodes, file_name)
+                logger.info(f"Context enrichment complete for {file_name}")
+            except Exception as e:
+                logger.warning(f"Context enrichment failed for {file_name}: {e} - using original chunks")
 
         # Embed nodes if requested
         if embed_nodes and nodes:
@@ -522,6 +604,7 @@ class LocalDataIngestion:
                                 if hasattr(node, 'metadata'):
                                     node.metadata["notebook_id"] = notebook_id
                                     node.metadata["user_id"] = user_id
+                                    node.metadata["tree_level"] = 0  # Mark as leaf node for RAPTOR
                                     if source_id:
                                         node.metadata["source_id"] = source_id
 

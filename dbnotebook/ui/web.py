@@ -17,6 +17,8 @@ from ..api.routes.web_content import create_web_content_routes
 from ..api.routes.studio import create_studio_routes
 from ..api.routes.vision import create_vision_routes
 from ..api.routes.transformations import create_transformation_routes
+from ..api.routes.agents import create_agent_routes
+from ..api.routes.multi_notebook import create_multi_notebook_routes
 from ..core.ingestion import WebContentIngestion, SynopsisManager
 from ..core.studio import StudioManager
 
@@ -201,7 +203,15 @@ class FlaskChatbotUI:
         })
 
     def _is_image_generation_request(self, message: str) -> bool:
-        """Use LLM to intelligently detect if message is requesting image generation."""
+        """Use LLM to intelligently detect if message is requesting image generation.
+
+        NOTE: Image generation is now only available in Content Studio.
+        This method always returns False to disable in-chat image generation.
+        """
+        # Image generation disabled in chat - use Studio instead
+        return False
+
+        # Original code below (disabled):
         # Quick keyword check first for efficiency
         image_keywords = ["image", "infographic", "diagram", "visual", "picture", "illustration", "graphic", "chart", "visualization"]
         message_lower = message.lower()
@@ -612,7 +622,8 @@ Output ONLY valid JSON, nothing else."""
                                         seen_sources.add(source_key)
                                         source_info = {
                                             'filename': filename,
-                                            'score': round(score, 3) if score else None
+                                            # Convert numpy float32 to Python float for JSON serialization
+                                            'score': float(round(score, 3)) if score is not None else None
                                         }
                                         if page:
                                             source_info['page'] = page
@@ -1295,8 +1306,8 @@ Output ONLY valid JSON, nothing else."""
                 logger.error(f"Error getting stats: {e}")
                 return jsonify({"success": False, "error": str(e)})
 
-        # Register chat API routes
-        create_chat_routes(self._app, self._pipeline)
+        # Register chat API routes (with db_manager for two-stage routing)
+        create_chat_routes(self._app, self._pipeline, db_manager=self._db_manager)
 
         # Register web content routes (for web search and scraping)
         try:
@@ -1353,6 +1364,24 @@ Output ONLY valid JSON, nothing else."""
                     logger.info("Transformation retry enabled via TransformationWorker")
         except Exception as e:
             logger.warning(f"Transformation API routes not available: {e}")
+
+        # Register Agent API routes
+        try:
+            create_agent_routes(self._app, self._pipeline)
+            logger.info("Agent API routes registered")
+        except Exception as e:
+            logger.warning(f"Agent API routes not available: {e}")
+
+        # Register Multi-Notebook Query routes
+        try:
+            create_multi_notebook_routes(
+                self._app,
+                self._pipeline,
+                notebook_manager=self._notebook_manager
+            )
+            logger.info("Multi-notebook query routes registered")
+        except Exception as e:
+            logger.warning(f"Multi-notebook query routes not available: {e}")
 
         # === Query Logging & Observability Endpoints ===
 
@@ -1802,25 +1831,16 @@ Output ONLY valid JSON, nothing else."""
         def clear_notebook_chat(notebook_id):
             """Clear all conversation history for a notebook."""
             try:
-                # Use the same default user UUID as the rest of the system
-                default_user_id = "00000000-0000-0000-0000-000000000001"
-                user_id = request.json.get("user_id", default_user_id) if request.json else default_user_id
-
-                # Clear conversation history from the store
-                deleted_count = self._pipeline._conversation_store.clear_notebook_history(
-                    notebook_id=notebook_id,
-                    user_id=user_id
-                )
-
-                logger.info(f"Cleared {deleted_count} conversations for notebook {notebook_id}")
+                # Reset in-memory ChatMemoryBuffer (critical for session-only mode)
+                self._pipeline.clear_conversation()
+                logger.info(f"Reset in-memory conversation buffer for notebook {notebook_id}")
 
                 return jsonify({
                     "success": True,
-                    "cleared": deleted_count,
-                    "message": f"Cleared {deleted_count} conversation entries"
+                    "message": "Conversation memory cleared"
                 })
             except Exception as e:
-                logger.error(f"Error clearing conversation history: {e}")
+                logger.error(f"Error clearing conversation: {e}")
                 return jsonify({"success": False, "error": str(e)}), 500
 
         # React SPA catch-all route - must be last to not interfere with API routes

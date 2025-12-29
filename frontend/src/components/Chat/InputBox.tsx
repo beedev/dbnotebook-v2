@@ -82,47 +82,51 @@ export function InputBox({
   const canSend = message.trim().length > 0 && !isLoading && !disabled;
 
   return (
-    <div className="border-t border-void-surface bg-void-light/50 backdrop-blur-sm">
+    <div className="border-t border-void-surface/50 bg-gradient-to-t from-void-light to-transparent">
       <div className="max-w-3xl mx-auto p-4">
         <div
           className={`
-            relative flex items-end gap-2 p-3
-            bg-void-light rounded-xl
-            border border-void-surface
-            transition-all duration-200
-            focus-within:border-glow/30 focus-within:shadow-glow
+            relative flex items-end gap-2 p-2
+            bg-void-surface/50 rounded-2xl
+            border border-void-lighter/50
+            transition-all duration-300
+            focus-within:border-glow/40 focus-within:bg-void-surface/70
+            focus-within:shadow-[0_0_20px_rgba(0,229,204,0.1)]
           `}
         >
-          {/* File upload button */}
-          {onFileUpload && (
-            <>
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept=".pdf,.txt,.docx,.epub,.pptx,.png,.jpg,.jpeg,.webp"
-                className="hidden"
-                onChange={handleFileChange}
-              />
-              <button
-                onClick={handleFileClick}
-                disabled={isLoading || disabled}
-                className="flex-shrink-0 p-2 rounded-lg text-text-dim hover:text-text hover:bg-void-surface transition-colors disabled:opacity-50"
-                title="Upload document"
-              >
-                <Paperclip className="w-5 h-5" />
-              </button>
-            </>
-          )}
+          {/* Left action buttons */}
+          <div className="flex items-center gap-1 pl-1">
+            {/* File upload button */}
+            {onFileUpload && (
+              <>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept=".pdf,.txt,.docx,.epub,.pptx,.png,.jpg,.jpeg,.webp"
+                  className="hidden"
+                  onChange={handleFileChange}
+                />
+                <button
+                  onClick={handleFileClick}
+                  disabled={isLoading || disabled}
+                  className="flex-shrink-0 p-2 rounded-xl text-text-dim hover:text-glow hover:bg-glow/10 transition-all duration-200 disabled:opacity-50"
+                  title="Upload document"
+                >
+                  <Paperclip className="w-4 h-4" />
+                </button>
+              </>
+            )}
 
-          {/* Image generation hint */}
-          <button
-            onClick={() => setMessage((prev) => prev + ' [generate image] ')}
-            disabled={isLoading || disabled}
-            className="flex-shrink-0 p-2 rounded-lg text-text-dim hover:text-nebula hover:bg-nebula/10 transition-colors disabled:opacity-50"
-            title="Add image generation prompt"
-          >
-            <ImageIcon className="w-5 h-5" />
-          </button>
+            {/* Image generation hint */}
+            <button
+              onClick={() => setMessage((prev) => prev + ' [generate image] ')}
+              disabled={isLoading || disabled}
+              className="flex-shrink-0 p-2 rounded-xl text-text-dim hover:text-nebula hover:bg-nebula/10 transition-all duration-200 disabled:opacity-50"
+              title="Generate image"
+            >
+              <ImageIcon className="w-4 h-4" />
+            </button>
+          </div>
 
           {/* Text input */}
           <textarea
@@ -134,9 +138,9 @@ export function InputBox({
             disabled={disabled}
             rows={1}
             className={`
-              flex-1 resize-none
+              flex-1 resize-none py-2 px-1
               bg-transparent text-text
-              placeholder:text-text-dim
+              placeholder:text-text-dim/70
               focus:outline-none
               font-[family-name:var(--font-body)]
               text-base leading-relaxed
@@ -149,42 +153,44 @@ export function InputBox({
           {isStreaming ? (
             <button
               onClick={onStop}
-              className="flex-shrink-0 p-2 rounded-lg bg-danger/20 text-danger hover:bg-danger/30 transition-colors"
+              className="flex-shrink-0 p-2.5 rounded-xl bg-danger/20 text-danger hover:bg-danger/30 transition-all duration-200"
               title="Stop generating"
             >
-              <Square className="w-5 h-5" />
+              <Square className="w-4 h-4" />
             </button>
           ) : (
             <button
               onClick={handleSend}
               disabled={!canSend}
               className={`
-                flex-shrink-0 p-2 rounded-lg
+                flex-shrink-0 p-2.5 rounded-xl
                 transition-all duration-200
                 ${
                   canSend
-                    ? 'bg-glow/20 text-glow hover:bg-glow/30 hover:shadow-glow'
-                    : 'bg-void-surface text-text-dim cursor-not-allowed'
+                    ? 'bg-glow text-void hover:bg-glow-bright shadow-lg shadow-glow/20'
+                    : 'bg-void-lighter text-text-dim cursor-not-allowed'
                 }
               `}
               title="Send message (Enter)"
             >
-              <Send className="w-5 h-5" />
+              <Send className="w-4 h-4" />
             </button>
           )}
         </div>
 
-        {/* Keyboard shortcuts hint */}
-        <div className="flex items-center justify-between mt-2 px-1">
-          <p className="text-xs text-text-dim">
-            <kbd className="px-1.5 py-0.5 rounded bg-void-surface text-text-muted">Enter</kbd>
-            {' '}to send,{' '}
-            <kbd className="px-1.5 py-0.5 rounded bg-void-surface text-text-muted">Shift+Enter</kbd>
-            {' '}for new line
+        {/* Keyboard shortcuts hint - more subtle */}
+        <div className="flex items-center justify-center mt-2 gap-4">
+          <p className="text-[11px] text-text-dim/60">
+            <kbd className="px-1 py-0.5 rounded bg-void-surface/50 text-text-dim font-mono text-[10px]">↵</kbd>
+            {' '}send
+          </p>
+          <p className="text-[11px] text-text-dim/60">
+            <kbd className="px-1 py-0.5 rounded bg-void-surface/50 text-text-dim font-mono text-[10px]">⇧↵</kbd>
+            {' '}new line
           </p>
           {message.length > 0 && (
-            <p className="text-xs text-text-dim">
-              {message.length} characters
+            <p className="text-[11px] text-text-dim/60">
+              {message.length} chars
             </p>
           )}
         </div>

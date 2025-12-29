@@ -7,6 +7,20 @@ from .processor import ContentProcessor
 from .image_generation import ImageGenerationProvider
 from .web_content import WebSearchProvider, WebScraperProvider, WebSearchResult, ScrapedContent
 from .vision import VisionProvider, VisionAnalysisResult
+from .services import (
+    IChatService,
+    IImageService,
+    IDocumentService,
+    INotebookService,
+    IVisionService,
+)
+from .routing import (
+    IDocumentRoutingService,
+    IRoutingPrompts,
+    RoutingStrategy,
+    RoutingResult,
+    DocumentSummary,
+)
 
 __all__ = [
     "RetrievalStrategy",
@@ -20,4 +34,16 @@ __all__ = [
     "ScrapedContent",
     "VisionProvider",
     "VisionAnalysisResult",
+    # Service interfaces
+    "IChatService",
+    "IImageService",
+    "IDocumentService",
+    "INotebookService",
+    "IVisionService",
+    # Routing interfaces
+    "IDocumentRoutingService",
+    "IRoutingPrompts",
+    "RoutingStrategy",
+    "RoutingResult",
+    "DocumentSummary",
 ]

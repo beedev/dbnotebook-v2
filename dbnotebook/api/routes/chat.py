@@ -1,20 +1,37 @@
-"""Chat API routes for RAG chatbot."""
+"""Chat API routes for RAG chatbot.
+
+Includes two-stage LLM document routing for intelligent retrieval:
+- Stage 1: Analyze query against document summaries to determine routing strategy
+- Stage 2: Execute retrieval based on routing decision (if needed)
+"""
 
 import logging
 from flask import Blueprint, request, jsonify
 from llama_index.core.llms import ChatMessage
 from llama_index.core import Settings
 
+from ...core.services import DocumentRoutingService
+from ...core.interfaces import RoutingStrategy
+
 logger = logging.getLogger(__name__)
 
 
-def create_chat_routes(app, pipeline):
+def create_chat_routes(app, pipeline, db_manager=None):
     """Create chat-related API routes.
 
     Args:
         app: Flask application instance
         pipeline: LocalRAGPipeline instance
+        db_manager: DatabaseManager instance for routing service
     """
+    # Initialize routing service if db_manager is available
+    routing_service = None
+    if db_manager and pipeline:
+        routing_service = DocumentRoutingService(
+            pipeline=pipeline,
+            db_manager=db_manager
+        )
+        logger.info("DocumentRoutingService initialized for two-stage routing")
 
     @app.route("/api/chat", methods=["POST"])
     def api_chat():
@@ -72,6 +89,54 @@ def create_chat_routes(app, pipeline):
             pipeline.set_language(pipeline._language)
             pipeline.set_model()
 
+            # =========================================================================
+            # Stage 1: Two-Stage LLM Document Routing
+            # =========================================================================
+            routing_result = None
+            selected_notebook_ids = notebook_ids  # Default to all requested notebooks
+
+            if routing_service and notebook_ids and len(notebook_ids) == 1:
+                # Use routing service for single-notebook queries
+                try:
+                    notebook_id = notebook_ids[0]
+                    routing_result = routing_service.route_query(
+                        query=message,
+                        notebook_id=notebook_id
+                    )
+
+                    logger.info(
+                        f"Routing decision: strategy={routing_result.strategy.value}, "
+                        f"selected_docs={len(routing_result.selected_document_ids)}, "
+                        f"confidence={routing_result.confidence}"
+                    )
+
+                    # Handle DIRECT_SYNTHESIS - return immediately without retrieval
+                    if routing_result.strategy == RoutingStrategy.DIRECT_SYNTHESIS:
+                        logger.info("Using DIRECT_SYNTHESIS - returning synthesized response")
+                        return jsonify({
+                            "success": True,
+                            "response": routing_result.direct_response,
+                            "sources": [],  # No sources for direct synthesis
+                            "notebook_ids": notebook_ids,
+                            "retrieval_strategy": "direct_synthesis",
+                            "routing": {
+                                "strategy": routing_result.strategy.value,
+                                "reasoning": routing_result.reasoning,
+                                "confidence": routing_result.confidence
+                            }
+                        })
+
+                    # For DEEP_DIVE or MULTI_DOC_ANALYSIS, we'll filter retrieval
+                    # to the selected documents in Stage 2
+
+                except Exception as e:
+                    logger.warning(f"Routing failed, falling back to standard retrieval: {e}")
+                    routing_result = None
+
+            # =========================================================================
+            # Stage 2: Focused Retrieval (if routing didn't return direct synthesis)
+            # =========================================================================
+
             # Initialize chat engine WITH notebook filter so it uses the right documents
             # This is critical - set_engine() loads nodes from the specified notebooks
             if notebook_ids:
@@ -88,6 +153,19 @@ def create_chat_routes(app, pipeline):
                     nb_nodes = pipeline._vector_store.get_nodes_by_notebook_sql(nb_id)
                     nodes.extend(nb_nodes)
                 logger.info(f"Retrieved {len(nodes)} nodes for source attribution")
+
+                # Filter nodes to selected documents if routing provided specific docs
+                if routing_result and routing_result.selected_document_ids:
+                    selected_source_ids = set(routing_result.selected_document_ids)
+                    original_count = len(nodes)
+                    nodes = [
+                        n for n in nodes
+                        if n.metadata.get("source_id") in selected_source_ids
+                    ]
+                    logger.info(
+                        f"Filtered nodes from {original_count} to {len(nodes)} "
+                        f"based on routing selection: {selected_source_ids}"
+                    )
 
             # Perform retrieval to get source metadata BEFORE chat response
             sources = []
@@ -134,6 +212,10 @@ def create_chat_routes(app, pipeline):
 
                     retrieval_strategy = retriever.__class__.__name__.replace("Retriever", "").lower()
 
+                    # Add routing info to strategy name if routing was used
+                    if routing_result:
+                        retrieval_strategy = f"{routing_result.strategy.value}+{retrieval_strategy}"
+
                 except Exception as e:
                     logger.warning(f"Could not extract sources: {e}")
                     # Continue without sources rather than failing the entire request
@@ -172,13 +254,24 @@ def create_chat_routes(app, pipeline):
                 logger.debug(f"Chat response received: {response_text[:100]}...")
                 logger.info(f"Returning response with {len(sources)} sources")
 
-                return jsonify({
+                response_data = {
                     "success": True,
                     "response": response_text,
                     "sources": sources,
                     "notebook_ids": notebook_ids,
                     "retrieval_strategy": retrieval_strategy
-                })
+                }
+
+                # Add routing metadata if routing was used
+                if routing_result:
+                    response_data["routing"] = {
+                        "strategy": routing_result.strategy.value,
+                        "reasoning": routing_result.reasoning,
+                        "confidence": routing_result.confidence,
+                        "selected_documents": routing_result.selected_document_ids
+                    }
+
+                return jsonify(response_data)
 
         except Exception as e:
             logger.error(f"Error in chat endpoint: {e}")

@@ -128,6 +128,11 @@ class NotebookSource(Base):
     transformation_error = Column(Text, nullable=True)  # Error message if transformation failed
     transformed_at = Column(TIMESTAMP, nullable=True)  # When transformation completed
 
+    # RAPTOR (Recursive Abstractive Processing for Tree-Organized Retrieval) status
+    raptor_status = Column(String(20), default='pending', nullable=False)  # pending|building|completed|failed
+    raptor_error = Column(Text, nullable=True)  # Error message if RAPTOR build failed
+    raptor_built_at = Column(TIMESTAMP, nullable=True)  # When RAPTOR tree was built
+
     # Relationships
     notebook = relationship("Notebook", back_populates="sources")
 

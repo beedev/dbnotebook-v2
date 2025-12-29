@@ -7,11 +7,12 @@ Benefits:
 - Native hybrid search (BM25 + vector)
 - ACID transactions across metadata + vectors
 - Incremental vector updates (no index rebuild)
+- Shared connection pool with DatabaseManager (no duplicate pools)
 """
 
 import os
 import logging
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Callable, Tuple
 
 from llama_index.core import VectorStoreIndex, StorageContext
 from llama_index.core.schema import BaseNode, TextNode
@@ -21,65 +22,124 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 
 from ...setting import get_settings, RAGSettings
+from .base import IVectorStore
 
 load_dotenv()
 
 logger = logging.getLogger(__name__)
 
 
-class PGVectorStore:
+class PGVectorStore(IVectorStore):
     """
-    PostgreSQL + pgvector based vector store.
+    PostgreSQL + pgvector based vector store implementing IVectorStore interface.
 
     Drop-in replacement for LocalVectorStore (ChromaDB) with enhanced features:
     - SQL-native metadata filtering (O(log n) vs O(n) client-side)
     - Incremental add/delete without full index rebuild
     - Unified PostgreSQL backend for all data
+    - Shared connection pool with DatabaseManager (dependency injection support)
     """
 
     def __init__(
         self,
         host: str = "localhost",
-        setting: RAGSettings | None = None,
-        persist: bool = True
+        setting: Optional[RAGSettings] = None,
+        persist: bool = True,
+        database_url: Optional[str] = None,
+        session_factory: Optional[Callable] = None,
     ) -> None:
+        """
+        Initialize PGVectorStore with optional dependency injection.
+
+        Args:
+            host: Host identifier (for legacy compatibility)
+            setting: RAG settings configuration
+            persist: Enable persistence (default: True)
+            database_url: Optional database URL to override environment
+            session_factory: Optional injected session factory from DatabaseManager.
+                           If provided, this vector store will use the shared connection pool
+                           instead of creating its own pool.
+        """
         self._setting = setting or get_settings()
         self._host = host
         self._persist = persist
 
-        # Use DATABASE_URL directly (same as DatabaseManager) for consistency
-        # Falls back to building from individual vars for backwards compatibility
-        database_url = os.getenv("DATABASE_URL")
-        if database_url:
-            # Parse DATABASE_URL: postgresql://user:password@host:port/database
+        # Determine if we own the connection pool or are using an injected one
+        self._owns_pool = session_factory is None
+
+        if session_factory:
+            # Use injected session factory (shared pool)
+            self._session_factory = session_factory
+            logger.info("PGVectorStore using injected session factory (shared pool)")
+
+            # We still need connection params for LlamaIndex PGVectorStore
+            # Extract from database_url if provided, otherwise from environment
+            if database_url:
+                self._connection_string = database_url
+            else:
+                database_url = os.getenv("DATABASE_URL")
+                if database_url:
+                    self._connection_string = database_url
+                else:
+                    # Fallback: build from individual env vars
+                    db_host = os.getenv("POSTGRES_HOST", "localhost")
+                    db_port = int(os.getenv("POSTGRES_PORT", "5433"))
+                    db_name = os.getenv("POSTGRES_DB", "dbnotebook_dev")
+                    db_user = os.getenv("POSTGRES_USER", "postgres")
+                    db_password = os.getenv("POSTGRES_PASSWORD", "root")
+                    self._connection_string = (
+                        f"postgresql://{db_user}:{db_password}@"
+                        f"{db_host}:{db_port}/{db_name}"
+                    )
+
+            # Parse connection string for individual params
             from urllib.parse import urlparse
-            parsed = urlparse(database_url)
+            parsed = urlparse(self._connection_string)
             self._db_host = parsed.hostname or "localhost"
             self._db_port = parsed.port or 5432
             self._db_name = parsed.path.lstrip('/') if parsed.path else "dbnotebook_dev"
             self._db_user = parsed.username or "postgres"
             self._db_password = parsed.password or ""
-        else:
-            # Fallback: use individual environment variables
-            self._db_host = os.getenv("POSTGRES_HOST", "localhost")
-            self._db_port = int(os.getenv("POSTGRES_PORT", "5433"))
-            self._db_name = os.getenv("POSTGRES_DB", "dbnotebook_dev")
-            self._db_user = os.getenv("POSTGRES_USER", "postgres")
-            self._db_password = os.getenv("POSTGRES_PASSWORD", "root")
 
-        # Build connection string for SQLAlchemy
-        self._connection_string = (
-            f"postgresql://{self._db_user}:{self._db_password}@"
-            f"{self._db_host}:{self._db_port}/{self._db_name}"
-        )
+        else:
+            # Create our own connection pool (legacy behavior)
+            # Use DATABASE_URL directly (same as DatabaseManager) for consistency
+            # Falls back to building from individual vars for backwards compatibility
+            if database_url:
+                self._connection_string = database_url
+            else:
+                database_url = os.getenv("DATABASE_URL")
+                if database_url:
+                    self._connection_string = database_url
+                else:
+                    # Fallback: use individual environment variables
+                    self._db_host = os.getenv("POSTGRES_HOST", "localhost")
+                    self._db_port = int(os.getenv("POSTGRES_PORT", "5433"))
+                    self._db_name = os.getenv("POSTGRES_DB", "dbnotebook_dev")
+                    self._db_user = os.getenv("POSTGRES_USER", "postgres")
+                    self._db_password = os.getenv("POSTGRES_PASSWORD", "root")
+                    self._connection_string = (
+                        f"postgresql://{self._db_user}:{self._db_password}@"
+                        f"{self._db_host}:{self._db_port}/{self._db_name}"
+                    )
+
+            # Parse connection string for individual params
+            from urllib.parse import urlparse
+            parsed = urlparse(self._connection_string)
+            self._db_host = parsed.hostname or "localhost"
+            self._db_port = parsed.port or 5432
+            self._db_name = parsed.path.lstrip('/') if parsed.path else "dbnotebook_dev"
+            self._db_user = parsed.username or "postgres"
+            self._db_password = parsed.password or ""
+
+            # Create own SQLAlchemy engine and session factory
+            self._engine = create_engine(self._connection_string)
+            self._session_factory = sessionmaker(bind=self._engine)
+            logger.info("PGVectorStore created own connection pool")
 
         # pgvector settings
         self._table_name = os.getenv("PGVECTOR_TABLE_NAME", "embeddings")
         self._embed_dim = int(os.getenv("PGVECTOR_EMBED_DIM", "768"))
-
-        # Initialize SQLAlchemy engine for direct queries
-        self._engine = create_engine(self._connection_string)
-        self._Session = sessionmaker(bind=self._engine)
 
         # Initialize LlamaIndex PGVectorStore
         self._vector_store = self._create_vector_store()
@@ -99,10 +159,46 @@ class PGVectorStore:
         # Ensure indexes exist for fast metadata filtering
         self._ensure_metadata_indexes()
 
+    @classmethod
+    def from_session_factory(
+        cls,
+        session_factory: Callable,
+        database_url: str,
+        **kwargs
+    ) -> "PGVectorStore":
+        """
+        Create PGVectorStore using injected session factory (dependency injection pattern).
+
+        This factory method allows sharing a connection pool with DatabaseManager,
+        preventing duplicate connection pools and resource waste.
+
+        Args:
+            session_factory: SQLAlchemy sessionmaker from DatabaseManager
+            database_url: Database connection URL
+            **kwargs: Additional arguments passed to PGVectorStore constructor
+
+        Returns:
+            PGVectorStore instance using the shared connection pool
+
+        Example:
+            # Share connection pool with DatabaseManager
+            db_manager = DatabaseManager(database_url)
+            vector_store = PGVectorStore.from_session_factory(
+                session_factory=db_manager.SessionLocal,
+                database_url=database_url
+            )
+        """
+        return cls(
+            session_factory=session_factory,
+            database_url=database_url,
+            **kwargs
+        )
+
     def _ensure_metadata_indexes(self) -> None:
         """Create indexes on metadata JSONB for fast filtering and uniqueness."""
         try:
-            with self._Session() as session:
+            session = self._session_factory()
+            try:
                 # Create index on notebook_id for O(log n) lookups
                 session.execute(text(f"""
                     CREATE INDEX IF NOT EXISTS idx_{self._table_name}_notebook_id
@@ -127,6 +223,8 @@ class PGVectorStore:
                 """))
                 session.commit()
                 logger.debug("Metadata indexes ensured")
+            finally:
+                session.close()
         except Exception as e:
             # Table might not exist yet - that's OK
             logger.debug(f"Could not create metadata indexes (table may not exist yet): {e}")
@@ -148,61 +246,9 @@ class PGVectorStore:
             },
         )
 
-    def get_index(
-        self,
-        nodes: List[BaseNode],
-        force_rebuild: bool = False
-    ) -> Optional[VectorStoreIndex]:
-        """
-        Get or create vector index with caching.
-
-        Args:
-            nodes: List of nodes to index
-            force_rebuild: Force rebuild even if cached
-
-        Returns:
-            VectorStoreIndex or None if no nodes
-        """
-        if not nodes:
-            return None
-
-        # Return cached index if node count matches and not forcing rebuild
-        if (
-            not force_rebuild and
-            self._index_cache is not None and
-            len(nodes) == self._cached_node_count
-        ):
-            logger.debug("Using cached vector index")
-            return self._index_cache
-
-        try:
-            # Create storage context with pgvector store
-            storage_context = StorageContext.from_defaults(
-                vector_store=self._vector_store
-            )
-
-            # Create index with nodes
-            index = VectorStoreIndex(
-                nodes=nodes,
-                storage_context=storage_context
-            )
-
-            # Cache the index
-            self._index_cache = index
-            self._cached_node_count = len(nodes)
-
-            logger.debug(f"Created pgvector index with {len(nodes)} nodes")
-            return index
-
-        except Exception as e:
-            logger.error(f"Error creating pgvector index: {e}")
-            import traceback
-            logger.error(f"Traceback: {traceback.format_exc()}")
-            # Fallback to in-memory index
-            index = VectorStoreIndex(nodes=nodes)
-            self._index_cache = index
-            self._cached_node_count = len(nodes)
-            return index
+    # =========================================================================
+    # IVectorStore Interface Implementation
+    # =========================================================================
 
     def add_nodes(
         self,
@@ -253,8 +299,270 @@ class PGVectorStore:
             return len(unique_nodes)
 
         except Exception as e:
-            logger.error(f"Error adding nodes to pgvector: {e}")
+            # Sanitize error - don't log full SQL with embeddings
+            error_msg = str(e)
+            if len(error_msg) > 300:
+                if "duplicate key" in error_msg.lower():
+                    error_msg = "Duplicate key violation - nodes already exist"
+                else:
+                    error_msg = f"{type(e).__name__}: {error_msg[:150]}... [truncated]"
+            logger.error(f"Error adding nodes to pgvector: {error_msg}")
             return 0
+
+    def query(
+        self,
+        query_embedding: List[float],
+        similarity_top_k: int = 10,
+        filters: Optional[dict] = None,
+    ) -> List[Tuple[BaseNode, float]]:
+        """
+        Query for similar nodes using vector similarity.
+
+        Args:
+            query_embedding: Query vector embedding
+            similarity_top_k: Maximum number of results to return
+            filters: Optional metadata filters to apply
+
+        Returns:
+            List of (node, similarity_score) tuples, sorted by relevance
+        """
+        try:
+            # Use LlamaIndex's built-in query method
+            results = self._vector_store.query(
+                query_embedding=query_embedding,
+                similarity_top_k=similarity_top_k,
+                filters=filters
+            )
+
+            # Convert to expected format
+            return [(node, score) for node, score in zip(results.nodes, results.similarities)]
+        except Exception as e:
+            logger.error(f"Error querying pgvector: {e}")
+            return []
+
+    def delete(
+        self,
+        node_ids: Optional[List[str]] = None,
+        filters: Optional[dict] = None
+    ) -> bool:
+        """
+        Delete nodes by ID or metadata filter.
+
+        Args:
+            node_ids: List of node IDs to delete
+            filters: Metadata filters to select nodes for deletion
+
+        Returns:
+            True if deletion successful, False otherwise
+        """
+        try:
+            if node_ids:
+                # Delete by IDs
+                self._vector_store.delete_nodes(node_ids)
+            elif filters:
+                # Delete by filter - need to query first then delete
+                # This is a limitation of the current LlamaIndex interface
+                logger.warning("Deletion by filters not directly supported, use specific delete methods")
+                return False
+            else:
+                logger.warning("Either node_ids or filters must be provided for deletion")
+                return False
+
+            # Invalidate cache
+            self._index_cache = None
+            self._cached_node_count = 0
+
+            return True
+        except Exception as e:
+            logger.error(f"Error deleting nodes from pgvector: {e}")
+            return False
+
+    def get_nodes(self, node_ids: List[str]) -> List[BaseNode]:
+        """
+        Get specific nodes by their IDs.
+
+        Args:
+            node_ids: List of node IDs to retrieve
+
+        Returns:
+            List of nodes matching the given IDs
+        """
+        if not node_ids:
+            return []
+
+        try:
+            session = self._session_factory()
+            try:
+                # Query nodes by IDs
+                placeholders = ", ".join([f":id_{i}" for i in range(len(node_ids))])
+                params = {f"id_{i}": node_id for i, node_id in enumerate(node_ids)}
+
+                result = session.execute(
+                    text(f"""
+                        SELECT id, text, metadata_, embedding
+                        FROM {self._actual_table_name}
+                        WHERE id IN ({placeholders})
+                    """),
+                    params
+                )
+                rows = result.fetchall()
+
+                nodes = []
+                for row in rows:
+                    node_id, text_content, metadata, embedding = row
+
+                    if isinstance(metadata, str):
+                        import json
+                        metadata = json.loads(metadata)
+
+                    # Parse embedding
+                    parsed_embedding = None
+                    if embedding is not None:
+                        if isinstance(embedding, str):
+                            import json
+                            parsed_embedding = json.loads(embedding)
+                        elif hasattr(embedding, 'tolist'):
+                            parsed_embedding = embedding.tolist()
+                        else:
+                            parsed_embedding = list(embedding)
+
+                    node = TextNode(
+                        id_=str(node_id),
+                        text=text_content or "",
+                        metadata=metadata or {},
+                        embedding=parsed_embedding
+                    )
+                    nodes.append(node)
+
+                return nodes
+            finally:
+                session.close()
+
+        except Exception as e:
+            logger.error(f"Error retrieving nodes by ID: {e}")
+            return []
+
+    @property
+    def is_connected(self) -> bool:
+        """
+        Check if the vector store is connected and ready to use.
+
+        Returns:
+            True if connected and operational, False otherwise
+        """
+        try:
+            session = self._session_factory()
+            try:
+                # Test connection with simple query
+                session.execute(text("SELECT 1"))
+                return True
+            finally:
+                session.close()
+        except Exception as e:
+            logger.error(f"Vector store connection check failed: {e}")
+            return False
+
+    def reset(self) -> None:
+        """Reset the vector store (clear cache and collection)."""
+        self.clear_collection()
+        self._index_cache = None
+        self._cached_node_count = 0
+
+    def get_collection_stats(self) -> dict:
+        """Get statistics about the embeddings table."""
+        try:
+            session = self._session_factory()
+            try:
+                result = session.execute(
+                    text(f"SELECT COUNT(*) FROM {self._actual_table_name}")
+                )
+                count = result.scalar() or 0
+
+                return {
+                    "name": self._table_name,
+                    "count": count,
+                    "cached": self._index_cache is not None,
+                    "cached_node_count": self._cached_node_count,
+                    "database": self._db_name,
+                    "host": self._db_host,
+                    "port": self._db_port,
+                    "pool_shared": not self._owns_pool
+                }
+            finally:
+                session.close()
+        except Exception as e:
+            logger.error(f"Error getting collection stats: {e}")
+            return {"error": str(e)}
+
+    # =========================================================================
+    # Legacy Methods (preserved for backward compatibility)
+    # =========================================================================
+
+    def get_index(
+        self,
+        nodes: List[BaseNode],
+        force_rebuild: bool = False
+    ) -> Optional[VectorStoreIndex]:
+        """
+        Get or create vector index with caching.
+
+        Args:
+            nodes: List of nodes to index
+            force_rebuild: Force rebuild even if cached
+
+        Returns:
+            VectorStoreIndex or None if no nodes
+        """
+        if not nodes:
+            return None
+
+        # Return cached index if node count matches and not forcing rebuild
+        if (
+            not force_rebuild and
+            self._index_cache is not None and
+            len(nodes) == self._cached_node_count
+        ):
+            logger.debug("Using cached vector index")
+            return self._index_cache
+
+        try:
+            # Create storage context with pgvector store
+            storage_context = StorageContext.from_defaults(
+                vector_store=self._vector_store
+            )
+
+            # Create index with nodes
+            index = VectorStoreIndex(
+                nodes=nodes,
+                storage_context=storage_context
+            )
+
+            # Cache the index
+            self._index_cache = index
+            self._cached_node_count = len(nodes)
+
+            logger.debug(f"Created pgvector index with {len(nodes)} nodes")
+            return index
+
+        except Exception as e:
+            # Sanitize error message - don't log full SQL with embeddings
+            error_type = type(e).__name__
+            error_msg = str(e)
+            # Truncate long error messages (like SQL with embedding arrays)
+            if len(error_msg) > 500:
+                # Check for common patterns
+                if "duplicate key" in error_msg.lower():
+                    error_msg = "Duplicate key violation - some nodes already exist in database"
+                elif "embedding" in error_msg.lower() or "vector" in error_msg.lower():
+                    error_msg = f"{error_type}: {error_msg[:200]}... [truncated - contains embedding data]"
+                else:
+                    error_msg = f"{error_type}: {error_msg[:200]}... [truncated]"
+            logger.error(f"Error creating pgvector index: {error_msg}")
+            # Fallback to in-memory index
+            index = VectorStoreIndex(nodes=nodes)
+            self._index_cache = index
+            self._cached_node_count = len(nodes)
+            return index
 
     def _filter_duplicate_nodes(
         self,
@@ -282,12 +590,13 @@ class PGVectorStore:
             # Calculate md5 hashes for all nodes
             node_hashes = {}
             for node in nodes:
-                text = node.get_content() if hasattr(node, 'get_content') else str(node.text)
-                text_hash = hashlib.md5(text.encode()).hexdigest()
+                node_text = node.get_content() if hasattr(node, 'get_content') else str(node.text)
+                text_hash = hashlib.md5(node_text.encode()).hexdigest()
                 node_hashes[text_hash] = node
 
             # Query existing hashes in one batch
-            with self._Session() as session:
+            session = self._session_factory()
+            try:
                 if notebook_id:
                     result = session.execute(text(f"""
                         SELECT md5(text) as text_hash
@@ -303,6 +612,8 @@ class PGVectorStore:
                     """), {"hashes": list(node_hashes.keys())})
 
                 existing_hashes = {row[0] for row in result}
+            finally:
+                session.close()
 
             # Return nodes that don't exist
             unique_nodes = [
@@ -427,43 +738,18 @@ class PGVectorStore:
     def clear_collection(self) -> None:
         """Clear all embeddings from the table."""
         try:
-            with self._Session() as session:
+            session = self._session_factory()
+            try:
                 session.execute(text(f"TRUNCATE TABLE {self._actual_table_name}"))
                 session.commit()
+            finally:
+                session.close()
 
             self._index_cache = None
             self._cached_node_count = 0
             logger.info(f"Cleared table: {self._table_name}")
         except Exception as e:
             logger.warning(f"Error clearing table: {e}")
-
-    def reset(self) -> None:
-        """Reset the vector store (clear cache and collection)."""
-        self.clear_collection()
-        self._index_cache = None
-        self._cached_node_count = 0
-
-    def get_collection_stats(self) -> dict:
-        """Get statistics about the embeddings table."""
-        try:
-            with self._Session() as session:
-                result = session.execute(
-                    text(f"SELECT COUNT(*) FROM {self._actual_table_name}")
-                )
-                count = result.scalar() or 0
-
-            return {
-                "name": self._table_name,
-                "count": count,
-                "cached": self._index_cache is not None,
-                "cached_node_count": self._cached_node_count,
-                "database": self._db_name,
-                "host": self._db_host,
-                "port": self._db_port
-            }
-        except Exception as e:
-            logger.error(f"Error getting collection stats: {e}")
-            return {"error": str(e)}
 
     # =========================================================================
     # Notebook-Specific Methods (NotebookLM Architecture)
@@ -577,7 +863,8 @@ class PGVectorStore:
             List of all BaseNode objects stored in pgvector
         """
         try:
-            with self._Session() as session:
+            session = self._session_factory()
+            try:
                 # Query all nodes from the embeddings table
                 # The LlamaIndex PGVectorStore uses 'text' column for content
                 result = session.execute(
@@ -625,6 +912,8 @@ class PGVectorStore:
 
                 logger.info(f"Loaded {len(nodes)} nodes from pgvector")
                 return nodes
+            finally:
+                session.close()
 
         except Exception as e:
             logger.error(f"Error loading nodes from pgvector: {e}")
@@ -647,7 +936,8 @@ class PGVectorStore:
         try:
             logger.info(f"Deleting nodes for document {source_id} from pgvector")
 
-            with self._Session() as session:
+            session = self._session_factory()
+            try:
                 # Use SQL to delete nodes by source_id in metadata
                 # LlamaIndex stores metadata in 'metadata_' JSONB column
                 result = session.execute(
@@ -659,6 +949,8 @@ class PGVectorStore:
                 )
                 session.commit()
                 deleted_count = result.rowcount
+            finally:
+                session.close()
 
             # Invalidate cache
             self._index_cache = None
@@ -689,7 +981,8 @@ class PGVectorStore:
         try:
             logger.info(f"Deleting nodes for notebook {notebook_id} from pgvector")
 
-            with self._Session() as session:
+            session = self._session_factory()
+            try:
                 result = session.execute(
                     text(f"""
                         DELETE FROM {self._actual_table_name}
@@ -699,6 +992,8 @@ class PGVectorStore:
                 )
                 session.commit()
                 deleted_count = result.rowcount
+            finally:
+                session.close()
 
             # Invalidate cache
             self._index_cache = None
@@ -728,7 +1023,8 @@ class PGVectorStore:
             List of nodes belonging to the specified notebook (active sources only)
         """
         try:
-            with self._Session() as session:
+            session = self._session_factory()
+            try:
                 # Join with notebook_sources to filter by active status
                 # This respects the eye icon toggle in the UI
                 result = session.execute(
@@ -773,6 +1069,8 @@ class PGVectorStore:
 
                 logger.debug(f"Loaded {len(nodes)} nodes for notebook {notebook_id}")
                 return nodes
+            finally:
+                session.close()
 
         except Exception as e:
             logger.error(f"Error loading notebook nodes from pgvector: {e}")
@@ -800,7 +1098,8 @@ class PGVectorStore:
             List of nodes matching the criteria (active sources only)
         """
         try:
-            with self._Session() as session:
+            session = self._session_factory()
+            try:
                 if node_types:
                     # Filter by both notebook_id and node_type
                     # Join with notebook_sources to filter by active status
@@ -874,6 +1173,8 @@ class PGVectorStore:
                 type_str = str(node_types) if node_types else "all"
                 logger.debug(f"Loaded {len(nodes)} nodes for notebook {notebook_id} (types: {type_str})")
                 return nodes
+            finally:
+                session.close()
 
         except Exception as e:
             logger.error(f"Error loading notebook nodes by type from pgvector: {e}")
@@ -909,3 +1210,364 @@ class PGVectorStore:
                 # node_type should already be set by caller
 
         return self.add_nodes(nodes, notebook_id=notebook_id)
+
+    # =========================================================================
+    # RAPTOR Tree Methods (Hierarchical Retrieval Support)
+    # =========================================================================
+
+    def get_nodes_by_tree_level(
+        self,
+        notebook_id: str,
+        tree_level: int,
+        source_ids: Optional[List[str]] = None
+    ) -> List[BaseNode]:
+        """
+        Get nodes at a specific tree level for RAPTOR retrieval.
+
+        Tree levels:
+        - 0: Original document chunks (leaf nodes)
+        - 1+: Summary nodes at increasing abstraction levels
+
+        Args:
+            notebook_id: Notebook UUID to filter by
+            tree_level: Tree level to retrieve (0=chunks, 1+=summaries)
+            source_ids: Optional list of source IDs to filter by
+
+        Returns:
+            List of nodes at the specified tree level
+        """
+        try:
+            session = self._session_factory()
+            try:
+                # For level 0, also match NULL tree_level (backward compatibility with existing chunks)
+                level_condition = (
+                    "(e.metadata_->>'tree_level' = :tree_level OR e.metadata_->>'tree_level' IS NULL)"
+                    if tree_level == 0
+                    else "e.metadata_->>'tree_level' = :tree_level"
+                )
+
+                if source_ids:
+                    # Filter by notebook, level, and specific sources
+                    placeholders = ", ".join([f":src_{i}" for i in range(len(source_ids))])
+                    params = {"notebook_id": notebook_id, "tree_level": str(tree_level)}
+                    for i, src in enumerate(source_ids):
+                        params[f"src_{i}"] = src
+
+                    result = session.execute(
+                        text(f"""
+                            SELECT e.id, e.text, e.metadata_, e.embedding
+                            FROM {self._actual_table_name} e
+                            WHERE e.metadata_->>'notebook_id' = :notebook_id
+                            AND {level_condition}
+                            AND e.metadata_->>'source_id' IN ({placeholders})
+                        """),
+                        params
+                    )
+                else:
+                    # Filter by notebook and level only
+                    result = session.execute(
+                        text(f"""
+                            SELECT e.id, e.text, e.metadata_, e.embedding
+                            FROM {self._actual_table_name} e
+                            WHERE e.metadata_->>'notebook_id' = :notebook_id
+                            AND {level_condition}
+                        """),
+                        {"notebook_id": notebook_id, "tree_level": str(tree_level)}
+                    )
+
+                rows = result.fetchall()
+                nodes = self._rows_to_nodes(rows)
+
+                logger.debug(
+                    f"Retrieved {len(nodes)} nodes at tree_level={tree_level} "
+                    f"for notebook {notebook_id}"
+                )
+                return nodes
+
+            finally:
+                session.close()
+
+        except Exception as e:
+            logger.error(f"Error getting nodes by tree level: {e}")
+            return []
+
+    def get_nodes_by_tree_levels(
+        self,
+        notebook_id: str,
+        tree_levels: List[int],
+        source_ids: Optional[List[str]] = None
+    ) -> List[BaseNode]:
+        """
+        Get nodes at multiple tree levels for RAPTOR retrieval.
+
+        Args:
+            notebook_id: Notebook UUID to filter by
+            tree_levels: List of tree levels to retrieve
+            source_ids: Optional list of source IDs to filter by
+
+        Returns:
+            List of nodes at the specified tree levels
+        """
+        try:
+            session = self._session_factory()
+            try:
+                # Build level filter - include NULL for level 0 (backward compatibility)
+                level_placeholders = ", ".join([f":lvl_{i}" for i in range(len(tree_levels))])
+                params = {"notebook_id": notebook_id}
+                for i, lvl in enumerate(tree_levels):
+                    params[f"lvl_{i}"] = str(lvl)
+
+                # Add OR condition for NULL tree_level if level 0 is requested
+                include_null = 0 in tree_levels
+                level_condition = (
+                    f"(e.metadata_->>'tree_level' IN ({level_placeholders}) OR e.metadata_->>'tree_level' IS NULL)"
+                    if include_null
+                    else f"e.metadata_->>'tree_level' IN ({level_placeholders})"
+                )
+
+                if source_ids:
+                    # Filter by notebook, levels, and specific sources
+                    src_placeholders = ", ".join([f":src_{i}" for i in range(len(source_ids))])
+                    for i, src in enumerate(source_ids):
+                        params[f"src_{i}"] = src
+
+                    result = session.execute(
+                        text(f"""
+                            SELECT e.id, e.text, e.metadata_, e.embedding
+                            FROM {self._actual_table_name} e
+                            WHERE e.metadata_->>'notebook_id' = :notebook_id
+                            AND {level_condition}
+                            AND e.metadata_->>'source_id' IN ({src_placeholders})
+                        """),
+                        params
+                    )
+                else:
+                    # Filter by notebook and levels only
+                    result = session.execute(
+                        text(f"""
+                            SELECT e.id, e.text, e.metadata_, e.embedding
+                            FROM {self._actual_table_name} e
+                            WHERE e.metadata_->>'notebook_id' = :notebook_id
+                            AND {level_condition}
+                        """),
+                        params
+                    )
+
+                rows = result.fetchall()
+                nodes = self._rows_to_nodes(rows)
+
+                logger.debug(
+                    f"Retrieved {len(nodes)} nodes at levels {tree_levels} "
+                    f"for notebook {notebook_id}"
+                )
+                return nodes
+
+            finally:
+                session.close()
+
+        except Exception as e:
+            logger.error(f"Error getting nodes by tree levels: {e}")
+            return []
+
+    def add_tree_nodes(
+        self,
+        nodes: List[BaseNode],
+        notebook_id: str,
+        source_id: str,
+        tree_level: int,
+        tree_root_id: Optional[str] = None
+    ) -> int:
+        """
+        Add RAPTOR tree nodes with proper metadata.
+
+        Args:
+            nodes: List of nodes to add
+            notebook_id: Notebook UUID
+            source_id: Source document UUID
+            tree_level: Tree level (0=chunk, 1+=summary)
+            tree_root_id: Optional root node ID for tree traversal
+
+        Returns:
+            Number of nodes successfully added
+        """
+        if not nodes:
+            return 0
+
+        # Set tree metadata on all nodes
+        for node in nodes:
+            if hasattr(node, 'metadata'):
+                node.metadata["notebook_id"] = notebook_id
+                node.metadata["source_id"] = source_id
+                node.metadata["tree_level"] = tree_level
+                node.metadata["node_type"] = "raptor_summary" if tree_level > 0 else "chunk"
+                if tree_root_id:
+                    node.metadata["tree_root_id"] = tree_root_id
+
+        return self.add_nodes(nodes, notebook_id=notebook_id)
+
+    def delete_tree_nodes(
+        self,
+        source_id: str,
+        min_level: int = 1
+    ) -> int:
+        """
+        Delete RAPTOR tree nodes for a source, preserving original chunks.
+
+        Args:
+            source_id: Source document UUID
+            min_level: Minimum tree level to delete (default 1 = keep chunks)
+
+        Returns:
+            Number of nodes deleted
+        """
+        try:
+            session = self._session_factory()
+            try:
+                result = session.execute(
+                    text(f"""
+                        DELETE FROM {self._actual_table_name}
+                        WHERE metadata_->>'source_id' = :source_id
+                        AND (metadata_->>'tree_level')::int >= :min_level
+                    """),
+                    {"source_id": source_id, "min_level": min_level}
+                )
+                session.commit()
+                deleted_count = result.rowcount
+
+                # Invalidate cache
+                self._index_cache = None
+                self._cached_node_count = 0
+
+                logger.info(
+                    f"Deleted {deleted_count} tree nodes (level>={min_level}) "
+                    f"for source {source_id}"
+                )
+                return deleted_count
+
+            finally:
+                session.close()
+
+        except Exception as e:
+            logger.error(f"Error deleting tree nodes: {e}")
+            return 0
+
+    def get_tree_stats(
+        self,
+        source_id: str
+    ) -> Dict[str, Any]:
+        """
+        Get statistics about the RAPTOR tree for a source.
+
+        Args:
+            source_id: Source document UUID
+
+        Returns:
+            Dictionary with tree statistics:
+            - total_nodes: Total nodes in tree
+            - levels: Dict mapping level to node count
+            - max_level: Maximum tree level
+            - has_tree: Whether RAPTOR tree exists
+        """
+        try:
+            session = self._session_factory()
+            try:
+                result = session.execute(
+                    text(f"""
+                        SELECT
+                            COALESCE(metadata_->>'tree_level', '0') as level,
+                            COUNT(*) as node_count
+                        FROM {self._actual_table_name}
+                        WHERE metadata_->>'source_id' = :source_id
+                        GROUP BY COALESCE(metadata_->>'tree_level', '0')
+                        ORDER BY level
+                    """),
+                    {"source_id": source_id}
+                )
+                rows = result.fetchall()
+
+                if not rows:
+                    return {
+                        "total_nodes": 0,
+                        "levels": {},
+                        "max_level": 0,
+                        "has_tree": False
+                    }
+
+                levels = {}
+                total = 0
+                max_level = 0
+
+                for row in rows:
+                    level = int(row[0])
+                    count = row[1]
+                    levels[level] = count
+                    total += count
+                    max_level = max(max_level, level)
+
+                return {
+                    "total_nodes": total,
+                    "levels": levels,
+                    "max_level": max_level,
+                    "has_tree": max_level > 0
+                }
+
+            finally:
+                session.close()
+
+        except Exception as e:
+            logger.error(f"Error getting tree stats: {e}")
+            return {
+                "total_nodes": 0,
+                "levels": {},
+                "max_level": 0,
+                "has_tree": False,
+                "error": str(e)
+            }
+
+    def _rows_to_nodes(self, rows: List[Tuple]) -> List[BaseNode]:
+        """
+        Convert database rows to BaseNode objects.
+
+        Args:
+            rows: List of (id, text, metadata, embedding) tuples
+
+        Returns:
+            List of TextNode objects
+        """
+        import json
+
+        nodes = []
+        for row in rows:
+            node_id, text_content, metadata, embedding = row
+
+            if isinstance(metadata, str):
+                metadata = json.loads(metadata)
+
+            # Parse embedding
+            parsed_embedding = None
+            if embedding is not None:
+                if isinstance(embedding, str):
+                    parsed_embedding = json.loads(embedding)
+                elif hasattr(embedding, 'tolist'):
+                    parsed_embedding = embedding.tolist()
+                else:
+                    parsed_embedding = list(embedding)
+
+            node = TextNode(
+                id_=str(node_id),
+                text=text_content or "",
+                metadata=metadata or {},
+                embedding=parsed_embedding
+            )
+            nodes.append(node)
+
+        return nodes
+
+    def __del__(self):
+        """Clean up resources on deletion."""
+        if self._owns_pool and hasattr(self, '_engine'):
+            try:
+                self._engine.dispose()
+                logger.debug("PGVectorStore disposed of owned connection pool")
+            except Exception as e:
+                logger.warning(f"Error disposing engine: {e}")

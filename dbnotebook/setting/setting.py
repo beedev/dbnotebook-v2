@@ -67,13 +67,13 @@ class RetrieverSettings(BaseModel):
         default=3, description="Number of generated queries"
     )
     similarity_top_k: int = Field(
-        default=10, description="Top k documents"
+        default=20, description="Top k documents for initial retrieval"
     )
     retriever_weights: List[float] = Field(
-        default=[0.4, 0.6], description="Weights for retriever"
+        default=[0.5, 0.5], description="Weights for retriever (BM25, Vector)"
     )
     top_k_rerank: int = Field(
-        default=6, description="Top k rerank"
+        default=10, description="Top k after reranking (final results to LLM)"
     )
     rerank_llm: str = Field(
        ##default="BAAI/bge-reranker-large", description="Rerank LLM model"
@@ -109,6 +109,30 @@ class IngestionSettings(BaseModel):
     )
     num_workers: int = Field(
         default=0, description="Number of workers"
+    )
+
+
+class ContextualRetrievalSettings(BaseModel):
+    """Settings for Contextual Retrieval (Anthropic approach).
+
+    Enriches chunks with LLM-generated context during ingestion to improve
+    retrieval for structured content like tables, lists, and technical data.
+    """
+    enabled: bool = Field(
+        default_factory=lambda: os.getenv("CONTEXTUAL_RETRIEVAL_ENABLED", "false").lower() == "true",
+        description="Enable contextual retrieval enrichment during ingestion"
+    )
+    batch_size: int = Field(
+        default_factory=lambda: int(os.getenv("CONTEXTUAL_BATCH_SIZE", "5")),
+        description="Number of chunks to process in each batch"
+    )
+    max_concurrency: int = Field(
+        default_factory=lambda: int(os.getenv("CONTEXTUAL_MAX_CONCURRENCY", "3")),
+        description="Maximum concurrent LLM calls for context generation"
+    )
+    max_chunk_chars: int = Field(
+        default_factory=lambda: int(os.getenv("CONTEXTUAL_MAX_CHUNK_CHARS", "2000")),
+        description="Maximum characters from chunk to send to LLM"
     )
 
 
@@ -323,6 +347,7 @@ class RAGSettings(BaseModel):
     anthropic: AnthropicSettings = AnthropicSettings()
     gemini: GeminiSettings = GeminiSettings()
     image_generation: ImageGenerationSettings = ImageGenerationSettings()
+    contextual_retrieval: ContextualRetrievalSettings = ContextualRetrievalSettings()
 
 
 # Singleton pattern for settings - use this instead of creating new instances

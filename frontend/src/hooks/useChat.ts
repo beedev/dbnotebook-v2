@@ -20,52 +20,22 @@ export function useChat(notebookId?: string, model?: string) {
   const abortControllerRef = useRef<AbortController | null>(null);
   const loadedNotebookRef = useRef<string | null>(null);
 
-  // Load conversation history when notebook changes
+  // Session-only memory: Clear messages when notebook changes
+  // This prevents old context from bleeding into new questions
+  // The backend ChatMemoryBuffer maintains in-session context for follow-ups
   useEffect(() => {
     if (!notebookId || loadedNotebookRef.current === notebookId) {
       return;
     }
 
-    const loadHistory = async () => {
-      try {
-        setState(prev => ({ ...prev, isLoading: true, error: null }));
-        const response = await api.getConversationHistory(notebookId);
-
-        if (response.success && response.messages.length > 0) {
-          const loadedMessages: Message[] = response.messages.map(msg => ({
-            id: msg.id || generateId(),
-            role: msg.role,
-            content: msg.content,
-            timestamp: new Date(msg.timestamp),
-          }));
-
-          setState(prev => ({
-            ...prev,
-            messages: loadedMessages,
-            isLoading: false,
-          }));
-        } else {
-          // No history, start fresh
-          setState(prev => ({
-            ...prev,
-            messages: [],
-            isLoading: false,
-          }));
-        }
-        loadedNotebookRef.current = notebookId;
-      } catch (error) {
-        console.error('Failed to load conversation history:', error);
-        // Don't show error to user, just start with empty chat
-        setState(prev => ({
-          ...prev,
-          messages: [],
-          isLoading: false,
-        }));
-        loadedNotebookRef.current = notebookId;
-      }
-    };
-
-    loadHistory();
+    // Start fresh with empty messages for new notebook
+    setState(prev => ({
+      ...prev,
+      messages: [],
+      isLoading: false,
+      error: null,
+    }));
+    loadedNotebookRef.current = notebookId;
   }, [notebookId]);
 
   // Add a user message

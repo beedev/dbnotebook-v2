@@ -190,24 +190,32 @@ export function DocumentsList({
                 </span>
               )}
 
-              {/* Actions */}
-              <div className="hidden group-hover:flex items-center gap-1">
+              {/* Actions - Always visible for discoverability */}
+              <div className="flex items-center gap-1">
                 <button
-                  onClick={() => onToggleActive(doc.source_id, doc.active === false)}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onToggleActive(doc.source_id, doc.active === false);
+                  }}
                   className={`
-                    p-1 rounded transition-colors
-                    ${doc.active !== false ? 'text-text-dim hover:text-warning' : 'text-warning hover:text-text'}
+                    p-1.5 rounded-md transition-all duration-200
+                    ${doc.active !== false
+                      ? 'text-glow hover:bg-glow/10'
+                      : 'text-text-dim opacity-50 hover:opacity-100 hover:bg-void-lighter'}
                   `}
-                  title={doc.active !== false ? 'Deactivate' : 'Activate'}
+                  title={doc.active !== false ? 'Disable from RAG (click to deactivate)' : 'Enable for RAG (click to activate)'}
                 >
-                  {doc.active !== false ? <EyeOff className="w-3 h-3" /> : <Eye className="w-3 h-3" />}
+                  {doc.active !== false ? <Eye className="w-4 h-4" /> : <EyeOff className="w-4 h-4" />}
                 </button>
                 <button
-                  onClick={() => handleDelete(doc.source_id)}
-                  className="p-1 rounded text-text-dim hover:text-danger hover:bg-danger/10 transition-colors"
-                  title="Remove"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleDelete(doc.source_id);
+                  }}
+                  className="p-1.5 rounded-md text-text-dim opacity-0 group-hover:opacity-100 hover:text-danger hover:bg-danger/10 transition-all duration-200"
+                  title="Remove document"
                 >
-                  <Trash2 className="w-3 h-3" />
+                  <Trash2 className="w-4 h-4" />
                 </button>
               </div>
             </div>

@@ -3,16 +3,17 @@ import { MainLayout } from './components/Layout';
 import { Sidebar } from './components/Sidebar';
 import { ChatArea } from './components/Chat';
 import { ToastContainer } from './components/ui';
+import { AppProviders, useNotebook, useDocument } from './contexts';
 import { useNotebooks } from './hooks/useNotebooks';
 import { useModels } from './hooks/useModels';
 import { useToast } from './hooks/useToast';
 
-function App() {
+function AppContent() {
+  // Use hooks for API logic
   const {
     notebooks,
     selectedNotebook,
     documents,
-    isLoading: isLoadingNotebooks,
     isLoadingDocs,
     error: notebooksError,
     selectNotebook,
@@ -34,6 +35,28 @@ function App() {
   } = useModels();
 
   const { toasts, removeToast, success, error: showError } = useToast();
+
+  // Get context setters to sync hook state with contexts
+  const notebookContext = useNotebook();
+  const documentContext = useDocument();
+
+  // Sync notebooks hook state with context
+  useEffect(() => {
+    notebookContext.setNotebooks(notebooks);
+  }, [notebooks, notebookContext]);
+
+  useEffect(() => {
+    notebookContext.selectNotebook(selectedNotebook);
+  }, [selectedNotebook, notebookContext]);
+
+  // Sync documents hook state with context
+  useEffect(() => {
+    documentContext.setDocuments(documents);
+  }, [documents, documentContext]);
+
+  useEffect(() => {
+    documentContext.setLoading(isLoadingDocs);
+  }, [isLoadingDocs, documentContext]);
 
   // Show errors from hooks as toasts
   useEffect(() => {
@@ -78,38 +101,35 @@ function App() {
     success('Copied to clipboard');
   };
 
+  // Handle web sources added - refresh documents
+  const handleWebSourcesAdded = () => {
+    if (selectedNotebook) {
+      selectNotebook(selectedNotebook);
+    }
+  };
+
   return (
     <>
       <MainLayout
         sidebar={
           <Sidebar
-            // Notebooks
-            notebooks={notebooks}
-            selectedNotebook={selectedNotebook}
-            onSelectNotebook={selectNotebook}
-            onCreateNotebook={createNotebook}
-            onDeleteNotebook={deleteNotebook}
-            onUpdateNotebook={updateNotebook}
-            isLoadingNotebooks={isLoadingNotebooks}
-            // Models
+            // Models (not in context yet)
             models={models}
             selectedModel={selectedModel}
             selectedProvider={selectedProvider}
             onSelectModel={selectModel}
             isLoadingModels={isLoadingModels}
-            // Documents
-            documents={documents}
+            // Document operations (still needed for toasts)
             onUploadDocument={handleFileUpload}
             onDeleteDocument={handleDeleteDocument}
             onToggleDocument={toggleDocumentActive}
-            isLoadingDocs={isLoadingDocs}
-            // Web Search - refresh documents after adding web sources
-            onWebSourcesAdded={() => {
-              // Re-fetch documents to include newly added web sources
-              if (selectedNotebook) {
-                selectNotebook(selectedNotebook);
-              }
-            }}
+            // Notebook operations
+            onSelectNotebook={selectNotebook}
+            onCreateNotebook={createNotebook}
+            onDeleteNotebook={deleteNotebook}
+            onUpdateNotebook={updateNotebook}
+            // Web search callback
+            onWebSourcesAdded={handleWebSourcesAdded}
           />
         }
       >
@@ -125,6 +145,14 @@ function App() {
       {/* Toast notifications */}
       <ToastContainer toasts={toasts} onDismiss={removeToast} />
     </>
+  );
+}
+
+function App() {
+  return (
+    <AppProviders>
+      <AppContent />
+    </AppProviders>
   );
 }
 
