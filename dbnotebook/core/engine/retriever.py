@@ -22,6 +22,7 @@ from llama_index.core import Settings, VectorStoreIndex
 
 from ..prompt import get_query_gen_prompt
 from ...setting import get_settings, RAGSettings
+from ..raptor import RAPTORRetriever, has_raptor_tree, RAPTORConfig
 
 load_dotenv()
 
@@ -429,18 +430,16 @@ class LocalRetriever:
         elif offering_filter or practice_filter:
             # Manual filtering without vector store
             logger.debug("Filtering nodes manually without vector store")
-            logger.info(f"=== OFFERING FILTER DEBUG ===")
-            logger.info(f"Offering filter: {offering_filter}")
-            logger.info(f"Practice filter: {practice_filter}")
-            logger.info(f"Total nodes to filter: {len(nodes)}")
+            logger.debug(f"Offering filter: {offering_filter}, Practice filter: {practice_filter}")
+            logger.debug(f"Total nodes to filter: {len(nodes)}")
 
             filtered_nodes = []
 
             for node in nodes:
                 metadata = node.metadata or {}
 
-                # Debug: Log metadata for each node
-                logger.info(f"Node metadata: {metadata.get('file_name', 'unknown')}: offering_name={metadata.get('offering_name')}, offering_id={metadata.get('offering_id')}, notebook_id={metadata.get('notebook_id')}, it_practice={metadata.get('it_practice')}")
+                # Debug: Log metadata for each node (only at debug level to reduce noise)
+                logger.debug(f"Node: {metadata.get('file_name', 'unknown')}")
 
                 # Check offering filter (by name, id, or notebook_id)
                 if offering_filter:
@@ -452,11 +451,11 @@ class LocalRetriever:
                     if (node_offering_id and node_offering_id in offering_filter) or \
                        (node_offering_name and node_offering_name in offering_filter) or \
                        (node_notebook_id and node_notebook_id in offering_filter):
-                        logger.info(f"✓ Node MATCHED filter: {metadata.get('file_name')} (notebook_id={node_notebook_id})")
+                        logger.debug(f"✓ Node MATCHED: {metadata.get('file_name')}")
                         filtered_nodes.append(node)
                         continue
                     else:
-                        logger.info(f"✗ Node REJECTED (no match): {metadata.get('file_name')}")
+                        logger.debug(f"✗ Node REJECTED: {metadata.get('file_name')}")
 
                 # Check practice filter
                 if practice_filter:
@@ -533,3 +532,134 @@ class LocalRetriever:
         self._index_cache = None
         self._cached_node_count = 0
         logger.debug("Retriever cache cleared")
+
+    def get_raptor_aware_retriever(
+        self,
+        llm: LLM,
+        language: str,
+        nodes: List[BaseNode],
+        vector_store=None,
+        notebook_id: Optional[str] = None,
+        source_ids: Optional[List[str]] = None,
+        raptor_config: Optional[RAPTORConfig] = None,
+    ) -> BaseRetriever:
+        """Get a retriever that uses RAPTOR trees when available.
+
+        This method checks if RAPTOR trees exist for the sources and uses
+        level-aware retrieval for better summary/detail query handling.
+
+        Args:
+            llm: Language model for query generation
+            language: Language code for prompts
+            nodes: Document nodes to index
+            vector_store: Vector store with RAPTOR nodes
+            notebook_id: Notebook ID for RAPTOR retrieval
+            source_ids: Source IDs to check for RAPTOR trees
+            raptor_config: Optional RAPTOR configuration
+
+        Returns:
+            RAPTOR-aware retriever if available, otherwise standard retriever
+        """
+        # Check if RAPTOR retrieval is possible
+        if not vector_store or not notebook_id:
+            logger.debug("RAPTOR not available: missing vector_store or notebook_id")
+            return self.get_retrievers(llm, language, nodes, vector_store=vector_store)
+
+        # Check if any sources have RAPTOR trees
+        sources_with_raptor = []
+        if source_ids:
+            for source_id in source_ids:
+                if has_raptor_tree(vector_store, source_id, notebook_id):
+                    sources_with_raptor.append(source_id)
+
+        if not sources_with_raptor:
+            logger.debug("No RAPTOR trees found, using standard retrieval")
+            return self.get_retrievers(llm, language, nodes, vector_store=vector_store)
+
+        logger.info(
+            f"Using RAPTOR retrieval for {len(sources_with_raptor)} sources "
+            f"out of {len(source_ids) if source_ids else 'all'}"
+        )
+
+        # Create RAPTOR retriever
+        # Use similarity_top_k (10) for initial retrieval, not top_k_rerank (6)
+        return RAPTORRetriever(
+            vector_store=vector_store,
+            notebook_id=notebook_id,
+            source_ids=sources_with_raptor,
+            config=raptor_config,
+            similarity_top_k=self._setting.retriever.similarity_top_k,
+        )
+
+    def get_combined_raptor_retriever(
+        self,
+        llm: LLM,
+        language: str,
+        nodes: List[BaseNode],
+        vector_store=None,
+        notebook_id: Optional[str] = None,
+        source_ids: Optional[List[str]] = None,
+    ) -> BaseRetriever:
+        """Get a retriever that combines RAPTOR and standard retrieval.
+
+        For sources with RAPTOR trees, uses hierarchical retrieval.
+        For sources without RAPTOR trees, uses standard retrieval.
+        Results are merged and re-ranked.
+
+        Args:
+            llm: Language model for query generation
+            language: Language code for prompts
+            nodes: Document nodes to index
+            vector_store: Vector store with RAPTOR nodes
+            notebook_id: Notebook ID for RAPTOR retrieval
+            source_ids: Source IDs to retrieve from
+
+        Returns:
+            Combined retriever with RAPTOR and standard retrieval
+        """
+        if not vector_store or not notebook_id:
+            return self.get_retrievers(llm, language, nodes, vector_store=vector_store)
+
+        # Split sources by RAPTOR availability
+        raptor_sources = []
+        standard_sources = []
+
+        if source_ids:
+            for source_id in source_ids:
+                if has_raptor_tree(vector_store, source_id, notebook_id):
+                    raptor_sources.append(source_id)
+                else:
+                    standard_sources.append(source_id)
+        else:
+            # Check all nodes' source IDs
+            seen_sources = set()
+            for node in nodes:
+                source_id = node.metadata.get("source_id")
+                if source_id and source_id not in seen_sources:
+                    seen_sources.add(source_id)
+                    if has_raptor_tree(vector_store, source_id, notebook_id):
+                        raptor_sources.append(source_id)
+                    else:
+                        standard_sources.append(source_id)
+
+        logger.info(
+            f"RAPTOR sources: {len(raptor_sources)}, Standard sources: {len(standard_sources)}"
+        )
+
+        # If all sources have RAPTOR, use pure RAPTOR retrieval
+        if raptor_sources and not standard_sources:
+            return RAPTORRetriever(
+                vector_store=vector_store,
+                notebook_id=notebook_id,
+                source_ids=raptor_sources,
+                similarity_top_k=self._setting.retriever.similarity_top_k,
+            )
+
+        # If no sources have RAPTOR, use standard retrieval
+        if not raptor_sources:
+            return self.get_retrievers(llm, language, nodes, vector_store=vector_store)
+
+        # Mixed: use standard retrieval for now
+        # TODO: Implement proper fusion of RAPTOR and standard retrievers
+        logger.debug("Mixed RAPTOR/standard sources, falling back to standard retrieval")
+        return self.get_retrievers(llm, language, nodes, vector_store=vector_store)

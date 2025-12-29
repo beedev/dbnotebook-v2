@@ -1,0 +1,9 @@
+/*
+ * DBNotebook v2 - Editorial Clarity Theme
+ * NotebookLM-inspired, Notion-like clean aesthetic
+ *
+ * To preview: Import this file instead of the original index.css
+ */
+
+@import './theme.css';
+@import "tailwindcss";

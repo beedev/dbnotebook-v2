@@ -20,6 +20,7 @@ from .core.notebook import NotebookManager
 from .core.conversation import ConversationStore
 from .core.observability import QueryLogger, get_token_counter
 from .core.transformations import TransformationWorker, TransformationJob
+from .core.raptor import RAPTORWorker, RAPTORJob
 from .setting import get_settings
 
 logger = logging.getLogger(__name__)
@@ -57,12 +58,18 @@ class LocalRAGPipeline:
         self._current_notebook_id: Optional[str] = None
         self._current_user_id: str = "00000000-0000-0000-0000-000000000001"  # Default user UUID
 
+        # Sales mode components (optional, disabled by default)
+        # These are legacy components for sales enablement features that are not currently implemented
+        self._query_classifier = None  # Optional: Query classification for sales mode
+        self._offering_analyzer = None  # Optional: Offering analysis for sales mode
+
         # Database and conversation management (optional, only if database_url provided)
         self._db_manager: Optional[DatabaseManager] = None
         self._notebook_manager: Optional[NotebookManager] = None
         self._conversation_store: Optional[ConversationStore] = None
         self._query_logger: Optional[QueryLogger] = None
         self._transformation_worker: Optional[TransformationWorker] = None
+        self._raptor_worker: Optional[RAPTORWorker] = None
         if database_url:
             self._db_manager = DatabaseManager(database_url)
             self._db_manager.init_db()
@@ -131,6 +138,17 @@ class LocalRAGPipeline:
             setting=self._settings
         )
 
+        # Initialize RAPTORWorker for hierarchical tree building (if database available)
+        if self._db_manager:
+            self._raptor_worker = RAPTORWorker(
+                db_manager=self._db_manager,
+                vector_store=self._vector_store,
+                poll_interval=15.0,  # Check for pending trees every 15 seconds
+                max_concurrent=1,  # Tree building is resource-intensive
+            )
+            self._raptor_worker.start()
+            logger.info("RAPTORWorker started for hierarchical tree building")
+
         logger.info(f"Pipeline initialized - Host: {host}")
         logger.debug(f"LLM Model: {self._model_name or self._settings.ollama.llm}")
         logger.debug(f"Embed Model: {self._settings.ingestion.embed_llm}")
@@ -141,13 +159,13 @@ class LocalRAGPipeline:
         user_id: Optional[str] = None
     ) -> None:
         """
-        Switch to a different notebook, loading its conversation history.
+        Switch to a different notebook with fresh session memory.
 
-        This implements the NotebookLM architecture pattern:
-        1. Save current conversation to PostgreSQL
+        Session-only mode:
+        1. Clear existing in-memory conversation
         2. Update notebook context
-        3. Load new notebook's conversation history
-        4. Recreate engine with notebook-filtered nodes
+        3. Recreate engine with notebook-filtered nodes
+        4. Start fresh (no DB history loading)
 
         Args:
             notebook_id: UUID of the notebook to switch to
@@ -164,52 +182,25 @@ class LocalRAGPipeline:
 
         user_id = user_id or self._current_user_id
 
-        # Step 1: Save current conversation to database (if we have one)
-        if self._current_notebook_id and self._query_engine:
+        # Step 1: Clear any existing in-memory conversation (session-only mode)
+        # This ensures browser refresh or notebook switch always starts fresh
+        if self._query_engine:
             try:
-                if hasattr(self._query_engine, 'memory'):
-                    current_history = self._query_engine.memory.get_all()
-                    if current_history:
-                        # Convert ChatMessage objects to dicts
-                        messages = [
-                            {"role": msg.role.value, "content": msg.content}
-                            for msg in current_history
-                        ]
-                        self._conversation_store.save_messages(
-                            notebook_id=self._current_notebook_id,
-                            user_id=self._current_user_id,
-                            messages=messages
-                        )
-                        logger.info(
-                            f"Saved {len(messages)} messages from notebook "
-                            f"{self._current_notebook_id}"
-                        )
+                self._query_engine.reset()
+                logger.info("Cleared in-memory conversation buffer")
             except Exception as e:
-                logger.error(f"Failed to save conversation history: {e}")
+                logger.debug(f"No conversation to clear: {e}")
 
         # Step 2: Update notebook context
         self._current_notebook_id = notebook_id
         self._current_user_id = user_id
         logger.info(f"Switched to notebook: {notebook_id}")
 
-        # Step 3: Load new notebook's conversation history
-        try:
-            history = self._conversation_store.get_conversation_history(
-                notebook_id=notebook_id,
-                user_id=user_id,
-                limit=50  # Last 50 messages
-            )
-            logger.info(f"Loaded {len(history)} messages from notebook {notebook_id}")
-
-            # Convert to ChatMessage objects
-            chat_history = []
-            for msg in history:
-                role = MessageRole.USER if msg["role"] == "user" else MessageRole.ASSISTANT
-                chat_history.append(ChatMessage(role=role, content=msg["content"]))
-
-        except Exception as e:
-            logger.error(f"Failed to load conversation history: {e}")
-            chat_history = []
+        # Step 3: Start with fresh session (no DB history loading)
+        # Session-only memory is better for RAG - questions should be grounded in documents
+        # The ChatMemoryBuffer will maintain in-session context for follow-up questions
+        chat_history = []
+        logger.info("Starting fresh session (session-only memory mode)")
 
         # Step 4: Load ONLY nodes for this notebook using SQL filtering (O(log n))
         # This is much faster than loading all 69K+ nodes and filtering in Python
@@ -230,7 +221,7 @@ class LocalRAGPipeline:
 
         logger.info(
             f"Engine recreated for notebook {notebook_id} with "
-            f"{len(notebook_nodes)} nodes and {len(chat_history)} history messages"
+            f"{len(notebook_nodes)} nodes (session-only memory)"
         )
 
     def get_model_name(self) -> str:
@@ -581,13 +572,22 @@ class LocalRAGPipeline:
 
             # Create new engine WITH preserved chat history
             logger.info(f"Creating new engine with {len(preserved_history)} preserved messages")
+
+            # Determine notebook_id for RAPTOR-aware retrieval
+            # Use current_notebook_id if set, otherwise extract from offering_filter
+            notebook_id = self._current_notebook_id
+            if not notebook_id and offering_filter and len(offering_filter) == 1:
+                # Single notebook filter - use it as notebook_id for RAPTOR
+                notebook_id = offering_filter[0]
+
             self._query_engine = self._engine.set_engine(
                 llm=self._default_model,
                 nodes=nodes,
                 language=self._language,
                 offering_filter=offering_filter,
                 vector_store=self._vector_store,
-                chat_history=preserved_history
+                chat_history=preserved_history,
+                notebook_id=notebook_id,
             )
 
             # Verify the new engine has the history
@@ -897,6 +897,10 @@ class LocalRAGPipeline:
         """
         Execute sales enablement query with intelligent mode detection (Hybrid Architecture).
 
+        IMPORTANT: This feature requires query_classifier and offering_analyzer components
+        which are not currently implemented. This method will raise NotImplementedError
+        until these components are provided.
+
         HYBRID MODE SUPPORT:
         - Traditional: Use selected_offerings (backward compatible)
         - Notebook: Use selected_notebooks (NotebookLM architecture)
@@ -921,7 +925,24 @@ class LocalRAGPipeline:
 
         Returns:
             Streaming response with sales-optimized content
+
+        Raises:
+            NotImplementedError: Sales mode components not yet implemented
         """
+        # Check if sales mode components are initialized
+        if self._query_classifier is None or self._offering_analyzer is None:
+            logger.warning(
+                "Sales mode requested but components not initialized. "
+                "query_classifier and offering_analyzer are required for this feature. "
+                "Falling back to standard query mode."
+            )
+            raise NotImplementedError(
+                "Sales mode is not currently available. "
+                "This feature requires query_classifier and offering_analyzer components "
+                "which have not been implemented. "
+                "Please use the standard query() method instead."
+            )
+
         logger.info(f"Sales mode query: {message[:100]}...")
 
         # Step 1: Classify the query with hybrid support
@@ -1260,6 +1281,34 @@ Refined Implementation Plan:"""
         """Get the TransformationWorker instance for API integration."""
         return self._transformation_worker
 
+    @property
+    def raptor_worker(self) -> Optional[RAPTORWorker]:
+        """Get the RAPTORWorker instance for API integration."""
+        return self._raptor_worker
+
+    def queue_raptor_build(self, source_id: str, notebook_id: str, file_name: str) -> bool:
+        """Queue a RAPTOR tree build for a source.
+
+        Args:
+            source_id: Source ID to build tree for
+            notebook_id: Notebook containing the source
+            file_name: File name for logging
+
+        Returns:
+            True if job was queued successfully
+        """
+        if not self._raptor_worker:
+            logger.warning("RAPTOR worker not available")
+            return False
+
+        job = RAPTORJob(
+            source_id=source_id,
+            notebook_id=notebook_id,
+            file_name=file_name
+        )
+        self._raptor_worker.queue_job(job)
+        return True
+
     def shutdown(self) -> None:
         """
         Gracefully shutdown the pipeline and its components.
@@ -1275,5 +1324,13 @@ Refined Implementation Plan:"""
                 logger.info("TransformationWorker stopped")
             except Exception as e:
                 logger.error(f"Error stopping TransformationWorker: {e}")
+
+        # Stop RAPTOR worker
+        if self._raptor_worker:
+            try:
+                self._raptor_worker.stop()
+                logger.info("RAPTORWorker stopped")
+            except Exception as e:
+                logger.error(f"Error stopping RAPTORWorker: {e}")
 
         logger.info("Pipeline shutdown complete")

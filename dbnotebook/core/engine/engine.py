@@ -39,7 +39,8 @@ class LocalChatEngine:
         language: str = "eng",
         offering_filter: Optional[List[str]] = None,
         vector_store=None,
-        chat_history: Optional[List] = None
+        chat_history: Optional[List] = None,
+        notebook_id: Optional[str] = None,
     ) -> Union[CondensePlusContextChatEngine, SimpleChatEngine]:
         """
         Create appropriate chat engine based on available documents.
@@ -51,29 +52,41 @@ class LocalChatEngine:
             offering_filter: List of offering names to filter by (Sales Pitch mode)
             vector_store: Optional LocalVectorStore for metadata filtering
             chat_history: Optional chat history to preserve when recreating engine
+            notebook_id: Notebook ID for RAPTOR-aware retrieval
 
         Returns:
             Configured chat engine
         """
-        # Get dynamic token limit based on LLM's context window
-        # Use 60% of context window for memory to leave room for retrieved context + response
-        try:
-            model_context_window = getattr(llm.metadata, 'context_window', None)
-            if model_context_window and model_context_window > 0:
-                # Use 60% for memory, leaving 40% for retrieved context + response
-                token_limit = int(model_context_window * 0.6)
-                logger.debug(f"Dynamic token limit: {token_limit} (60% of {model_context_window})")
-            else:
-                token_limit = self._setting.ollama.chat_token_limit
-                logger.debug(f"Using default token limit: {token_limit}")
-        except Exception as e:
-            token_limit = self._setting.ollama.chat_token_limit
-            logger.debug(f"Fallback to default token limit: {token_limit} (error: {e})")
+        # Session-only memory: Limit based on CHAT_TOKEN_LIMIT setting
+        # Must account for: system prompt (~500) + context prompt (~1000) + exchanges
+        # Default 32K tokens allows larger context windows for RAPTOR summaries + chunks
+        token_limit = self._setting.ollama.chat_token_limit
+        logger.debug(f"Session-only memory with {token_limit} token limit (from CHAT_TOKEN_LIMIT)")
 
-        # Create memory buffer with optional preserved history
+        # Truncate chat history if it exceeds token limit
+        # LlamaIndex throws "Initial token count exceeds token limit" otherwise
+        safe_history = []
+        if chat_history:
+            # Estimate ~4 chars per token, keep only recent messages
+            estimated_tokens = 0
+            max_history_tokens = int(token_limit * 0.5)  # Reserve 50% for new context
+
+            # Process in reverse (most recent first) and take what fits
+            for msg in reversed(chat_history):
+                msg_tokens = len(str(msg.content)) // 4 + 10  # Rough estimate + overhead
+                if estimated_tokens + msg_tokens > max_history_tokens:
+                    logger.info(f"Truncating chat history at {len(safe_history)} messages to fit token limit")
+                    break
+                safe_history.insert(0, msg)  # Insert at front to maintain order
+                estimated_tokens += msg_tokens
+
+            if len(safe_history) < len(chat_history):
+                logger.info(f"Chat history truncated: {len(chat_history)} -> {len(safe_history)} messages")
+
+        # Create memory buffer with truncated history
         memory = ChatMemoryBuffer(
             token_limit=token_limit,
-            chat_history=chat_history or []
+            chat_history=safe_history
         )
 
         # Simple chat engine (no documents)
@@ -87,13 +100,28 @@ class LocalChatEngine:
         # RAG chat engine with document retrieval
         filter_msg = f" (filtered by offerings: {offering_filter})" if offering_filter else ""
         logger.debug(f"Creating CondensePlusContextChatEngine with {len(nodes)} nodes{filter_msg}")
-        retriever = self._retriever.get_retrievers(
-            llm=llm,
-            language=language,
-            nodes=nodes,
-            offering_filter=offering_filter,
-            vector_store=vector_store
-        )
+
+        # Use RAPTOR-aware retrieval when notebook_id is available
+        # This enables hierarchical retrieval for better summary/detail query handling
+        if notebook_id and vector_store:
+            logger.info(f"Using RAPTOR-aware retrieval for notebook {notebook_id}")
+            retriever = self._retriever.get_combined_raptor_retriever(
+                llm=llm,
+                language=language,
+                nodes=nodes,
+                vector_store=vector_store,
+                notebook_id=notebook_id,
+                source_ids=None,  # Will check all sources in notebook
+            )
+        else:
+            logger.debug("Using standard retrieval (no notebook_id)")
+            retriever = self._retriever.get_retrievers(
+                llm=llm,
+                language=language,
+                nodes=nodes,
+                offering_filter=offering_filter,
+                vector_store=vector_store
+            )
 
         # Get custom condense prompt for preserving customer context
         # Note: llama-index 0.10.x expects string, not PromptTemplate

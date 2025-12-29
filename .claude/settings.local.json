@@ -58,7 +58,14 @@
       "Bash(git init:*)",
       "Bash(echo:*)",
       "Bash(npm run build:*)",
-      "Bash(git tag:*)"
+      "Bash(git tag:*)",
+      "Skill(frontend-design:frontend-design)",
+      "mcp__plugin_testing-suite_playwright-server__browser_evaluate",
+      "mcp__plugin_testing-suite_playwright-server__browser_close",
+      "Bash(open:*)",
+      "Bash(npm run lint:*)",
+      "Bash(npm run typecheck:*)",
+      "Bash(npx tsc:*)"
     ],
     "deny": [],
     "ask": []

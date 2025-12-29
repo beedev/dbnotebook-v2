@@ -1,6 +1,6 @@
 import { memo, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
-import { User, Bot, Copy, Check, FileText, ChevronDown, ChevronUp } from 'lucide-react';
+import { User, Bot, Copy, Check, ChevronDown, ChevronUp } from 'lucide-react';
 import type { Message, SourceCitation } from '../../types';
 
 interface MessageBubbleProps {
@@ -215,14 +215,13 @@ export const MessageBubble = memo(function MessageBubble({
 
 function TypingIndicator() {
   return (
-    <div className="flex items-center gap-1 py-2">
-      {[0, 1, 2].map((i) => (
-        <div
-          key={i}
-          className="w-2 h-2 rounded-full bg-glow animate-[typing_1.2s_ease-in-out_infinite]"
-          style={{ animationDelay: `${i * 0.15}s` }}
-        />
-      ))}
+    <div className="flex items-center gap-3 py-3 px-4 rounded-lg bg-glow/5 border border-glow/10">
+      <div className="streaming-dots flex items-center gap-1">
+        <span />
+        <span />
+        <span />
+      </div>
+      <span className="text-sm text-glow font-medium">Generating response...</span>
     </div>
   );
 }
@@ -241,72 +240,128 @@ interface SourceCitationsProps {
 
 function SourceCitations({ sources }: SourceCitationsProps) {
   const [isExpanded, setIsExpanded] = useState(false);
-  const displaySources = isExpanded ? sources : sources.slice(0, 2);
-  const hasMore = sources.length > 2;
+  const [selectedSource, setSelectedSource] = useState<number | null>(null);
 
   return (
     <div className="mt-4 pt-3 border-t border-void-surface">
-      <div className="flex items-center gap-2 mb-2">
-        <FileText className="w-4 h-4 text-text-muted" />
-        <span className="text-xs font-medium text-text-muted uppercase tracking-wider">
-          Sources ({sources.length})
-        </span>
-      </div>
-
-      <div className="space-y-2">
-        {displaySources.map((source, index) => (
-          <div
+      {/* Compact chip view */}
+      <div className="flex items-center gap-2 flex-wrap">
+        <span className="text-xs font-medium text-text-muted">Sources:</span>
+        {sources.map((source, index) => (
+          <button
             key={index}
-            className="p-2 rounded-lg bg-void-surface/50 border border-void-lighter hover:border-glow/20 transition-colors"
+            onClick={() => setSelectedSource(selectedSource === index ? null : index)}
+            className={`
+              inline-flex items-center gap-1.5 px-2 py-1 rounded-full text-xs
+              transition-all duration-200 cursor-pointer
+              ${selectedSource === index
+                ? 'bg-glow/20 text-glow border border-glow/30'
+                : 'bg-void-surface text-text-muted hover:bg-void-lighter hover:text-text border border-transparent'
+              }
+            `}
+            title={source.snippet || source.filename}
           >
-            <div className="flex items-start gap-2">
-              <div className="flex-shrink-0 w-5 h-5 rounded bg-nebula/20 text-nebula text-xs font-medium flex items-center justify-center">
-                {index + 1}
-              </div>
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2 flex-wrap">
-                  <span className="text-sm font-medium text-text truncate">
-                    {source.filename}
-                  </span>
-                  {source.page && (
-                    <span className="text-xs px-1.5 py-0.5 rounded bg-void-lighter text-text-muted">
-                      Page {source.page}
-                    </span>
-                  )}
-                  {source.score && (
-                    <span className="text-xs px-1.5 py-0.5 rounded bg-glow/10 text-glow">
-                      {Math.round(source.score * 100)}% match
-                    </span>
-                  )}
-                </div>
-                {source.snippet && (
-                  <p className="mt-1 text-xs text-text-dim line-clamp-2">
-                    {source.snippet}
-                  </p>
-                )}
-              </div>
-            </div>
-          </div>
+            <span className="w-4 h-4 rounded-full bg-nebula/20 text-nebula text-[10px] font-bold flex items-center justify-center">
+              {index + 1}
+            </span>
+            <span className="max-w-[120px] truncate">{source.filename}</span>
+            {source.page && (
+              <span className="text-text-dim">p.{source.page}</span>
+            )}
+            {source.score && source.score > 0.8 && (
+              <span className="w-1.5 h-1.5 rounded-full bg-success" title={`${Math.round(source.score * 100)}% match`} />
+            )}
+          </button>
         ))}
-      </div>
 
-      {hasMore && (
+        {/* Toggle expand button */}
         <button
           onClick={() => setIsExpanded(!isExpanded)}
-          className="mt-2 flex items-center gap-1 text-xs text-text-muted hover:text-glow transition-colors"
+          className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs text-text-dim hover:text-glow hover:bg-void-surface transition-colors"
         >
           {isExpanded ? (
             <>
               <ChevronUp className="w-3 h-3" />
-              Show less
+              <span>Less</span>
             </>
           ) : (
             <>
               <ChevronDown className="w-3 h-3" />
-              Show {sources.length - 2} more sources
+              <span>Details</span>
             </>
           )}
         </button>
+      </div>
+
+      {/* Selected source detail (inline) */}
+      {selectedSource !== null && !isExpanded && (
+        <div className="mt-2 p-2 rounded-lg bg-void-surface/50 border border-glow/10 animate-[slide-up_0.2s_ease-out]">
+          <div className="flex items-start gap-2">
+            <div className="flex-shrink-0 w-5 h-5 rounded bg-nebula/20 text-nebula text-xs font-medium flex items-center justify-center">
+              {selectedSource + 1}
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-sm font-medium text-text">{sources[selectedSource].filename}</span>
+                {sources[selectedSource].page && (
+                  <span className="text-xs px-1.5 py-0.5 rounded bg-void-lighter text-text-muted">
+                    Page {sources[selectedSource].page}
+                  </span>
+                )}
+                {sources[selectedSource].score && (
+                  <span className="text-xs px-1.5 py-0.5 rounded bg-glow/10 text-glow">
+                    {Math.round(sources[selectedSource].score * 100)}% match
+                  </span>
+                )}
+              </div>
+              {sources[selectedSource].snippet && (
+                <p className="mt-1 text-xs text-text-dim line-clamp-3">
+                  "{sources[selectedSource].snippet}"
+                </p>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Expanded view with all details */}
+      {isExpanded && (
+        <div className="mt-3 space-y-2 animate-[slide-up_0.2s_ease-out]">
+          {sources.map((source, index) => (
+            <div
+              key={index}
+              className="p-2 rounded-lg bg-void-surface/50 border border-void-lighter hover:border-glow/20 transition-colors"
+            >
+              <div className="flex items-start gap-2">
+                <div className="flex-shrink-0 w-5 h-5 rounded bg-nebula/20 text-nebula text-xs font-medium flex items-center justify-center">
+                  {index + 1}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-sm font-medium text-text truncate">
+                      {source.filename}
+                    </span>
+                    {source.page && (
+                      <span className="text-xs px-1.5 py-0.5 rounded bg-void-lighter text-text-muted">
+                        Page {source.page}
+                      </span>
+                    )}
+                    {source.score && (
+                      <span className="text-xs px-1.5 py-0.5 rounded bg-glow/10 text-glow">
+                        {Math.round(source.score * 100)}% match
+                      </span>
+                    )}
+                  </div>
+                  {source.snippet && (
+                    <p className="mt-1 text-xs text-text-dim">
+                      "{source.snippet}"
+                    </p>
+                  )}
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
       )}
     </div>
   );

@@ -25,8 +25,14 @@ def setup_logging(log_level: str = "INFO") -> None:
     # Reduce noise from third-party libraries
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)
-    logging.getLogger("sqlalchemy.engine").setLevel(logging.WARNING)
+    logging.getLogger("sqlalchemy").setLevel(logging.WARNING)
+    logging.getLogger("sqlalchemy.engine").setLevel(logging.ERROR)
+    logging.getLogger("sqlalchemy.engine.Engine").setLevel(logging.ERROR)
+    logging.getLogger("sqlalchemy.pool").setLevel(logging.WARNING)
+    logging.getLogger("sqlalchemy.dialects").setLevel(logging.WARNING)
+    logging.getLogger("sqlalchemy.orm").setLevel(logging.WARNING)
     logging.getLogger("werkzeug").setLevel(logging.WARNING)
+    logging.getLogger("psycopg2").setLevel(logging.WARNING)
 
 
 logger = logging.getLogger(__name__)
@@ -91,9 +97,9 @@ def main():
     from .setting import get_settings
     settings = get_settings()
 
-    # Use simple logging for observability
-    llama_index.core.set_global_handler("simple")
-    logger.info("Using simple logging for observability")
+    # Disable LlamaIndex verbose logging (it prints full node content including embeddings)
+    # llama_index.core.set_global_handler("simple")
+    logger.info("LlamaIndex verbose logging disabled")
 
     # Initialize pipeline with database support
     logger.info("Initializing RAG pipeline...")

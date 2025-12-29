@@ -45,6 +45,14 @@ services:
       POSTGRES_USER: dbnotebook
       POSTGRES_PASSWORD: dbnotebook
       POSTGRES_DB: dbnotebook_dev
+    command:
+      - "postgres"
+      - "-c"
+      - "log_statement=none"
+      - "-c"
+      - "log_min_messages=warning"
+      - "-c"
+      - "log_min_error_statement=error"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:

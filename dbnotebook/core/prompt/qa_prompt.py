@@ -126,11 +126,23 @@ CONDENSED_CONTEXT_PROMPT_EN = """\
 Given the following conversation between a user and an AI assistant and a follow up question from user,
 rephrase the follow up question to be a standalone question.
 
-CRITICAL: If the chat history establishes a specific customer domain, industry, or context (e.g., "retail customer", "financial services client", "healthcare provider"), you MUST include that context in the standalone question.
+CONTEXT CARRYOVER RULES:
+1. **CONTINUATION questions** - Carry forward context ONLY when the follow-up EXPLICITLY references the previous topic:
+   - Uses words like: "elaborate", "tell me more", "expand on", "what about [X] in this", "regarding the above", "for this customer", "in this case", "the same", "that", "this", "it"
+   - Example: "Tell me more about RPA" after discussing retail → "Tell me more about RPA for retail customers"
+
+2. **NEW TOPIC questions** - Do NOT carry forward context when the question is a NEW, independent topic:
+   - Asks about a completely different subject
+   - Does not reference or relate to previous messages
+   - Example: "What is machine learning?" → Keep as "What is machine learning?" (do NOT add previous customer context)
+
+3. **EXPLICIT CONTEXT questions** - When the user provides NEW context, use that instead:
+   - Example: Previous was about retail, new question says "for healthcare" → Use healthcare context, not retail
 
 Examples:
-- Chat History: "Create a pitch for retail customer" | Follow-up: "Tell me more about RPA" → Standalone: "Tell me more about RPA for retail customers"
-- Chat History: "Healthcare solution needed" | Follow-up: "What about automation?" → Standalone: "What about automation for healthcare?"
+- Chat History: "Create a pitch for retail customer" | Follow-up: "Tell me more about RPA" → "Tell me more about RPA for retail customers" (continuation - uses "tell me more")
+- Chat History: "Create a pitch for retail customer" | Follow-up: "What is cloud computing?" → "What is cloud computing?" (new topic - no context carryover)
+- Chat History: "Retail automation solutions" | Follow-up: "Now for healthcare, what options exist?" → "What automation options exist for healthcare?" (new explicit context)
 
 Chat History:
 {chat_history}

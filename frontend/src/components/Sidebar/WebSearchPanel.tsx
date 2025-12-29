@@ -11,8 +11,7 @@ import {
   ChevronUp,
   Eye,
 } from 'lucide-react';
-import type { WebSearchResult } from '../../types';
-import { searchWeb, addWebSources, previewWebUrl } from '../../services/api';
+import { useWebSearch } from '../../hooks/useWebSearch';
 
 interface WebSearchPanelProps {
   notebookId: string | null;
@@ -21,38 +20,31 @@ interface WebSearchPanelProps {
 
 export function WebSearchPanel({ notebookId, onSourcesAdded }: WebSearchPanelProps) {
   const [isExpanded, setIsExpanded] = useState(false);
-  const [query, setQuery] = useState('');
-  const [results, setResults] = useState<WebSearchResult[]>([]);
-  const [selectedUrls, setSelectedUrls] = useState<Set<string>>(new Set());
-  const [isSearching, setIsSearching] = useState(false);
-  const [isAdding, setIsAdding] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [successMessage, setSuccessMessage] = useState<string | null>(null);
-  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
-  const [previewContent, setPreviewContent] = useState<{title: string; content_preview: string; word_count: number} | null>(null);
-  const [isLoadingPreview, setIsLoadingPreview] = useState(false);
+
+  // Use the web search hook
+  const {
+    results,
+    isSearching,
+    isAdding,
+    error,
+    successMessage,
+    selectedUrls,
+    previewUrl,
+    previewContent,
+    isLoadingPreview,
+    search,
+    toggleUrl,
+    selectAll,
+    selectNone,
+    preview,
+    importSelected,
+  } = useWebSearch();
+
+  const [localQuery, setLocalQuery] = useState('');
 
   const handleSearch = async () => {
-    if (!query.trim()) return;
-
-    setIsSearching(true);
-    setError(null);
-    setSuccessMessage(null);
-    setResults([]);
-    setSelectedUrls(new Set());
-
-    try {
-      const response = await searchWeb(query.trim(), 5);
-      setResults(response.results);
-      if (response.results.length === 0) {
-        setError('No results found. Try a different search term.');
-      }
-    } catch (err) {
-      console.error('Search error:', err);
-      setError(err instanceof Error ? err.message : 'Search failed. Please try again.');
-    } finally {
-      setIsSearching(false);
-    }
+    if (!localQuery.trim()) return;
+    await search(localQuery.trim(), 5);
   };
 
   const handleKeyPress = (e: React.KeyboardEvent) => {
@@ -61,71 +53,18 @@ export function WebSearchPanel({ notebookId, onSourcesAdded }: WebSearchPanelPro
     }
   };
 
-  const toggleUrl = (url: string) => {
-    const newSelected = new Set(selectedUrls);
-    if (newSelected.has(url)) {
-      newSelected.delete(url);
-    } else {
-      newSelected.add(url);
-    }
-    setSelectedUrls(newSelected);
-  };
-
   const handleAddSources = async () => {
     if (!notebookId || selectedUrls.size === 0) return;
 
-    setIsAdding(true);
-    setError(null);
-    setSuccessMessage(null);
-
-    try {
-      // Pass the search query as source_name for document naming
-      const response = await addWebSources(notebookId, Array.from(selectedUrls), query.trim());
-      setSuccessMessage(`Added ${response.total_added} source(s) to notebook`);
-      setSelectedUrls(new Set());
-      setResults([]);
-      setQuery('');
+    const result = await importSelected(notebookId);
+    if (result.success) {
       onSourcesAdded?.();
-    } catch (err) {
-      console.error('Add sources error:', err);
-      setError(err instanceof Error ? err.message : 'Failed to add sources. Please try again.');
-    } finally {
-      setIsAdding(false);
     }
-  };
-
-  const selectAll = () => {
-    setSelectedUrls(new Set(results.map(r => r.url)));
-  };
-
-  const selectNone = () => {
-    setSelectedUrls(new Set());
   };
 
   const handlePreview = async (url: string, e: React.MouseEvent) => {
     e.stopPropagation();
-    if (previewUrl === url) {
-      // Toggle off if clicking same URL
-      setPreviewUrl(null);
-      setPreviewContent(null);
-      return;
-    }
-    setPreviewUrl(url);
-    setIsLoadingPreview(true);
-    setPreviewContent(null);
-    try {
-      const preview = await previewWebUrl(url, 500);
-      setPreviewContent({
-        title: preview.title,
-        content_preview: preview.content_preview,
-        word_count: preview.word_count,
-      });
-    } catch (err) {
-      console.error('Preview error:', err);
-      setPreviewContent(null);
-    } finally {
-      setIsLoadingPreview(false);
-    }
+    await preview(url, 500);
   };
 
   if (!notebookId) {
@@ -167,8 +106,8 @@ export function WebSearchPanel({ notebookId, onSourcesAdded }: WebSearchPanelPro
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-text-dim" />
               <input
                 type="text"
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
+                value={localQuery}
+                onChange={(e) => setLocalQuery(e.target.value)}
                 onKeyPress={handleKeyPress}
                 placeholder="Search the web..."
                 className="w-full pl-9 pr-3 py-2 rounded-lg bg-void-surface border border-void-lighter text-sm text-text placeholder:text-text-dim focus:outline-none focus:border-glow/50 transition-colors"
@@ -177,7 +116,7 @@ export function WebSearchPanel({ notebookId, onSourcesAdded }: WebSearchPanelPro
             </div>
             <button
               onClick={handleSearch}
-              disabled={isSearching || !query.trim()}
+              disabled={isSearching || !localQuery.trim()}
               className="px-3 py-2 rounded-lg bg-glow/20 text-glow hover:bg-glow/30 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             >
               {isSearching ? (

@@ -479,9 +479,11 @@ export async function generateImage(
 // ============================================
 
 export function clearChat(): Promise<{ success: boolean }> {
-  return fetchApi<{ success: boolean }>('/chat/clear', {
+  // Note: Using non-API endpoint /clear (not /api/clear)
+  return fetch('/clear', {
     method: 'POST',
-  });
+    headers: { 'Content-Type': 'application/json' },
+  }).then(res => res.json());
 }
 
 export async function getSystemInfo(): Promise<{

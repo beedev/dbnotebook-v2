@@ -1,6 +1,13 @@
 import { useState } from 'react';
-import { Book, Plus, Trash2, Edit2, Check, X } from 'lucide-react';
+import { Plus, Trash2, Edit2, Check, X, FileText, MessageSquare } from 'lucide-react';
 import type { Notebook } from '../../types';
+
+// Generate a consistent emoji icon based on notebook name
+function getNotebookEmoji(name: string): string {
+  const emojis = ['📚', '📖', '📓', '📕', '📗', '📘', '📙', '🗂️', '📋', '📝'];
+  const hash = name.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
+  return emojis[hash % emojis.length];
+}
 
 interface NotebookSelectorProps {
   notebooks: Notebook[];
@@ -64,34 +71,40 @@ export function NotebookSelector({
 
   return (
     <div className="space-y-2">
-      <div className="flex items-center justify-between px-1">
-        <h3 className="text-xs font-semibold text-text-muted uppercase tracking-wider font-[family-name:var(--font-display)]">
-          Notebooks
-        </h3>
+      {/* Create button */}
+      {!isCreating && (
         <button
           onClick={() => setIsCreating(true)}
-          className="p-1 rounded hover:bg-void-surface text-text-dim hover:text-glow transition-colors"
-          title="Create notebook"
+          className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg border border-dashed border-void-lighter text-text-dim hover:text-glow hover:border-glow/30 hover:bg-glow/5 transition-all duration-200"
         >
           <Plus className="w-4 h-4" />
+          <span className="text-sm">New Notebook</span>
         </button>
-      </div>
+      )}
 
       {/* General chat option */}
       <button
         onClick={() => onSelect(null)}
         className={`
-          w-full flex items-center gap-3 px-3 py-2 rounded-lg
-          transition-all duration-200
+          w-full flex items-center gap-3 px-3 py-2.5 rounded-lg
+          transition-all duration-200 group/general
           ${
             !selectedNotebook
-              ? 'bg-glow/10 border border-glow/30 text-glow'
-              : 'hover:bg-void-surface text-text-muted hover:text-text'
+              ? 'bg-glow/10 border border-glow/30 text-glow shadow-sm shadow-glow/10'
+              : 'hover:bg-void-surface text-text-muted hover:text-text border border-transparent'
           }
         `}
       >
-        <Book className="w-4 h-4" />
-        <span className="text-sm truncate">General Chat</span>
+        <div className={`
+          w-7 h-7 rounded-md flex items-center justify-center text-sm
+          ${!selectedNotebook ? 'bg-glow/20' : 'bg-void-surface group-hover/general:bg-void-lighter'}
+        `}>
+          <MessageSquare className="w-4 h-4" />
+        </div>
+        <div className="flex-1 text-left">
+          <span className="text-sm font-medium">General Chat</span>
+          <p className="text-xs text-text-dim">No document context</p>
+        </div>
       </button>
 
       {/* Create new notebook form */}
@@ -132,18 +145,18 @@ export function NotebookSelector({
       )}
 
       {/* Notebook list */}
-      <div className="space-y-1 max-h-[200px] overflow-y-auto">
+      <div className="space-y-1.5 max-h-[200px] overflow-y-auto">
         {notebooks.map((notebook) => (
           <div
             key={notebook.id}
             onClick={() => onSelect(notebook)}
             className={`
-              group flex items-center gap-3 px-3 py-2 rounded-lg cursor-pointer
+              group flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer
               transition-all duration-200
               ${
                 selectedNotebook?.id === notebook.id
-                  ? 'bg-nebula/10 border border-nebula/30 text-nebula-bright'
-                  : 'hover:bg-void-surface text-text-muted hover:text-text'
+                  ? 'bg-nebula/10 border border-nebula/30 text-nebula-bright shadow-sm shadow-nebula/10'
+                  : 'hover:bg-void-surface text-text-muted hover:text-text border border-transparent'
               }
             `}
           >
@@ -182,21 +195,36 @@ export function NotebookSelector({
               </div>
             ) : (
               <>
-                <Book className="w-4 h-4 flex-shrink-0" />
-                <span className="flex-1 text-sm truncate">{notebook.name}</span>
-                <span className="text-xs text-text-dim">
-                  {notebook.documentCount}
-                </span>
+                {/* Emoji icon */}
+                <div className={`
+                  w-7 h-7 rounded-md flex items-center justify-center text-sm flex-shrink-0
+                  ${selectedNotebook?.id === notebook.id ? 'bg-nebula/20' : 'bg-void-surface group-hover:bg-void-lighter'}
+                `}>
+                  {getNotebookEmoji(notebook.name)}
+                </div>
+
+                {/* Name and document count */}
+                <div className="flex-1 min-w-0">
+                  <span className="text-sm font-medium truncate block">{notebook.name}</span>
+                  <div className="flex items-center gap-1 text-xs text-text-dim">
+                    <FileText className="w-3 h-3" />
+                    <span>{notebook.documentCount} {notebook.documentCount === 1 ? 'doc' : 'docs'}</span>
+                  </div>
+                </div>
+
+                {/* Actions */}
                 <div className="hidden group-hover:flex items-center gap-1">
                   <button
                     onClick={(e) => startEditing(notebook, e)}
-                    className="p-1 rounded text-text-dim hover:text-text hover:bg-void-lighter"
+                    className="p-1.5 rounded-md text-text-dim hover:text-text hover:bg-void-lighter transition-colors"
+                    title="Rename notebook"
                   >
                     <Edit2 className="w-3 h-3" />
                   </button>
                   <button
                     onClick={(e) => handleDelete(notebook.id, e)}
-                    className="p-1 rounded text-text-dim hover:text-danger hover:bg-danger/10"
+                    className="p-1.5 rounded-md text-text-dim hover:text-danger hover:bg-danger/10 transition-colors"
+                    title="Delete notebook"
                   >
                     <Trash2 className="w-3 h-3" />
                   </button>
