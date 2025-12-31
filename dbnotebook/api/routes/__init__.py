@@ -7,6 +7,7 @@ from .vision import create_vision_routes
 from .transformations import create_transformation_routes
 from .agents import create_agent_routes
 from .multi_notebook import create_multi_notebook_routes
+from .analytics import create_analytics_routes
 # from .notebooks import create_notebook_routes  # TODO: MVP 2 - implement notebook routes
 # from .documents import create_document_routes  # TODO: MVP 2 - implement document routes
 
@@ -18,6 +19,7 @@ __all__ = [
     'create_transformation_routes',
     'create_agent_routes',
     'create_multi_notebook_routes',
+    'create_analytics_routes',
     # 'create_notebook_routes',
     # 'create_document_routes',
 ]

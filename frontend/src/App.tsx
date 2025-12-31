@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { MainLayout } from './components/Layout';
 import { Sidebar } from './components/Sidebar';
 import { ChatArea } from './components/Chat';
@@ -7,8 +7,14 @@ import { AppProviders, useNotebook, useDocument } from './contexts';
 import { useNotebooks } from './hooks/useNotebooks';
 import { useModels } from './hooks/useModels';
 import { useToast } from './hooks/useToast';
+import { AnalyticsPage } from './pages';
+
+type AppView = 'chat' | 'analytics';
 
 function AppContent() {
+  // View state for navigation
+  const [currentView, setCurrentView] = useState<AppView>('chat');
+
   // Use hooks for API logic
   const {
     notebooks,
@@ -108,6 +114,20 @@ function AppContent() {
     }
   };
 
+  // Render Analytics page
+  if (currentView === 'analytics') {
+    return (
+      <>
+        <AnalyticsPage
+          onBack={() => setCurrentView('chat')}
+          notebookId={selectedNotebook?.id}
+        />
+        <ToastContainer toasts={toasts} onDismiss={removeToast} />
+      </>
+    );
+  }
+
+  // Render main Chat view
   return (
     <>
       <MainLayout
@@ -130,6 +150,8 @@ function AppContent() {
             onUpdateNotebook={updateNotebook}
             // Web search callback
             onWebSourcesAdded={handleWebSourcesAdded}
+            // Analytics navigation
+            onNavigateAnalytics={() => setCurrentView('analytics')}
           />
         }
       >

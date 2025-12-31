@@ -20,6 +20,7 @@ from ..api.routes.vision import create_vision_routes
 from ..api.routes.transformations import create_transformation_routes
 from ..api.routes.agents import create_agent_routes
 from ..api.routes.multi_notebook import create_multi_notebook_routes
+from ..api.routes.analytics import create_analytics_routes
 from ..core.ingestion import WebContentIngestion, SynopsisManager
 from ..core.studio import StudioManager
 
@@ -1400,6 +1401,13 @@ Output ONLY valid JSON, nothing else."""
             logger.info("Multi-notebook query routes registered")
         except Exception as e:
             logger.warning(f"Multi-notebook query routes not available: {e}")
+
+        # Register Analytics routes (pass pipeline for LLM access in dashboard generation)
+        try:
+            create_analytics_routes(self._app, db_manager=self._db_manager, pipeline=self._pipeline)
+            logger.info("Analytics API routes registered")
+        except Exception as e:
+            logger.warning(f"Analytics API routes not available: {e}")
 
         # === Query Logging & Observability Endpoints ===
 

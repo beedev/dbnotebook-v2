@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Menu, X, Settings, Github, Zap, ChevronDown, ChevronRight } from 'lucide-react';
+import { Menu, X, Settings, Github, Zap, ChevronDown, ChevronRight, BarChart3 } from 'lucide-react';
 import { NotebookSelector } from './NotebookSelector';
 import { ModelSelector } from './ModelSelector';
 import { DocumentsList } from './DocumentsList';
@@ -29,6 +29,9 @@ interface SidebarProps {
 
   // Web Search callback
   onWebSourcesAdded?: () => void;
+
+  // Navigation
+  onNavigateAnalytics?: () => void;
 }
 
 export function Sidebar({
@@ -45,6 +48,7 @@ export function Sidebar({
   onDeleteNotebook,
   onUpdateNotebook,
   onWebSourcesAdded,
+  onNavigateAnalytics,
 }: SidebarProps) {
   const [isMobileOpen, setIsMobileOpen] = useState(false);
   const [expandedSections, setExpandedSections] = useState({
@@ -232,6 +236,19 @@ export function Sidebar({
             )}
           </div>
         </div>
+
+        {/* Analytics Button */}
+        {onNavigateAnalytics && (
+          <div className="p-4 border-t border-void-surface/50">
+            <button
+              onClick={onNavigateAnalytics}
+              className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg bg-nebula/10 hover:bg-nebula/20 text-nebula-bright transition-colors"
+            >
+              <BarChart3 className="w-5 h-5" />
+              <span className="font-medium">Data Analytics</span>
+            </button>
+          </div>
+        )}
 
         {/* Footer */}
         <div className="p-4 border-t border-void-surface">

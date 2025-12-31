@@ -7,6 +7,7 @@ This module defines the database models for the NotebookLM-style document chatbo
 - NotebookSources: Files uploaded to notebooks with metadata
 - Conversations: Persistent conversation history per notebook
 - QueryLogs: Query logging for observability and cost tracking
+- AnalyticsSessions: Analytics dashboard sessions with uploaded Excel data
 """
 
 from sqlalchemy import Column, String, Integer, Text, TIMESTAMP, ForeignKey, BigInteger, Index, TypeDecorator, Boolean
@@ -70,6 +71,7 @@ class User(Base):
     notebooks = relationship("Notebook", back_populates="user", cascade="all, delete-orphan")
     conversations = relationship("Conversation", back_populates="user", cascade="all, delete-orphan")
     query_logs = relationship("QueryLog", back_populates="user", cascade="all, delete-orphan")
+    analytics_sessions = relationship("AnalyticsSession", back_populates="user", cascade="all, delete-orphan")
 
     def __repr__(self):
         return f"<User(user_id={self.user_id}, username='{self.username}')>"
@@ -95,6 +97,7 @@ class Notebook(Base):
     sources = relationship("NotebookSource", back_populates="notebook", cascade="all, delete-orphan")
     conversations = relationship("Conversation", back_populates="notebook", cascade="all, delete-orphan")
     query_logs = relationship("QueryLog", back_populates="notebook", cascade="all, delete-orphan")
+    analytics_sessions = relationship("AnalyticsSession", back_populates="notebook")
 
     def __repr__(self):
         return f"<Notebook(notebook_id={self.notebook_id}, name='{self.name}', docs={self.document_count})>"
@@ -237,3 +240,34 @@ class EmbeddingConfig(Base):
 
     def __repr__(self):
         return f"<EmbeddingConfig(provider='{self.provider}', model='{self.model_name}', dim={self.dimensions})>"
+
+
+class AnalyticsSession(Base):
+    """Analytics dashboard session with uploaded Excel data."""
+    __tablename__ = "analytics_sessions"
+    __table_args__ = (
+        Index("idx_analytics_sessions_user", "user_id"),
+        Index("idx_analytics_sessions_notebook", "notebook_id"),
+        Index("idx_analytics_sessions_created", "created_at"),
+    )
+
+    session_id = Column(UUID(), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(), ForeignKey("users.user_id", ondelete="CASCADE"), nullable=False)
+    notebook_id = Column(UUID(), ForeignKey("notebooks.notebook_id", ondelete="SET NULL"), nullable=True)
+    filename = Column(String(255), nullable=False)
+    file_hash = Column(String(64), nullable=False)  # MD5 for deduplication
+    row_count = Column(Integer)
+    column_count = Column(Integer)
+    column_info = Column(JSONB)  # Column names, types, stats
+    data_json = Column(JSONB)  # Parsed Excel data (for smaller datasets)
+    profile_report_path = Column(String(500))  # Path to ydata HTML report
+    dashboard_config = Column(JSONB)  # AI-generated dashboard configuration
+    created_at = Column(TIMESTAMP, default=datetime.utcnow, nullable=False)
+    updated_at = Column(TIMESTAMP, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    # Relationships
+    user = relationship("User", back_populates="analytics_sessions")
+    notebook = relationship("Notebook", back_populates="analytics_sessions")
+
+    def __repr__(self):
+        return f"<AnalyticsSession(session_id={self.session_id}, filename='{self.filename}', rows={self.row_count}, cols={self.column_count})>"

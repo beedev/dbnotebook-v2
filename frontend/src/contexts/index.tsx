@@ -39,6 +39,9 @@ export { ChatProvider, useChat } from './ChatContext';
 // Document Context
 export { DocumentProvider, useDocument } from './DocumentContext';
 
+// Analytics Context
+export { AnalyticsProvider, useAnalytics, useCrossFilter } from './AnalyticsContext';
+
 /* eslint-enable react-refresh/only-export-components */
 
 /**
