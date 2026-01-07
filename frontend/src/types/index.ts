@@ -246,3 +246,6 @@ export interface ModelState {
   isLoading: boolean;
   error: string | null;
 }
+
+// Re-export SQL Chat types
+export * from './sqlChat';

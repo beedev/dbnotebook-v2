@@ -3,13 +3,14 @@ import { MainLayout } from './components/Layout';
 import { Sidebar } from './components/Sidebar';
 import { ChatArea } from './components/Chat';
 import { ToastContainer } from './components/ui';
-import { AppProviders, useNotebook, useDocument } from './contexts';
+import { AppProviders, useNotebook, useDocument, SQLChatProvider } from './contexts';
 import { useNotebooks } from './hooks/useNotebooks';
 import { useModels } from './hooks/useModels';
 import { useToast } from './hooks/useToast';
 import { AnalyticsPage } from './pages';
+import { SQLChatPage } from './components/SQLChat';
 
-type AppView = 'chat' | 'analytics';
+type AppView = 'chat' | 'analytics' | 'sql-chat';
 
 function AppContent() {
   // View state for navigation
@@ -127,6 +128,16 @@ function AppContent() {
     );
   }
 
+  // Render SQL Chat page
+  if (currentView === 'sql-chat') {
+    return (
+      <SQLChatProvider>
+        <SQLChatPage />
+        <ToastContainer toasts={toasts} onDismiss={removeToast} />
+      </SQLChatProvider>
+    );
+  }
+
   // Render main Chat view
   return (
     <>
@@ -152,6 +163,8 @@ function AppContent() {
             onWebSourcesAdded={handleWebSourcesAdded}
             // Analytics navigation
             onNavigateAnalytics={() => setCurrentView('analytics')}
+            // SQL Chat navigation
+            onNavigateSQLChat={() => setCurrentView('sql-chat')}
           />
         }
       >
