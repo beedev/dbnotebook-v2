@@ -83,11 +83,12 @@ class LocalChatEngine:
             if len(safe_history) < len(chat_history):
                 logger.info(f"Chat history truncated: {len(chat_history)} -> {len(safe_history)} messages")
 
-        # Create memory buffer with truncated history
-        memory = ChatMemoryBuffer(
-            token_limit=token_limit,
-            chat_history=safe_history
-        )
+        # Create memory buffer and set history using set() method
+        # Note: chat_history constructor param doesn't work in LlamaIndex 0.10.x
+        memory = ChatMemoryBuffer(token_limit=token_limit)
+        if safe_history:
+            memory.set(safe_history)
+            logger.info(f"ChatMemoryBuffer loaded with {len(memory.get_all())} messages from session")
 
         # Simple chat engine (no documents)
         if not nodes:

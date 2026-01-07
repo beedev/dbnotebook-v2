@@ -123,30 +123,26 @@ At the end of your response, ALWAYS include a "Sources" section listing the docu
 User question below:"""
 
 CONDENSED_CONTEXT_PROMPT_EN = """\
-Given the following conversation between a user and an AI assistant and a follow up question from user,
-rephrase the follow up question to be a standalone question.
+Given the conversation history and a follow-up question, rephrase the follow-up into a standalone question.
 
-CONTEXT CARRYOVER RULES:
-1. **CONTINUATION questions** - Carry forward context ONLY when the follow-up EXPLICITLY references the previous topic:
-   - Uses words like: "elaborate", "tell me more", "expand on", "what about [X] in this", "regarding the above", "for this customer", "in this case", "the same", "that", "this", "it"
-   - Example: "Tell me more about RPA" after discussing retail → "Tell me more about RPA for retail customers"
+**YOUR TASK**: Analyze the chat history and determine if the follow-up relates to the previous conversation.
 
-2. **NEW TOPIC questions** - Do NOT carry forward context when the question is a NEW, independent topic:
-   - Asks about a completely different subject
-   - Does not reference or relate to previous messages
-   - Example: "What is machine learning?" → Keep as "What is machine learning?" (do NOT add previous customer context)
+**DECISION LOGIC**:
+- If the follow-up is clearly related to the previous topic (same subject, continuing discussion), incorporate relevant context from the history
+- If the follow-up is a new/unrelated topic, keep it as-is without adding previous context
+- If the follow-up is ambiguous but short (like a code, level, or name), check if it makes sense in the context of the previous question
 
-3. **EXPLICIT CONTEXT questions** - When the user provides NEW context, use that instead:
-   - Example: Previous was about retail, new question says "for healthcare" → Use healthcare context, not retail
-
-Examples:
-- Chat History: "Create a pitch for retail customer" | Follow-up: "Tell me more about RPA" → "Tell me more about RPA for retail customers" (continuation - uses "tell me more")
-- Chat History: "Create a pitch for retail customer" | Follow-up: "What is cloud computing?" → "What is cloud computing?" (new topic - no context carryover)
-- Chat History: "Retail automation solutions" | Follow-up: "Now for healthcare, what options exist?" → "What automation options exist for healthcare?" (new explicit context)
+**Examples**:
+- History: "What are travel policies for L6?" | Follow-up: "L12" → "What are the travel policies for L12?"
+- History: "What are travel policies for L6?" | Follow-up: "What is machine learning?" → "What is machine learning?"
+- History: "Explain RPA for retail" | Follow-up: "What about healthcare?" → "Explain RPA for healthcare"
+- History: "Company vacation policy" | Follow-up: "And sick leave?" → "What is the company sick leave policy?"
 
 Chat History:
 {chat_history}
+
 Follow Up Input: {question}
+
 Standalone question:\
 """
 

@@ -562,18 +562,16 @@ Output ONLY valid JSON, nothing else."""
                             err_msg = f"\n Image generation failed: {str(img_error)}\n"
                             yield f"data: {json.dumps({'token': err_msg})}\n\n"
 
-                        # DB persistence disabled - session-only chat history
-                        # Engine memory maintains history within session
-                        # if notebook_id:
-                        #     try:
-                        #         self._pipeline.save_conversation_exchange(
-                        #             notebook_id=notebook_id,
-                        #             user_id="00000000-0000-0000-0000-000000000001",
-                        #             user_message=message,
-                        #             assistant_message=document_context
-                        #         )
-                        #     except Exception as save_err:
-                        #         logger.warning(f"Failed to save conversation: {save_err}")
+                        # Store in session memory for cross-request persistence
+                        if notebook_id:
+                            try:
+                                self._pipeline.store_conversation_exchange(
+                                    user_message=message,
+                                    assistant_message=document_context,
+                                    notebook_id=notebook_id
+                                )
+                            except Exception as save_err:
+                                logger.warning(f"Failed to store in session memory: {save_err}")
 
                         yield f"data: {json.dumps({'done': True})}\n\n"
 
@@ -585,17 +583,16 @@ Output ONLY valid JSON, nothing else."""
                         for token in document_context:
                             yield f"data: {json.dumps({'token': token})}\n\n"
 
-                        # DB persistence disabled - session-only chat history
-                        # if notebook_id:
-                        #     try:
-                        #         self._pipeline.save_conversation_exchange(
-                        #             notebook_id=notebook_id,
-                        #             user_id="00000000-0000-0000-0000-000000000001",
-                        #             user_message=message,
-                        #             assistant_message=document_context
-                        #         )
-                        #     except Exception as save_err:
-                        #         logger.warning(f"Failed to save conversation: {save_err}")
+                        # Store in session memory for cross-request persistence
+                        if notebook_id:
+                            try:
+                                self._pipeline.store_conversation_exchange(
+                                    user_message=message,
+                                    assistant_message=document_context,
+                                    notebook_id=notebook_id
+                                )
+                            except Exception as save_err:
+                                logger.warning(f"Failed to store in session memory: {save_err}")
 
                         yield f"data: {json.dumps({'done': True})}\n\n"
 
@@ -658,17 +655,16 @@ Output ONLY valid JSON, nothing else."""
                         except Exception as src_err:
                             logger.warning(f"Error extracting sources: {src_err}")
 
-                        # DB persistence disabled - session-only chat history
-                        # if notebook_id:
-                        #     try:
-                        #         self._pipeline.save_conversation_exchange(
-                        #             notebook_id=notebook_id,
-                        #             user_id="00000000-0000-0000-0000-000000000001",
-                        #             user_message=message,
-                        #             assistant_message=document_context
-                        #         )
-                        #     except Exception as save_err:
-                        #         logger.warning(f"Failed to save conversation: {save_err}")
+                        # Store in session memory for cross-request persistence
+                        if notebook_id:
+                            try:
+                                self._pipeline.store_conversation_exchange(
+                                    user_message=message,
+                                    assistant_message=document_context,
+                                    notebook_id=notebook_id
+                                )
+                            except Exception as save_err:
+                                logger.warning(f"Failed to store in session memory: {save_err}")
 
                         # Send sources with the done signal
                         yield f"data: {json.dumps({'done': True, 'sources': sources})}\n\n"

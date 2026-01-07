@@ -21,6 +21,7 @@ from .core.conversation import ConversationStore
 from .core.observability import QueryLogger, get_token_counter
 from .core.transformations import TransformationWorker, TransformationJob
 from .core.raptor import RAPTORWorker, RAPTORJob
+from .core.memory import SessionMemoryService
 from .setting import get_settings, QueryTimeSettings
 
 logger = logging.getLogger(__name__)
@@ -57,6 +58,13 @@ class LocalRAGPipeline:
         # Notebook context tracking (NotebookLM architecture)
         self._current_notebook_id: Optional[str] = None
         self._current_user_id: str = "00000000-0000-0000-0000-000000000001"  # Default user UUID
+
+        # Session memory for cross-request conversation persistence
+        self._session_memory = SessionMemoryService(
+            max_messages_per_session=100,
+            session_ttl_hours=24
+        )
+        logger.info("Session memory service initialized")
 
         # Sales mode components (optional, disabled by default)
         # These are legacy components for sales enablement features that are not currently implemented
@@ -182,12 +190,11 @@ class LocalRAGPipeline:
 
         user_id = user_id or self._current_user_id
 
-        # Step 1: Clear any existing in-memory conversation (session-only mode)
-        # This ensures browser refresh or notebook switch always starts fresh
+        # Step 1: Clear engine's in-memory conversation buffer
         if self._query_engine:
             try:
                 self._query_engine.reset()
-                logger.info("Cleared in-memory conversation buffer")
+                logger.info("Cleared engine memory buffer")
             except Exception as e:
                 logger.debug(f"No conversation to clear: {e}")
 
@@ -196,11 +203,13 @@ class LocalRAGPipeline:
         self._current_user_id = user_id
         logger.info(f"Switched to notebook: {notebook_id}")
 
-        # Step 3: Start with fresh session (no DB history loading)
-        # Session-only memory is better for RAG - questions should be grounded in documents
-        # The ChatMemoryBuffer will maintain in-session context for follow-up questions
-        chat_history = []
-        logger.info("Starting fresh session (session-only memory mode)")
+        # Step 3: Get history from session memory (cross-request persistence)
+        # This allows resuming conversations when switching back to a notebook
+        chat_history = self._session_memory.get_history(user_id, notebook_id)
+        if chat_history:
+            logger.info(f"Restored {len(chat_history)} messages from session memory")
+        else:
+            logger.info("Starting fresh session (no previous history)")
 
         # Step 4: Load ONLY nodes for this notebook using SQL filtering (O(log n))
         # This is much faster than loading all 69K+ nodes and filtering in Python
@@ -512,28 +521,33 @@ class LocalRAGPipeline:
         if not self._engine_initialized or filter_changed or force_reset:
             logger.info(f"Creating new engine with filter: {offering_filter}")
 
-            # PRESERVE chat history from existing engine before recreating
+            # PRESERVE chat history from session memory (cross-request persistence)
             preserved_history = []
-            if self._query_engine is not None and hasattr(self._query_engine, 'memory'):
-                try:
-                    # Extract all chat messages from the memory buffer
-                    preserved_history = self._query_engine.memory.get_all()
-                    logger.info(f"✓ Preserved {len(preserved_history)} messages from chat history")
+            # Determine notebook_id: use current or extract from offering_filter
+            notebook_id_for_history = self._current_notebook_id
+            if not notebook_id_for_history and offering_filter and len(offering_filter) == 1:
+                # Single notebook filter - use it for history lookup
+                notebook_id_for_history = offering_filter[0]
 
-                    # Log details of preserved messages for debugging
-                    if preserved_history:
-                        logger.info("--- Preserved History Details ---")
-                        for i, msg in enumerate(preserved_history):
-                            logger.info(f"  Message {i+1}: role={msg.role}, content_preview={str(msg.content)[:100]}...")
-                        logger.info("--- End History Details ---")
-                    else:
-                        logger.warning("⚠ No history to preserve (memory was empty)")
-
-                except Exception as e:
-                    logger.warning(f"❌ Could not extract chat history: {e}")
-                    preserved_history = []
+            if notebook_id_for_history:
+                # Get history from session memory service
+                preserved_history = self._session_memory.get_history(
+                    user_id=self._current_user_id,
+                    notebook_id=notebook_id_for_history
+                )
+                if preserved_history:
+                    logger.info(f"✓ Restored {len(preserved_history)} messages from session memory for notebook {notebook_id_for_history}")
+                else:
+                    logger.debug(f"No history in session memory for notebook {notebook_id_for_history}")
             else:
-                logger.info("No existing engine to preserve history from")
+                # Fallback: try to extract from existing engine memory buffer
+                if self._query_engine is not None and hasattr(self._query_engine, 'memory'):
+                    try:
+                        preserved_history = self._query_engine.memory.get_all()
+                        logger.info(f"✓ Preserved {len(preserved_history)} messages from engine memory")
+                    except Exception as e:
+                        logger.warning(f"❌ Could not extract chat history: {e}")
+                        preserved_history = []
 
             # Load nodes using SQL filtering when possible (O(log n) vs O(n))
             # This avoids loading 69K+ nodes into memory
@@ -590,14 +604,13 @@ class LocalRAGPipeline:
                 notebook_id=notebook_id,
             )
 
-            # Verify the new engine has the history
+            # Verify the new engine has the history (optional - session memory handles persistence)
             if hasattr(self._query_engine, 'memory'):
                 new_history_count = len(self._query_engine.memory.get_all())
                 logger.info(f"✓ New engine memory buffer contains {new_history_count} messages")
                 if new_history_count != len(preserved_history):
                     logger.error(f"❌ MISMATCH: Preserved {len(preserved_history)} but new engine has {new_history_count}!")
-            else:
-                logger.warning("⚠ New engine has no memory attribute!")
+            # Note: Engine may not have memory attribute - session memory handles history externally
 
             # Update state
             self._engine_initialized = True
@@ -841,6 +854,89 @@ class LocalRAGPipeline:
             # Clear query settings after use (revert to defaults)
             if query_settings:
                 self._engine.clear_query_settings()
+
+    def store_conversation_exchange(
+        self,
+        user_message: str,
+        assistant_message: str,
+        notebook_id: Optional[str] = None,
+        user_id: Optional[str] = None
+    ) -> None:
+        """
+        Store a conversation exchange in session memory.
+
+        Called by web routes after streaming response completes.
+
+        Args:
+            user_message: The user's message
+            assistant_message: The assistant's response
+            notebook_id: Notebook ID (defaults to current)
+            user_id: User ID (defaults to current)
+        """
+        nb_id = notebook_id or self._current_notebook_id
+        u_id = user_id or self._current_user_id
+
+        if nb_id:
+            self._session_memory.add_exchange(
+                user_id=u_id,
+                notebook_id=nb_id,
+                user_message=user_message,
+                assistant_message=assistant_message
+            )
+            msg_count = self._session_memory.get_message_count(u_id, nb_id)
+            logger.info(f"✓ Stored exchange in session memory for notebook {nb_id} (total: {msg_count} messages)")
+        else:
+            logger.warning("No notebook context - skipping session memory storage")
+
+    def get_session_history(
+        self,
+        notebook_id: Optional[str] = None,
+        user_id: Optional[str] = None,
+        limit: Optional[int] = None
+    ) -> list:
+        """
+        Get conversation history from session memory.
+
+        Args:
+            notebook_id: Notebook ID (defaults to current)
+            user_id: User ID (defaults to current)
+            limit: Maximum messages to return
+
+        Returns:
+            List of ChatMessage objects
+        """
+        nb_id = notebook_id or self._current_notebook_id
+        u_id = user_id or self._current_user_id
+
+        if nb_id:
+            return self._session_memory.get_history(u_id, nb_id, limit)
+        return []
+
+    def clear_session_history(
+        self,
+        notebook_id: Optional[str] = None,
+        user_id: Optional[str] = None
+    ) -> bool:
+        """
+        Clear conversation history from session memory.
+
+        Args:
+            notebook_id: Notebook ID (defaults to current)
+            user_id: User ID (defaults to current)
+
+        Returns:
+            True if session was cleared
+        """
+        nb_id = notebook_id or self._current_notebook_id
+        u_id = user_id or self._current_user_id
+
+        if nb_id:
+            return self._session_memory.clear_session(u_id, nb_id)
+        return False
+
+    def get_session_memory_stats(self) -> dict:
+        """Get session memory statistics."""
+        return self._session_memory.get_stats()
 
     def chat_without_retrieval(
         self,
