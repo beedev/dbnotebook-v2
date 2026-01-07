@@ -8,6 +8,11 @@ This module defines the database models for the NotebookLM-style document chatbo
 - Conversations: Persistent conversation history per notebook
 - QueryLogs: Query logging for observability and cost tracking
 - AnalyticsSessions: Analytics dashboard sessions with uploaded Excel data
+- DatabaseConnection: External database connections for Chat with Data
+- SQLChatSession: Chat sessions for SQL queries
+- SQLQueryHistory: History of executed SQL queries
+- SQLFewShotExample: Few-shot examples from Gretel dataset
+- SQLQueryTelemetry: Telemetry data for SQL query observability
 """
 
 from sqlalchemy import Column, String, Integer, Text, TIMESTAMP, ForeignKey, BigInteger, Index, TypeDecorator, Boolean
@@ -271,3 +276,129 @@ class AnalyticsSession(Base):
 
     def __repr__(self):
         return f"<AnalyticsSession(session_id={self.session_id}, filename='{self.filename}', rows={self.row_count}, cols={self.column_count})>"
+
+
+# =============================================================================
+# SQL Chat (Chat with Data) Models
+# =============================================================================
+
+class DatabaseConnection(Base):
+    """External database connections for Chat with Data feature."""
+    __tablename__ = "database_connections"
+    __table_args__ = (
+        Index("idx_db_connections_user", "user_id"),
+    )
+
+    id = Column(UUID(), primary_key=True, default=uuid.uuid4)
+    user_id = Column(String(100), nullable=False)
+    name = Column(String(200), nullable=False)
+    db_type = Column(String(20), nullable=False)  # postgresql, mysql, sqlite
+    host = Column(String(255), nullable=True)
+    port = Column(Integer, nullable=True)
+    database_name = Column(String(200), nullable=True)
+    username = Column(String(100), nullable=True)
+    password_encrypted = Column(Text, nullable=True)  # Fernet encrypted
+    masking_policy = Column(JSONB, nullable=True)  # {mask_columns, redact_columns, hash_columns}
+    created_at = Column(TIMESTAMP, default=datetime.utcnow, nullable=False)
+    last_used_at = Column(TIMESTAMP, nullable=True)
+
+    # Relationships
+    sessions = relationship("SQLChatSession", back_populates="connection", cascade="all, delete-orphan")
+
+    def __repr__(self):
+        return f"<DatabaseConnection(id={self.id}, name='{self.name}', type='{self.db_type}')>"
+
+
+class SQLChatSession(Base):
+    """Chat sessions for SQL queries against external databases."""
+    __tablename__ = "sql_chat_sessions"
+    __table_args__ = (
+        Index("idx_sql_sessions_user", "user_id"),
+        Index("idx_sql_sessions_connection", "connection_id"),
+    )
+
+    id = Column(UUID(), primary_key=True, default=uuid.uuid4)
+    user_id = Column(String(100), nullable=False)
+    connection_id = Column(UUID(), ForeignKey("database_connections.id", ondelete="CASCADE"), nullable=False)
+    created_at = Column(TIMESTAMP, default=datetime.utcnow, nullable=False)
+    last_query_at = Column(TIMESTAMP, nullable=True)
+
+    # Relationships
+    connection = relationship("DatabaseConnection", back_populates="sessions")
+    query_history = relationship("SQLQueryHistory", back_populates="session", cascade="all, delete-orphan")
+
+    def __repr__(self):
+        return f"<SQLChatSession(id={self.id}, connection_id={self.connection_id})>"
+
+
+class SQLQueryHistory(Base):
+    """History of executed SQL queries in chat sessions."""
+    __tablename__ = "sql_query_history"
+    __table_args__ = (
+        Index("idx_sql_history_session", "session_id"),
+        Index("idx_sql_history_created", "created_at"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    session_id = Column(UUID(), ForeignKey("sql_chat_sessions.id", ondelete="CASCADE"), nullable=False)
+    user_query = Column(Text, nullable=False)
+    generated_sql = Column(Text, nullable=False)
+    execution_time_ms = Column(Integer, nullable=True)
+    row_count = Column(Integer, nullable=True)
+    success = Column(Boolean, default=True, nullable=False)
+    error_message = Column(Text, nullable=True)
+    created_at = Column(TIMESTAMP, default=datetime.utcnow, nullable=False)
+
+    # Relationships
+    session = relationship("SQLChatSession", back_populates="query_history")
+
+    def __repr__(self):
+        return f"<SQLQueryHistory(id={self.id}, success={self.success}, rows={self.row_count})>"
+
+
+class SQLFewShotExample(Base):
+    """Few-shot examples from Gretel dataset for Text-to-SQL learning."""
+    __tablename__ = "sql_few_shot_examples"
+    __table_args__ = (
+        Index("idx_few_shot_domain", "domain"),
+        Index("idx_few_shot_complexity", "complexity"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    sql_prompt = Column(Text, nullable=False)
+    sql_query = Column(Text, nullable=False)
+    sql_context = Column(Text, nullable=True)
+    complexity = Column(String(50), nullable=True)  # basic SQL, joins, aggregation, subqueries, window functions
+    domain = Column(String(100), nullable=True)  # finance, healthcare, retail, etc.
+    # Note: embedding column is added via migration (vector type not available in SQLAlchemy)
+    created_at = Column(TIMESTAMP, default=datetime.utcnow, nullable=False)
+
+    def __repr__(self):
+        return f"<SQLFewShotExample(id={self.id}, domain='{self.domain}', complexity='{self.complexity}')>"
+
+
+class SQLQueryTelemetry(Base):
+    """Telemetry data for SQL query execution observability."""
+    __tablename__ = "sql_query_telemetry"
+    __table_args__ = (
+        Index("idx_telemetry_session", "session_id"),
+        Index("idx_telemetry_created", "created_at"),
+        Index("idx_telemetry_intent", "intent"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    session_id = Column(UUID(), nullable=False)
+    user_query = Column(Text, nullable=True)
+    generated_sql = Column(Text, nullable=True)
+    intent = Column(String(50), nullable=True)  # lookup, aggregation, comparison, trend, top_k
+    confidence_score = Column(Integer, nullable=True)  # Stored as int (score * 100)
+    retry_count = Column(Integer, default=0, nullable=True)
+    execution_time_ms = Column(Integer, nullable=True)
+    row_count = Column(Integer, nullable=True)
+    cost_estimate = Column(Integer, nullable=True)  # Stored as int (cost * 100)
+    success = Column(Boolean, default=True, nullable=False)
+    error_message = Column(Text, nullable=True)
+    created_at = Column(TIMESTAMP, default=datetime.utcnow, nullable=False)
+
+    def __repr__(self):
+        return f"<SQLQueryTelemetry(id={self.id}, intent='{self.intent}', success={self.success})>"
