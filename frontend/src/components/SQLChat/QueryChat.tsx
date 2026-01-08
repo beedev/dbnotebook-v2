@@ -9,6 +9,7 @@
  */
 
 import { useState, useRef, useEffect } from 'react';
+import ReactMarkdown from 'react-markdown';
 import {
   Send,
   Loader2,
@@ -29,6 +30,7 @@ interface QueryChatProps {
   onSendQuery: (query: string) => void;
   onCancelQuery: () => void;
   onClearMessages: () => void;
+  onAnalyzeInDashboard?: (file: File) => void;
   disabled?: boolean;
 }
 
@@ -56,6 +58,7 @@ export function QueryChat({
   onSendQuery,
   onCancelQuery,
   onClearMessages,
+  onAnalyzeInDashboard,
   disabled = false,
 }: QueryChatProps) {
   const [input, setInput] = useState('');
@@ -152,7 +155,19 @@ export function QueryChat({
                         : 'bg-slate-800 text-slate-300'
                     }`}
                   >
-                    {message.content}
+                    {message.role === 'assistant' ? (
+                      <div className="prose prose-sm prose-invert max-w-none
+                        prose-p:my-1 prose-ul:my-1 prose-ol:my-1 prose-li:my-0
+                        prose-headings:text-white prose-strong:text-white
+                        prose-code:bg-slate-700 prose-code:px-1 prose-code:py-0.5 prose-code:rounded
+                        prose-a:text-cyan-400 prose-a:no-underline hover:prose-a:underline">
+                        <ReactMarkdown>
+                          {message.content}
+                        </ReactMarkdown>
+                      </div>
+                    ) : (
+                      message.content
+                    )}
                   </div>
 
                   {/* SQL preview */}
@@ -166,7 +181,10 @@ export function QueryChat({
 
                   {/* Results table */}
                   {message.result && message.result.success && (
-                    <ResultsTable result={message.result} />
+                    <ResultsTable
+                      result={message.result}
+                      onAnalyzeInDashboard={onAnalyzeInDashboard}
+                    />
                   )}
                 </div>
 

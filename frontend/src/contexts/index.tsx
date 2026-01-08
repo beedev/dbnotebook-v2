@@ -21,6 +21,7 @@ import { ThemeProvider } from './ThemeProvider';
 import { NotebookProvider } from './NotebookContext';
 import { ChatProvider } from './ChatContext';
 import { DocumentProvider } from './DocumentContext';
+import { AppProvider } from './AppContext';
 
 /* eslint-disable react-refresh/only-export-components */
 
@@ -45,6 +46,10 @@ export { AnalyticsProvider, useAnalytics, useCrossFilter } from './AnalyticsCont
 // SQL Chat Context
 export { SQLChatProvider, useSQLChat } from './SQLChatContext';
 
+// App Context (global view and model state)
+export { AppProvider, useApp } from './AppContext';
+export type { AppView } from './AppContext';
+
 /* eslint-enable react-refresh/only-export-components */
 
 /**
@@ -64,13 +69,15 @@ interface AppProvidersProps {
 export function AppProviders({ children }: AppProvidersProps) {
   return (
     <ThemeProvider>
-      <NotebookProvider>
-        <ChatProvider>
-          <DocumentProvider>
-            {children}
-          </DocumentProvider>
-        </ChatProvider>
-      </NotebookProvider>
+      <AppProvider>
+        <NotebookProvider>
+          <ChatProvider>
+            <DocumentProvider>
+              {children}
+            </DocumentProvider>
+          </ChatProvider>
+        </NotebookProvider>
+      </AppProvider>
     </ThemeProvider>
   );
 }

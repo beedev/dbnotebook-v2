@@ -2,7 +2,10 @@
 Few-Shot Retriever for Chat with Data.
 
 Retrieves similar SQL examples from local PGVectorStore for few-shot prompting.
-Supports domain filtering for improved relevance.
+Supports:
+- Pure vector similarity search (default)
+- Hybrid BM25+vector search with optional reranking (RAG integration)
+- Domain and complexity filtering
 """
 
 import logging
@@ -10,9 +13,23 @@ from typing import List, Optional
 
 from sqlalchemy import text
 
+from dbnotebook.core.config import get_config_value
 from dbnotebook.core.sql_chat.types import FewShotExample
 
 logger = logging.getLogger(__name__)
+
+
+def _get_rag_config() -> dict:
+    """Get RAG integration configuration."""
+    return {
+        "enabled": get_config_value("sql_chat", "few_shot", "rag_integration", "enabled", default=True),
+        "use_reranker": get_config_value("sql_chat", "few_shot", "rag_integration", "use_reranker", default=True),
+        "rerank_model": get_config_value("sql_chat", "few_shot", "rag_integration", "rerank_model",
+                                         default="mixedbread-ai/mxbai-rerank-large-v1"),
+        "rerank_top_k": get_config_value("sql_chat", "few_shot", "rag_integration", "rerank_top_k", default=15),
+        "bm25_weight": get_config_value("sql_chat", "few_shot", "rag_integration", "weights", "bm25", default=0.3),
+        "vector_weight": get_config_value("sql_chat", "few_shot", "rag_integration", "weights", "vector", default=0.7),
+    }
 
 
 class FewShotRetriever:
@@ -20,7 +37,8 @@ class FewShotRetriever:
 
     Uses vector similarity search to find relevant examples from the
     Gretel dataset for few-shot prompting. Supports:
-    - Pure similarity search
+    - Pure similarity search (fallback)
+    - Hybrid BM25+vector search with optional reranking (RAG integration)
     - Domain-filtered search (e.g., only finance examples)
     - Complexity-filtered search
     """
@@ -41,6 +59,21 @@ class FewShotRetriever:
         self._db_manager = db_manager
         self._embed_model = embed_model
         self._examples_available: Optional[bool] = None  # Cache availability check
+        self._rag_config = _get_rag_config()
+        self._reranker = None
+
+        # Initialize reranker if enabled
+        if self._rag_config["enabled"] and self._rag_config["use_reranker"]:
+            try:
+                from llama_index.core.postprocessor import SentenceTransformerRerank
+                self._reranker = SentenceTransformerRerank(
+                    top_n=self.DEFAULT_TOP_K,
+                    model=self._rag_config["rerank_model"],
+                )
+                logger.info(f"Few-shot reranker initialized: {self._rag_config['rerank_model']}")
+            except Exception as e:
+                logger.warning(f"Failed to initialize reranker: {e}. Using hybrid search without reranking.")
+                self._reranker = None
 
     def _check_examples_available(self) -> bool:
         """Check if few-shot examples table exists and has data.
@@ -66,6 +99,180 @@ class FewShotRetriever:
 
         return self._examples_available
 
+    def _hybrid_search(
+        self,
+        query: str,
+        query_embedding: list,
+        top_k: int,
+        domain_hint: Optional[str] = None,
+        complexity_hint: Optional[str] = None,
+    ) -> List[FewShotExample]:
+        """Perform hybrid BM25+vector search.
+
+        Uses PostgreSQL full-text search for keyword matching (BM25-like)
+        combined with vector similarity for semantic matching.
+
+        Args:
+            query: User's natural language query
+            query_embedding: Pre-computed query embedding
+            top_k: Number of examples to retrieve
+            domain_hint: Optional domain filter
+            complexity_hint: Optional complexity filter
+
+        Returns:
+            List of FewShotExample with combined scores
+        """
+        embedding_str = "[" + ",".join(str(x) for x in query_embedding) + "]"
+        bm25_weight = self._rag_config["bm25_weight"]
+        vector_weight = self._rag_config["vector_weight"]
+        rerank_top_k = self._rag_config["rerank_top_k"] if self._reranker else top_k
+
+        # Build hybrid search SQL
+        # Uses PostgreSQL ts_rank for BM25-like ranking with full-text search
+        # Combines with vector similarity using weighted average
+        domain_filter = ""
+        complexity_filter = ""
+        params = {
+            "embedding": embedding_str,
+            "query": query,
+            "bm25_weight": bm25_weight,
+            "vector_weight": vector_weight,
+            "limit": rerank_top_k,
+        }
+
+        if domain_hint:
+            domain_filter = "AND (domain = :domain OR domain = 'general')"
+            params["domain"] = domain_hint.lower()
+
+        if complexity_hint:
+            complexity_filter = "AND complexity = :complexity"
+            params["complexity"] = complexity_hint
+
+        sql = f"""
+            WITH scored AS (
+                SELECT
+                    id,
+                    sql_prompt,
+                    sql_query,
+                    sql_context,
+                    complexity,
+                    domain,
+                    -- BM25-like score using PostgreSQL full-text search
+                    ts_rank(
+                        to_tsvector('english', sql_prompt || ' ' || COALESCE(sql_query, '')),
+                        plainto_tsquery('english', :query)
+                    ) as bm25_score,
+                    -- Vector similarity score (cosine similarity)
+                    1 - (embedding <=> CAST(:embedding AS vector)) as vector_score
+                FROM sql_few_shot_examples
+                WHERE embedding IS NOT NULL
+                {domain_filter}
+                {complexity_filter}
+            )
+            SELECT
+                id,
+                sql_prompt,
+                sql_query,
+                sql_context,
+                complexity,
+                domain,
+                bm25_score,
+                vector_score,
+                -- Combined hybrid score using weighted average
+                -- Normalize BM25 score (typically 0-1 range with ts_rank)
+                (LEAST(bm25_score, 1.0) * :bm25_weight + vector_score * :vector_weight) as similarity
+            FROM scored
+            ORDER BY similarity DESC
+            LIMIT :limit
+        """
+
+        try:
+            with self._db_manager.get_session() as session:
+                result = session.execute(text(sql), params)
+                examples = []
+                for row in result:
+                    examples.append(FewShotExample(
+                        id=row.id,
+                        sql_prompt=row.sql_prompt,
+                        sql_query=row.sql_query,
+                        sql_context=row.sql_context,
+                        complexity=row.complexity,
+                        domain=row.domain,
+                        similarity=row.similarity,
+                    ))
+
+                logger.debug(
+                    f"Hybrid search retrieved {len(examples)} examples "
+                    f"(bm25_w={bm25_weight}, vector_w={vector_weight})"
+                )
+                return examples
+
+        except Exception as e:
+            logger.warning(f"Hybrid search failed: {e}. Falling back to vector-only search.")
+            return []
+
+    def _rerank_examples(
+        self,
+        query: str,
+        examples: List[FewShotExample],
+        top_k: int
+    ) -> List[FewShotExample]:
+        """Rerank examples using cross-encoder model.
+
+        Args:
+            query: Original query for reranking
+            examples: Examples to rerank
+            top_k: Number of examples to return after reranking
+
+        Returns:
+            Reranked list of examples
+        """
+        if not self._reranker or not examples:
+            return examples[:top_k]
+
+        try:
+            from llama_index.core.schema import NodeWithScore, TextNode, QueryBundle
+
+            # Convert examples to NodeWithScore for reranker
+            nodes = []
+            for ex in examples:
+                node = TextNode(
+                    text=f"Question: {ex.sql_prompt}\nSQL: {ex.sql_query}",
+                    id_=str(ex.id),
+                    metadata={"example_id": ex.id}
+                )
+                nodes.append(NodeWithScore(node=node, score=ex.similarity))
+
+            # Rerank using cross-encoder
+            query_bundle = QueryBundle(query_str=query)
+            self._reranker.top_n = top_k
+            reranked_nodes = self._reranker.postprocess_nodes(nodes, query_bundle)
+
+            # Map back to examples with updated scores
+            example_map = {str(ex.id): ex for ex in examples}
+            reranked_examples = []
+            for i, node_with_score in enumerate(reranked_nodes):
+                example_id = node_with_score.node.metadata.get("example_id") or node_with_score.node.id_
+                if str(example_id) in example_map:
+                    example = example_map[str(example_id)]
+                    # Update similarity with reranker score
+                    reranked_examples.append(FewShotExample(
+                        id=example.id,
+                        sql_prompt=example.sql_prompt,
+                        sql_query=example.sql_query,
+                        sql_context=example.sql_context,
+                        complexity=example.complexity,
+                        domain=example.domain,
+                        similarity=node_with_score.score or (1.0 - i * 0.05),  # Fallback score
+                    ))
+
+            logger.debug(f"Reranked {len(examples)} → {len(reranked_examples)} examples")
+            return reranked_examples
+
+        except Exception as e:
+            logger.warning(f"Reranking failed: {e}. Using hybrid scores.")
+            return examples[:top_k]
+
     def get_examples(
         self,
         query: str,
@@ -73,7 +280,11 @@ class FewShotRetriever:
         domain_hint: Optional[str] = None,
         complexity_hint: Optional[str] = None,
     ) -> List[FewShotExample]:
-        """Retrieve similar SQL examples by vector search.
+        """Retrieve similar SQL examples using hybrid search with optional reranking.
+
+        When RAG integration is enabled:
+        1. Performs hybrid BM25+vector search for better keyword coverage
+        2. Optionally reranks results using cross-encoder for precision
 
         Args:
             query: User's natural language query
@@ -92,74 +303,125 @@ class FewShotRetriever:
         try:
             # Embed the query
             query_embedding = self._embed_model.get_text_embedding(query)
-            # Convert to string format for pgvector casting
-            embedding_str = "[" + ",".join(str(x) for x in query_embedding) + "]"
 
-            # Build SQL with optional filters
-            if domain_hint:
-                sql = """
-                    SELECT id, sql_prompt, sql_query, sql_context, complexity, domain,
-                           1 - (embedding <=> CAST(:embedding AS vector)) as similarity
-                    FROM sql_few_shot_examples
-                    WHERE domain = :domain OR domain = 'general'
-                    ORDER BY embedding <=> CAST(:embedding AS vector)
-                    LIMIT :limit
-                """
-                params = {
-                    "embedding": embedding_str,
-                    "domain": domain_hint.lower(),
-                    "limit": top_k,
-                }
-            elif complexity_hint:
-                sql = """
-                    SELECT id, sql_prompt, sql_query, sql_context, complexity, domain,
-                           1 - (embedding <=> CAST(:embedding AS vector)) as similarity
-                    FROM sql_few_shot_examples
-                    WHERE complexity = :complexity
-                    ORDER BY embedding <=> CAST(:embedding AS vector)
-                    LIMIT :limit
-                """
-                params = {
-                    "embedding": embedding_str,
-                    "complexity": complexity_hint,
-                    "limit": top_k,
-                }
-            else:
-                sql = """
-                    SELECT id, sql_prompt, sql_query, sql_context, complexity, domain,
-                           1 - (embedding <=> CAST(:embedding AS vector)) as similarity
-                    FROM sql_few_shot_examples
-                    ORDER BY embedding <=> CAST(:embedding AS vector)
-                    LIMIT :limit
-                """
-                params = {
-                    "embedding": embedding_str,
-                    "limit": top_k,
-                }
+            # Use hybrid search if RAG integration is enabled
+            if self._rag_config["enabled"]:
+                examples = self._hybrid_search(
+                    query=query,
+                    query_embedding=query_embedding,
+                    top_k=top_k,
+                    domain_hint=domain_hint,
+                    complexity_hint=complexity_hint,
+                )
 
-            with self._db_manager.get_session() as session:
-                result = session.execute(text(sql), params)
-                examples = []
-                for row in result:
-                    examples.append(FewShotExample(
-                        id=row.id,
-                        sql_prompt=row.sql_prompt,
-                        sql_query=row.sql_query,
-                        sql_context=row.sql_context,
-                        complexity=row.complexity,
-                        domain=row.domain,
-                        similarity=row.similarity,
-                    ))
+                # Fallback to vector-only if hybrid search failed
+                if not examples:
+                    examples = self._vector_only_search(
+                        query_embedding=query_embedding,
+                        top_k=top_k,
+                        domain_hint=domain_hint,
+                        complexity_hint=complexity_hint,
+                    )
 
-            logger.debug(
-                f"Retrieved {len(examples)} few-shot examples "
-                f"(domain={domain_hint}, complexity={complexity_hint})"
+                # Apply reranking if enabled and we have a reranker
+                if self._reranker and examples:
+                    examples = self._rerank_examples(query, examples, top_k)
+
+                return examples
+
+            # Fallback to vector-only search
+            return self._vector_only_search(
+                query_embedding=query_embedding,
+                top_k=top_k,
+                domain_hint=domain_hint,
+                complexity_hint=complexity_hint,
             )
-            return examples
 
         except Exception as e:
             logger.warning(f"Few-shot retrieval failed: {e}")
             return []
+
+    def _vector_only_search(
+        self,
+        query_embedding: list,
+        top_k: int,
+        domain_hint: Optional[str] = None,
+        complexity_hint: Optional[str] = None,
+    ) -> List[FewShotExample]:
+        """Original vector-only similarity search (fallback).
+
+        Args:
+            query_embedding: Pre-computed query embedding
+            top_k: Number of examples to retrieve
+            domain_hint: Optional domain filter
+            complexity_hint: Optional complexity filter
+
+        Returns:
+            List of FewShotExample sorted by similarity
+        """
+        embedding_str = "[" + ",".join(str(x) for x in query_embedding) + "]"
+
+        # Build SQL with optional filters
+        if domain_hint:
+            sql = """
+                SELECT id, sql_prompt, sql_query, sql_context, complexity, domain,
+                       1 - (embedding <=> CAST(:embedding AS vector)) as similarity
+                FROM sql_few_shot_examples
+                WHERE domain = :domain OR domain = 'general'
+                ORDER BY embedding <=> CAST(:embedding AS vector)
+                LIMIT :limit
+            """
+            params = {
+                "embedding": embedding_str,
+                "domain": domain_hint.lower(),
+                "limit": top_k,
+            }
+        elif complexity_hint:
+            sql = """
+                SELECT id, sql_prompt, sql_query, sql_context, complexity, domain,
+                       1 - (embedding <=> CAST(:embedding AS vector)) as similarity
+                FROM sql_few_shot_examples
+                WHERE complexity = :complexity
+                ORDER BY embedding <=> CAST(:embedding AS vector)
+                LIMIT :limit
+            """
+            params = {
+                "embedding": embedding_str,
+                "complexity": complexity_hint,
+                "limit": top_k,
+            }
+        else:
+            sql = """
+                SELECT id, sql_prompt, sql_query, sql_context, complexity, domain,
+                       1 - (embedding <=> CAST(:embedding AS vector)) as similarity
+                FROM sql_few_shot_examples
+                ORDER BY embedding <=> CAST(:embedding AS vector)
+                LIMIT :limit
+            """
+            params = {
+                "embedding": embedding_str,
+                "limit": top_k,
+            }
+
+        with self._db_manager.get_session() as session:
+            result = session.execute(text(sql), params)
+            examples = []
+            for row in result:
+                examples.append(FewShotExample(
+                    id=row.id,
+                    sql_prompt=row.sql_prompt,
+                    sql_query=row.sql_query,
+                    sql_context=row.sql_context,
+                    complexity=row.complexity,
+                    domain=row.domain,
+                    similarity=row.similarity,
+                ))
+
+        logger.debug(
+            f"Vector search retrieved {len(examples)} few-shot examples "
+            f"(domain={domain_hint}, complexity={complexity_hint})"
+        )
+        return examples
 
     def format_for_prompt(
         self,

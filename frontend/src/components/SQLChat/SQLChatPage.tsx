@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 
 import { useSQLChat } from '../../contexts/SQLChatContext';
+import { useApp } from '../../contexts/AppContext';
 import { DatabaseConnectionForm } from './DatabaseConnectionForm';
 import { ConnectionList } from './ConnectionList';
 import { SchemaExplorer } from './SchemaExplorer';
@@ -27,7 +28,10 @@ import { QueryChat } from './QueryChat';
 import type { ConnectionFormData } from '../../types/sqlChat';
 
 export function SQLChatPage() {
-  // Context state
+  // App context for cross-feature integration
+  const { analyzeInDashboard } = useApp();
+
+  // SQL Chat context state
   const {
     connections,
     activeConnection,
@@ -227,6 +231,7 @@ export function SQLChatPage() {
                 onSendQuery={handleSendQuery}
                 onCancelQuery={cancelQuery}
                 onClearMessages={clearMessages}
+                onAnalyzeInDashboard={analyzeInDashboard}
                 disabled={!activeSession}
               />
             )}

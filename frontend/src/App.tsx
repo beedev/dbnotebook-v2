@@ -1,20 +1,19 @@
-import { useEffect, useState } from 'react';
+import { useEffect } from 'react';
 import { MainLayout } from './components/Layout';
+import { Header } from './components/Header';
 import { Sidebar } from './components/Sidebar';
 import { ChatArea } from './components/Chat';
 import { ToastContainer } from './components/ui';
-import { AppProviders, useNotebook, useDocument, SQLChatProvider } from './contexts';
+import { AppProviders, useNotebook, useDocument, SQLChatProvider, useApp } from './contexts';
 import { useNotebooks } from './hooks/useNotebooks';
 import { useModels } from './hooks/useModels';
 import { useToast } from './hooks/useToast';
 import { AnalyticsPage } from './pages';
 import { SQLChatPage } from './components/SQLChat';
 
-type AppView = 'chat' | 'analytics' | 'sql-chat';
-
 function AppContent() {
-  // View state for navigation
-  const [currentView, setCurrentView] = useState<AppView>('chat');
+  // Use App context for navigation and model state
+  const { currentView, setModelsState } = useApp();
 
   // Use hooks for API logic
   const {
@@ -40,6 +39,17 @@ function AppContent() {
     error: modelsError,
     selectModel,
   } = useModels();
+
+  // Sync models state with AppContext for the Header
+  useEffect(() => {
+    setModelsState({
+      models,
+      selectedModel,
+      selectedProvider,
+      isLoadingModels,
+      selectModel,
+    });
+  }, [models, selectedModel, selectedProvider, isLoadingModels, selectModel, setModelsState]);
 
   const { toasts, removeToast, success, error: showError } = useToast();
 
@@ -118,13 +128,10 @@ function AppContent() {
   // Render Analytics page
   if (currentView === 'analytics') {
     return (
-      <>
-        <AnalyticsPage
-          onBack={() => setCurrentView('chat')}
-          notebookId={selectedNotebook?.id}
-        />
+      <MainLayout header={<Header />}>
+        <AnalyticsPage notebookId={selectedNotebook?.id} />
         <ToastContainer toasts={toasts} onDismiss={removeToast} />
-      </>
+      </MainLayout>
     );
   }
 
@@ -132,54 +139,45 @@ function AppContent() {
   if (currentView === 'sql-chat') {
     return (
       <SQLChatProvider>
-        <SQLChatPage />
-        <ToastContainer toasts={toasts} onDismiss={removeToast} />
+        <MainLayout header={<Header />}>
+          <SQLChatPage />
+          <ToastContainer toasts={toasts} onDismiss={removeToast} />
+        </MainLayout>
       </SQLChatProvider>
     );
   }
 
   // Render main Chat view
   return (
-    <>
-      <MainLayout
-        sidebar={
-          <Sidebar
-            // Models (not in context yet)
-            models={models}
-            selectedModel={selectedModel}
-            selectedProvider={selectedProvider}
-            onSelectModel={selectModel}
-            isLoadingModels={isLoadingModels}
-            // Document operations (still needed for toasts)
-            onUploadDocument={handleFileUpload}
-            onDeleteDocument={handleDeleteDocument}
-            onToggleDocument={toggleDocumentActive}
-            // Notebook operations
-            onSelectNotebook={selectNotebook}
-            onCreateNotebook={createNotebook}
-            onDeleteNotebook={deleteNotebook}
-            onUpdateNotebook={updateNotebook}
-            // Web search callback
-            onWebSourcesAdded={handleWebSourcesAdded}
-            // Analytics navigation
-            onNavigateAnalytics={() => setCurrentView('analytics')}
-            // SQL Chat navigation
-            onNavigateSQLChat={() => setCurrentView('sql-chat')}
-          />
-        }
-      >
-        <ChatArea
-          notebookId={selectedNotebook?.id}
-          notebookName={selectedNotebook?.name}
-          selectedModel={selectedModel}
-          onCopy={handleCopy}
-          onFileUpload={handleFileUpload}
+    <MainLayout
+      header={<Header />}
+      sidebar={
+        <Sidebar
+          // Document operations (still needed for toasts)
+          onUploadDocument={handleFileUpload}
+          onDeleteDocument={handleDeleteDocument}
+          onToggleDocument={toggleDocumentActive}
+          // Notebook operations
+          onSelectNotebook={selectNotebook}
+          onCreateNotebook={createNotebook}
+          onDeleteNotebook={deleteNotebook}
+          onUpdateNotebook={updateNotebook}
+          // Web search callback
+          onWebSourcesAdded={handleWebSourcesAdded}
         />
-      </MainLayout>
+      }
+    >
+      <ChatArea
+        notebookId={selectedNotebook?.id}
+        notebookName={selectedNotebook?.name}
+        selectedModel={selectedModel}
+        onCopy={handleCopy}
+        onFileUpload={handleFileUpload}
+      />
 
       {/* Toast notifications */}
       <ToastContainer toasts={toasts} onDismiss={removeToast} />
-    </>
+    </MainLayout>
   );
 }
 

@@ -86,6 +86,16 @@ def load_ingestion_config() -> Dict[str, Any]:
     return _load_yaml_file("ingestion.yaml")
 
 
+@lru_cache(maxsize=1)
+def load_sql_chat_config() -> Dict[str, Any]:
+    """Load SQL Chat configuration from config/sql_chat.yaml.
+
+    Returns:
+        Dictionary with SQL Chat configuration
+    """
+    return _load_yaml_file("sql_chat.yaml")
+
+
 def reload_configs() -> None:
     """Clear config caches to reload from files.
 
@@ -93,6 +103,7 @@ def reload_configs() -> None:
     """
     load_raptor_config.cache_clear()
     load_ingestion_config.cache_clear()
+    load_sql_chat_config.cache_clear()
     logger.info("Config caches cleared - will reload on next access")
 
 
@@ -161,7 +172,7 @@ def get_config_value(
     """Get a nested config value with fallback default.
 
     Args:
-        config_type: 'raptor' or 'ingestion'
+        config_type: 'raptor', 'ingestion', or 'sql_chat'
         *keys: Nested keys to traverse
         default: Default value if key not found
 
@@ -170,11 +181,14 @@ def get_config_value(
 
     Example:
         get_config_value('raptor', 'clustering', 'min_cluster_size', default=3)
+        get_config_value('sql_chat', 'few_shot', 'rag_integration', 'enabled', default=True)
     """
     if config_type == 'raptor':
         config = load_raptor_config()
     elif config_type == 'ingestion':
         config = load_ingestion_config()
+    elif config_type == 'sql_chat':
+        config = load_sql_chat_config()
     else:
         logger.warning(f"Unknown config type: {config_type}")
         return default

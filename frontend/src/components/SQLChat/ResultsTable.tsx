@@ -16,12 +16,14 @@ import {
   Clock,
   Table as TableIcon,
   AlertCircle,
+  BarChart3,
 } from 'lucide-react';
 import type { QueryResult, ColumnInfo } from '../../types/sqlChat';
 
 interface ResultsTableProps {
   result: QueryResult | null;
   maxRows?: number;
+  onAnalyzeInDashboard?: (file: File) => void;
 }
 
 type SortDirection = 'asc' | 'desc' | null;
@@ -39,7 +41,7 @@ function formatValue(value: any): string {
   return String(value);
 }
 
-function downloadCSV(data: Record<string, any>[], columns: ColumnInfo[], filename: string) {
+function dataToCSV(data: Record<string, any>[], columns: ColumnInfo[]): string {
   const headers = columns.map((c) => c.name);
   const rows = data.map((row) =>
     columns.map((c) => {
@@ -53,7 +55,11 @@ function downloadCSV(data: Record<string, any>[], columns: ColumnInfo[], filenam
     }).join(',')
   );
 
-  const csv = [headers.join(','), ...rows].join('\n');
+  return [headers.join(','), ...rows].join('\n');
+}
+
+function downloadCSV(data: Record<string, any>[], columns: ColumnInfo[], filename: string) {
+  const csv = dataToCSV(data, columns);
   const blob = new Blob([csv], { type: 'text/csv' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
@@ -63,9 +69,23 @@ function downloadCSV(data: Record<string, any>[], columns: ColumnInfo[], filenam
   URL.revokeObjectURL(url);
 }
 
-export function ResultsTable({ result, maxRows = 1000 }: ResultsTableProps) {
+export function ResultsTable({
+  result,
+  maxRows = 1000,
+  onAnalyzeInDashboard,
+}: ResultsTableProps) {
   const [sortColumn, setSortColumn] = useState<string | null>(null);
   const [sortDirection, setSortDirection] = useState<SortDirection>(null);
+
+  // Handle analyze in dashboard
+  const handleAnalyzeInDashboard = () => {
+    if (!result || !onAnalyzeInDashboard) return;
+
+    const csv = dataToCSV(result.data, result.columns);
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const file = new File([blob], 'query_results.csv', { type: 'text/csv' });
+    onAnalyzeInDashboard(file);
+  };
 
   // Sort data
   const sortedData = useMemo(() => {
@@ -157,14 +177,27 @@ export function ResultsTable({ result, maxRows = 1000 }: ResultsTableProps) {
           )}
         </div>
 
-        <button
-          onClick={() => downloadCSV(result.data, result.columns, 'query_results.csv')}
-          className="flex items-center gap-1.5 px-3 py-1 text-sm text-slate-400 hover:text-white
-                     hover:bg-slate-700 rounded transition-colors"
-        >
-          <Download className="w-4 h-4" />
-          Download CSV
-        </button>
+        <div className="flex items-center gap-2">
+          {onAnalyzeInDashboard && (
+            <button
+              onClick={handleAnalyzeInDashboard}
+              className="flex items-center gap-1.5 px-3 py-1 text-sm text-nebula-bright hover:text-white
+                         hover:bg-nebula/20 rounded transition-colors"
+              title="Analyze this data in the Analytics Dashboard"
+            >
+              <BarChart3 className="w-4 h-4" />
+              <span className="hidden sm:inline">Analyze</span>
+            </button>
+          )}
+          <button
+            onClick={() => downloadCSV(result.data, result.columns, 'query_results.csv')}
+            className="flex items-center gap-1.5 px-3 py-1 text-sm text-slate-400 hover:text-white
+                       hover:bg-slate-700 rounded transition-colors"
+          >
+            <Download className="w-4 h-4" />
+            <span className="hidden sm:inline">CSV</span>
+          </button>
+        </div>
       </div>
 
       {/* Table */}

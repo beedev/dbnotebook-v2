@@ -3,33 +3,52 @@
  *
  * Standalone page for Excel/CSV analytics.
  * Upload a file and get AI-generated dashboard with KPIs and charts.
+ * Navigation is handled via the global header tabs.
+ * Supports auto-analysis when navigating from SQL Chat with results.
  */
 
-import { ArrowLeft } from 'lucide-react';
+import { useEffect, useRef } from 'react';
 import { AnalyticsProvider, useAnalytics } from '../contexts/AnalyticsContext';
+import { useApp } from '../contexts/AppContext';
 import { ExcelUploader, DashboardView } from '../components/Analytics';
 
 interface AnalyticsPageProps {
-  onBack?: () => void;
   notebookId?: string;
 }
 
-function AnalyticsContent({ onBack, notebookId }: AnalyticsPageProps) {
-  const { analysisState } = useAnalytics();
+function AnalyticsContent({ notebookId }: AnalyticsPageProps) {
+  const { analysisState, runFullAnalysis, resetDashboard } = useAnalytics();
+  const { pendingAnalyticsFile, setPendingAnalyticsFile } = useApp();
+  const hasProcessedPendingFile = useRef(false);
+
+  // Auto-run analysis when coming from SQL Chat with a pending file
+  useEffect(() => {
+    if (pendingAnalyticsFile && !hasProcessedPendingFile.current) {
+      hasProcessedPendingFile.current = true;
+
+      // Reset any existing dashboard first
+      resetDashboard();
+
+      // Run full analysis on the pending file
+      runFullAnalysis(pendingAnalyticsFile, notebookId);
+
+      // Clear the pending file
+      setPendingAnalyticsFile(null);
+    }
+  }, [pendingAnalyticsFile, notebookId, runFullAnalysis, resetDashboard, setPendingAnalyticsFile]);
+
+  // Reset the ref when component unmounts so it can process again next time
+  useEffect(() => {
+    return () => {
+      hasProcessedPendingFile.current = false;
+    };
+  }, []);
+
   const showDashboard = analysisState === 'complete';
 
   return (
     <div className="analytics-page">
       <div className="analytics-page__header">
-        {onBack && (
-          <button
-            onClick={onBack}
-            className="flex items-center gap-2 px-3 py-2 rounded-lg bg-void-surface text-text-muted hover:text-text hover:bg-void-lighter transition-colors"
-          >
-            <ArrowLeft size={18} />
-            <span>Back to Chat</span>
-          </button>
-        )}
         <h1 className="analytics-page__title">
           {showDashboard ? '' : 'Data Analytics'}
         </h1>
@@ -57,10 +76,10 @@ function AnalyticsContent({ onBack, notebookId }: AnalyticsPageProps) {
   );
 }
 
-export function AnalyticsPage({ onBack, notebookId }: AnalyticsPageProps) {
+export function AnalyticsPage({ notebookId }: AnalyticsPageProps) {
   return (
     <AnalyticsProvider>
-      <AnalyticsContent onBack={onBack} notebookId={notebookId} />
+      <AnalyticsContent notebookId={notebookId} />
     </AnalyticsProvider>
   );
 }

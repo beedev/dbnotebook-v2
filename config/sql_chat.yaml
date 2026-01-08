@@ -72,6 +72,26 @@ few_shot:
   # Minimum examples required for setup to be considered complete
   min_required_examples: 50000
 
+  # RAG integration for enhanced retrieval
+  # Uses hybrid BM25+vector search with optional reranking
+  rag_integration:
+    # Enable hybrid search (BM25 + vector)
+    enabled: true
+
+    # Use reranker for final ranking
+    use_reranker: true
+
+    # Reranker model (cross-encoder)
+    rerank_model: "mixedbread-ai/mxbai-rerank-large-v1"
+
+    # Number of candidates to retrieve before reranking
+    rerank_top_k: 15
+
+    # Hybrid search weights (must sum to 1.0)
+    weights:
+      bm25: 0.3
+      vector: 0.7
+
 # Intent classification settings
 intent:
   # Default intent when detection confidence is low

@@ -1,21 +1,13 @@
 import { useState } from 'react';
-import { Menu, X, Settings, Github, Zap, ChevronDown, ChevronRight, BarChart3, Database } from 'lucide-react';
+import { Menu, X, Settings, Github, ChevronDown, ChevronRight } from 'lucide-react';
 import { NotebookSelector } from './NotebookSelector';
-import { ModelSelector } from './ModelSelector';
 import { DocumentsList } from './DocumentsList';
 import { WebSearchPanel } from './WebSearchPanel';
 import { ThemeToggle } from '../ui';
 import { useNotebook, useDocument } from '../../contexts';
-import type { ModelGroup, Notebook, ModelProvider } from '../../types';
+import type { Notebook } from '../../types';
 
 interface SidebarProps {
-  // Models (not in context yet)
-  models: ModelGroup[];
-  selectedModel: string;
-  selectedProvider: ModelProvider;
-  onSelectModel: (model: string, provider: ModelProvider) => void;
-  isLoadingModels?: boolean;
-
   // Document operations (needed for toast notifications in parent)
   onUploadDocument: (file: File) => Promise<boolean>;
   onDeleteDocument: (sourceId: string) => Promise<boolean>;
@@ -29,18 +21,9 @@ interface SidebarProps {
 
   // Web Search callback
   onWebSourcesAdded?: () => void;
-
-  // Navigation
-  onNavigateAnalytics?: () => void;
-  onNavigateSQLChat?: () => void;
 }
 
 export function Sidebar({
-  models,
-  selectedModel,
-  selectedProvider,
-  onSelectModel,
-  isLoadingModels,
   onUploadDocument,
   onDeleteDocument,
   onToggleDocument,
@@ -49,8 +32,6 @@ export function Sidebar({
   onDeleteNotebook,
   onUpdateNotebook,
   onWebSourcesAdded,
-  onNavigateAnalytics,
-  onNavigateSQLChat,
 }: SidebarProps) {
   const [isMobileOpen, setIsMobileOpen] = useState(false);
   const [expandedSections, setExpandedSections] = useState({
@@ -104,23 +85,11 @@ export function Sidebar({
           ${isMobileOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}
         `}
       >
-        {/* Header */}
-        <div className="flex items-center justify-between p-4 border-b border-void-surface">
-          <div className="flex items-center gap-2">
-            <div className="w-8 h-8 rounded-lg bg-glow/20 flex items-center justify-center">
-              <Zap className="w-5 h-5 text-glow" />
-            </div>
-            <div>
-              <h1 className="text-lg font-bold text-text font-[family-name:var(--font-display)]">
-                <span className="gradient-text">DB</span>Notebook
-              </h1>
-            </div>
-          </div>
-
-          {/* Mobile close button */}
+        {/* Mobile close button (header) */}
+        <div className="lg:hidden flex items-center justify-end p-2 border-b border-void-surface">
           <button
             onClick={() => setIsMobileOpen(false)}
-            className="lg:hidden p-2 rounded-lg hover:bg-void-surface text-text-muted hover:text-text transition-colors"
+            className="p-2 rounded-lg hover:bg-void-surface text-text-muted hover:text-text transition-colors"
             aria-label="Close sidebar"
           >
             <X className="w-5 h-5" />
@@ -129,17 +98,6 @@ export function Sidebar({
 
         {/* Content */}
         <div className="flex-1 overflow-y-auto">
-          {/* Model selector - always visible */}
-          <div className="p-4 border-b border-void-surface/50">
-            <ModelSelector
-              models={models}
-              selectedModel={selectedModel}
-              selectedProvider={selectedProvider}
-              onSelect={onSelectModel}
-              isLoading={isLoadingModels}
-            />
-          </div>
-
           {/* Notebooks Section */}
           <div className="border-b border-void-surface/50">
             <button
@@ -238,30 +196,6 @@ export function Sidebar({
             )}
           </div>
         </div>
-
-        {/* Navigation Buttons */}
-        {(onNavigateAnalytics || onNavigateSQLChat) && (
-          <div className="p-4 border-t border-void-surface/50 space-y-2">
-            {onNavigateAnalytics && (
-              <button
-                onClick={onNavigateAnalytics}
-                className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg bg-nebula/10 hover:bg-nebula/20 text-nebula-bright transition-colors"
-              >
-                <BarChart3 className="w-5 h-5" />
-                <span className="font-medium">Data Analytics</span>
-              </button>
-            )}
-            {onNavigateSQLChat && (
-              <button
-                onClick={onNavigateSQLChat}
-                className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-400 transition-colors"
-              >
-                <Database className="w-5 h-5" />
-                <span className="font-medium">Chat with Data</span>
-              </button>
-            )}
-          </div>
-        )}
 
         {/* Footer */}
         <div className="p-4 border-t border-void-surface">
