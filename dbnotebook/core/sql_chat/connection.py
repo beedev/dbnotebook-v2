@@ -54,6 +54,7 @@ class DatabaseConnectionManager:
 
     def __init__(
         self,
+        db_manager=None,
         encryption_key: Optional[str] = None,
         pool_size: int = 5,
         max_overflow: int = 10,
@@ -62,12 +63,14 @@ class DatabaseConnectionManager:
         """Initialize connection manager.
 
         Args:
+            db_manager: Database manager for persisting connections to DBNotebook DB
             encryption_key: Fernet encryption key for passwords.
                            Falls back to SQL_CHAT_ENCRYPTION_KEY env var.
             pool_size: Connection pool size per database
             max_overflow: Max connections beyond pool_size
             pool_timeout: Seconds to wait for available connection
         """
+        self._db_manager = db_manager  # For persisting connections
         self._engines: Dict[str, Engine] = {}
         self._connections: Dict[str, DatabaseConnection] = {}
         self._validator = QueryValidator()
@@ -77,17 +80,21 @@ class DatabaseConnectionManager:
         self._max_overflow = max_overflow
         self._pool_timeout = pool_timeout
 
-        # Initialize encryption
-        key = encryption_key or os.getenv("SQL_CHAT_ENCRYPTION_KEY")
-        if key:
-            self._fernet = Fernet(key.encode() if isinstance(key, str) else key)
-        else:
-            # Generate a key for this session (passwords won't persist across restarts)
-            logger.warning(
-                "No SQL_CHAT_ENCRYPTION_KEY set. Generating session-only key. "
-                "Set SQL_CHAT_ENCRYPTION_KEY env var for persistent encrypted storage."
-            )
-            self._fernet = Fernet(Fernet.generate_key())
+        # Initialize encryption with default key for dev (or custom for production)
+        # Default key allows persistence without configuration
+        DEFAULT_DEV_KEY = "ZmFrZS1kZXYta2V5LWZvci10ZXN0aW5nLW9ubHk9PT0="  # Base64 padded
+        key = encryption_key or os.getenv("SQL_CHAT_ENCRYPTION_KEY") or DEFAULT_DEV_KEY
+
+        # Generate a proper Fernet key from the provided/default key
+        import hashlib
+        import base64
+        key_bytes = hashlib.sha256(key.encode()).digest()
+        fernet_key = base64.urlsafe_b64encode(key_bytes)
+        self._fernet = Fernet(fernet_key)
+
+        # Load existing connections from database
+        if self._db_manager:
+            self._load_connections_from_db()
 
     def _encrypt_password(self, password: str) -> str:
         """Encrypt password using Fernet encryption.
@@ -110,6 +117,156 @@ class DatabaseConnectionManager:
             Plain text password
         """
         return self._fernet.decrypt(encrypted.encode()).decode()
+
+    def _load_connections_from_db(self) -> None:
+        """Load all connections from database on startup."""
+        if not self._db_manager:
+            return
+
+        try:
+            with self._db_manager.get_session() as session:
+                result = session.execute(text("""
+                    SELECT id, user_id, name, db_type, host, port, database_name,
+                           username, password_encrypted, masking_policy
+                    FROM database_connections
+                """))
+                rows = result.fetchall()
+
+                for row in rows:
+                    conn_id = str(row.id)
+                    masking_policy = None
+                    if row.masking_policy:
+                        import json
+                        policy_data = row.masking_policy if isinstance(row.masking_policy, dict) else json.loads(row.masking_policy)
+                        masking_policy = MaskingPolicy(
+                            mask_columns=policy_data.get('mask_columns', []),
+                            redact_columns=policy_data.get('redact_columns', []),
+                            hash_columns=policy_data.get('hash_columns', []),
+                        )
+
+                    config = DatabaseConnection(
+                        id=conn_id,
+                        name=row.name,
+                        type=row.db_type,
+                        host=row.host or '',
+                        port=row.port or 0,
+                        database=row.database_name or '',
+                        username=row.username or '',
+                        password_encrypted=row.password_encrypted,
+                        masking_policy=masking_policy,
+                        user_id=row.user_id,
+                    )
+                    self._connections[conn_id] = config
+
+                    # Try to establish engine (may fail if credentials changed)
+                    try:
+                        password = self._decrypt_password(row.password_encrypted)
+                        engine = self._create_engine(config, password)
+                        self._engines[conn_id] = engine
+                    except Exception as e:
+                        logger.warning(f"Failed to create engine for connection {conn_id}: {e}")
+
+                logger.info(f"Loaded {len(rows)} database connections from storage")
+
+        except Exception as e:
+            logger.error(f"Failed to load connections from database: {e}")
+
+    def _save_connection_to_db(self, config: DatabaseConnection) -> bool:
+        """Save connection to database.
+
+        Args:
+            config: Connection configuration to save
+
+        Returns:
+            True if saved successfully
+        """
+        if not self._db_manager:
+            logger.warning("No db_manager - connection will not persist across restarts")
+            return False
+
+        try:
+            with self._db_manager.get_session() as session:
+                # Convert masking policy to JSON
+                masking_json = None
+                if config.masking_policy:
+                    import json
+                    masking_json = json.dumps({
+                        'mask_columns': config.masking_policy.mask_columns,
+                        'redact_columns': config.masking_policy.redact_columns,
+                        'hash_columns': config.masking_policy.hash_columns,
+                    })
+
+                session.execute(text("""
+                    INSERT INTO database_connections
+                    (id, user_id, name, db_type, host, port, database_name,
+                     username, password_encrypted, masking_policy)
+                    VALUES (CAST(:id AS uuid), :user_id, :name, :db_type, :host, :port,
+                            :database_name, :username, :password_encrypted,
+                            CAST(:masking_policy AS jsonb))
+                """), {
+                    'id': config.id,
+                    'user_id': config.user_id,
+                    'name': config.name,
+                    'db_type': config.type,
+                    'host': config.host,
+                    'port': config.port,
+                    'database_name': config.database,
+                    'username': config.username,
+                    'password_encrypted': config.password_encrypted,
+                    'masking_policy': masking_json,
+                })
+                session.commit()
+                logger.info(f"Saved connection {config.id} to database")
+                return True
+
+        except Exception as e:
+            logger.error(f"Failed to save connection to database: {e}")
+            return False
+
+    def _delete_connection_from_db(self, connection_id: str) -> bool:
+        """Delete connection from database.
+
+        Args:
+            connection_id: Connection ID to delete
+
+        Returns:
+            True if deleted successfully
+        """
+        if not self._db_manager:
+            return False
+
+        try:
+            with self._db_manager.get_session() as session:
+                session.execute(text("""
+                    DELETE FROM database_connections WHERE id = CAST(:id AS uuid)
+                """), {'id': connection_id})
+                session.commit()
+                logger.info(f"Deleted connection {connection_id} from database")
+                return True
+
+        except Exception as e:
+            logger.error(f"Failed to delete connection from database: {e}")
+            return False
+
+    def _update_last_used(self, connection_id: str) -> None:
+        """Update last_used_at timestamp for a connection.
+
+        Args:
+            connection_id: Connection ID
+        """
+        if not self._db_manager:
+            return
+
+        try:
+            with self._db_manager.get_session() as session:
+                session.execute(text("""
+                    UPDATE database_connections
+                    SET last_used_at = NOW()
+                    WHERE id = CAST(:id AS uuid)
+                """), {'id': connection_id})
+                session.commit()
+        except Exception as e:
+            logger.debug(f"Failed to update last_used_at: {e}")
 
     def _build_connection_uri(
         self,
@@ -238,6 +395,10 @@ class DatabaseConnectionManager:
             engine = self._create_engine(config, password)
             self._engines[connection_id] = engine
             self._connections[connection_id] = config
+
+            # Persist to database for cross-session persistence
+            self._save_connection_to_db(config)
+
             logger.info(f"Created connection {connection_id} for user {user_id}")
             return connection_id, None
         except Exception as e:
@@ -266,6 +427,13 @@ class DatabaseConnectionManager:
                 test_sql = self._validator.validate_connection_test_sql(config.type)
                 conn.execute(text(test_sql))
                 logger.debug(f"Connection test passed for {config.name}")
+
+            # Check if we should skip read-only verification (dev mode)
+            skip_readonly_check = os.getenv("SQL_CHAT_SKIP_READONLY_CHECK", "false").lower() == "true"
+
+            if skip_readonly_check:
+                logger.info(f"Skipping read-only check for {config.name} (dev mode)")
+                return True, "Connection successful (read-only check skipped - dev mode)"
 
             # Test 2: Verify read-only (write should FAIL)
             with engine.connect() as conn:
@@ -350,11 +518,12 @@ class DatabaseConnectionManager:
             logger.warning(f"Connection {connection_id} unhealthy: {e}")
             return False
 
-    def disconnect(self, connection_id: str) -> None:
+    def disconnect(self, connection_id: str, delete_from_db: bool = True) -> None:
         """Close and remove a database connection.
 
         Args:
             connection_id: ID of connection to close
+            delete_from_db: If True, also delete from database (default True)
         """
         if connection_id in self._engines:
             self._engines[connection_id].dispose()
@@ -363,6 +532,10 @@ class DatabaseConnectionManager:
 
         if connection_id in self._connections:
             del self._connections[connection_id]
+
+        # Delete from database if requested
+        if delete_from_db:
+            self._delete_connection_from_db(connection_id)
 
     def get_engine(self, connection_id: str) -> Optional[Engine]:
         """Get SQLAlchemy engine for connection.

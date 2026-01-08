@@ -29,7 +29,6 @@ import type {
   QueryHistoryEntry,
   SQLChatMessage,
   SQLChatContextValue,
-  StreamingQueryState,
 } from '../types/sqlChat';
 
 // API base URL
@@ -109,7 +108,7 @@ export function SQLChatProvider({ children }: { children: ReactNode }) {
           db_type: formData.dbType,
           host: formData.host,
           port: formData.port,
-          database_name: formData.databaseName,
+          database: formData.databaseName,
           username: formData.username,
           password: formData.password,
           connection_string: formData.connectionString,
@@ -124,10 +123,10 @@ export function SQLChatProvider({ children }: { children: ReactNode }) {
 
       const data = await response.json();
 
-      if (data.success && data.connection_id) {
+      if (data.success && data.connectionId) {
         // Reload connections to get the new one
         await loadConnections();
-        return data.connection_id;
+        return data.connectionId;
       } else {
         setError(data.error || 'Failed to create connection');
         return null;
@@ -149,7 +148,7 @@ export function SQLChatProvider({ children }: { children: ReactNode }) {
           db_type: formData.dbType,
           host: formData.host,
           port: formData.port,
-          database_name: formData.databaseName,
+          database: formData.databaseName,
           username: formData.username,
           password: formData.password,
           connection_string: formData.connectionString,
@@ -230,15 +229,15 @@ export function SQLChatProvider({ children }: { children: ReactNode }) {
       const response = await fetch(`${API_BASE}/sessions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ connection_id: connectionId }),
+        body: JSON.stringify({ connectionId }),
       });
 
       const data = await response.json();
 
-      if (data.success && data.session_id) {
+      if (data.success && data.sessionId) {
         // Load the session details
-        await loadSession(data.session_id);
-        return data.session_id;
+        await loadSession(data.sessionId);
+        return data.sessionId;
       } else {
         setError(data.error || 'Failed to create session');
         return null;
@@ -257,7 +256,15 @@ export function SQLChatProvider({ children }: { children: ReactNode }) {
       const data = await response.json();
 
       if (data.success && data.session) {
-        setActiveSession(data.session);
+        // Map backend response to frontend type
+        const session: SQLChatSession = {
+          id: data.session.sessionId,
+          userId: '', // Not returned by backend
+          connectionId: data.session.connectionId,
+          createdAt: data.session.createdAt,
+          lastQueryAt: data.session.lastQueryAt,
+        };
+        setActiveSession(session);
 
         // Load history for this session
         await loadHistory(sessionId);
@@ -359,32 +366,55 @@ export function SQLChatProvider({ children }: { children: ReactNode }) {
 
       const decoder = new TextDecoder();
       let result: QueryResult | null = null;
+      let buffer = ''; // Buffer for incomplete SSE chunks
 
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
 
-        const chunk = decoder.decode(value, { stream: true });
-        const lines = chunk.split('\n');
+        // Accumulate incoming data in buffer
+        buffer += decoder.decode(value, { stream: true });
 
-        for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            try {
-              const data: StreamingQueryState = JSON.parse(line.slice(6));
+        // Process complete SSE messages (terminated by double newline)
+        const messages = buffer.split('\n\n');
+        buffer = messages.pop() || ''; // Keep incomplete message in buffer
 
-              // Update query state
-              setQueryState(data.state);
+        for (const message of messages) {
+          const lines = message.split('\n');
+          for (const line of lines) {
+            if (line.startsWith('data: ')) {
+              const jsonStr = line.slice(6).trim();
+              if (jsonStr === '[DONE]') continue;
 
-              if (data.result) {
-                result = data.result;
-                setQueryResult(result);
+              try {
+                const data = JSON.parse(jsonStr);
+
+                // Handle different message types from backend
+                if (data.type === 'status') {
+                  setQueryState(data.status as QueryState);
+                } else if (data.type === 'sql') {
+                  // SQL generated - update state
+                  setQueryState('executing');
+                } else if (data.type === 'result') {
+                  // Final result - convert inline format to QueryResult
+                  result = {
+                    success: data.success,
+                    sqlGenerated: data.sql || '',
+                    data: data.data || [],
+                    columns: data.columns || [],
+                    rowCount: data.rowCount || 0,
+                    executionTimeMs: data.executionTimeMs || 0,
+                    errorMessage: data.errorMessage,
+                    confidence: data.confidence,
+                    explanation: data.explanation,
+                  };
+                  setQueryResult(result);
+                } else if (data.type === 'error') {
+                  setError(data.error);
+                }
+              } catch (e) {
+                console.error('SSE parse error:', e, 'Data:', jsonStr);
               }
-
-              if (data.error) {
-                setError(data.error);
-              }
-            } catch {
-              // Ignore parse errors for incomplete chunks
             }
           }
         }
@@ -392,12 +422,18 @@ export function SQLChatProvider({ children }: { children: ReactNode }) {
 
       // Add assistant message with result
       if (result) {
+        // Use explanation if available, otherwise fallback to generic message
+        let content: string;
+        if (result.success) {
+          content = result.explanation || `Found ${result.rowCount} result${result.rowCount !== 1 ? 's' : ''}.`;
+        } else {
+          content = result.errorMessage || 'Query failed';
+        }
+
         const assistantMessage: SQLChatMessage = {
           id: generateId(),
           role: 'assistant',
-          content: result.success
-            ? `Found ${result.rowCount} result${result.rowCount !== 1 ? 's' : ''}.`
-            : result.errorMessage || 'Query failed',
+          content,
           sql: result.sqlGenerated,
           result,
           timestamp: new Date().toISOString(),

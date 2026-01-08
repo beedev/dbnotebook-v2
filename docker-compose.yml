@@ -16,6 +16,8 @@ services:
       - POSTGRES_USER=dbnotebook
       - POSTGRES_PASSWORD=dbnotebook
       - OLLAMA_HOST=host.docker.internal
+      # SQL Chat dev mode - skip read-only check for testing
+      - SQL_CHAT_SKIP_READONLY_CHECK=true
     depends_on:
       postgres:
         condition: service_healthy

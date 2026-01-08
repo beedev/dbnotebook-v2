@@ -82,7 +82,8 @@ def upgrade() -> None:
     op.create_index('idx_sql_history_created', 'sql_query_history', ['created_at'])
 
     # 4. sql_few_shot_examples - Gretel dataset for few-shot learning
-    # Uses vector(768) to match HuggingFace nomic-embed-text-v1.5 dimensions
+    # NOTE: embedding column is created dynamically at runtime based on configured
+    # embedding model dimension (see FewShotSetup._ensure_embedding_column)
     op.create_table(
         'sql_few_shot_examples',
         sa.Column('id', sa.Integer(), primary_key=True, autoincrement=True),
@@ -93,19 +94,8 @@ def upgrade() -> None:
         sa.Column('domain', sa.String(100), nullable=True),     # finance, healthcare, retail, etc.
         sa.Column('created_at', sa.TIMESTAMP(), nullable=False, server_default=sa.func.now()),
     )
-
-    # Add vector column for embeddings (768 dimensions for HuggingFace)
-    op.execute("""
-        ALTER TABLE sql_few_shot_examples
-        ADD COLUMN embedding vector(768)
-    """)
-
-    # Create IVFFlat index for fast vector similarity search
-    op.execute("""
-        CREATE INDEX idx_few_shot_embedding ON sql_few_shot_examples
-        USING ivfflat (embedding vector_cosine_ops)
-        WITH (lists = 100)
-    """)
+    # NOTE: Vector index (idx_few_shot_embedding) is created dynamically when
+    # embedding column is added, ensuring correct dimension for configured model
 
     # Index for domain-filtered queries
     op.create_index('idx_few_shot_domain', 'sql_few_shot_examples', ['domain'])

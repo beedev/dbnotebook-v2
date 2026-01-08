@@ -8,14 +8,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Development Commands
 
-```bash
-# Start application (handles venv, deps, Ollama automatically)
-./start.sh                    # Flask UI (default port 7860)
-./start.sh 8080 localhost     # Custom port/host
+**IMPORTANT**: When user says "start the app" or "start", ALWAYS use `docker compose up --build`. Never use `./start.sh` or manual Python execution.
 
-# Manual execution
-source venv/bin/activate
-python -m dbnotebook --host localhost --port 7860
+```bash
+# Start application (ALWAYS use Docker)
+docker compose up --build     # Primary method - builds and starts all services
 
 # Frontend development (React + Vite)
 cd frontend
@@ -34,9 +31,6 @@ pytest                        # All tests
 pytest tests/test_notebook_integration.py  # Specific test
 pytest tests/raptor/          # RAPTOR module tests
 pytest -v -x                  # Verbose, stop on first failure
-
-# Docker
-docker compose up --build     # External Ollama required on host
 ```
 
 ## Quick Reference

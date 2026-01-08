@@ -275,9 +275,9 @@ export function SQLChatPage() {
 
       {/* Add Connection Modal */}
       {showAddConnection && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-          <div className="w-full max-w-lg mx-4 bg-slate-900 border border-slate-700 rounded-xl shadow-2xl">
-            <div className="flex items-center justify-between px-6 py-4 border-b border-slate-700">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="w-full max-w-lg bg-slate-900 border border-slate-700 rounded-xl shadow-2xl max-h-[90vh] flex flex-col">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-slate-700 flex-shrink-0">
               <h2 className="text-lg font-semibold text-white">Add Database Connection</h2>
               <button
                 onClick={() => setShowAddConnection(false)}
@@ -286,7 +286,7 @@ export function SQLChatPage() {
                 <X className="w-5 h-5" />
               </button>
             </div>
-            <div className="p-6">
+            <div className="p-6 overflow-y-auto flex-1">
               <DatabaseConnectionForm
                 onSubmit={handleCreateConnection}
                 onTest={handleTestConnection}

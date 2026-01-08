@@ -8,6 +8,8 @@ Supports domain filtering for improved relevance.
 import logging
 from typing import List, Optional
 
+from sqlalchemy import text
+
 from dbnotebook.core.sql_chat.types import FewShotExample
 
 logger = logging.getLogger(__name__)
@@ -38,6 +40,31 @@ class FewShotRetriever:
         """
         self._db_manager = db_manager
         self._embed_model = embed_model
+        self._examples_available: Optional[bool] = None  # Cache availability check
+
+    def _check_examples_available(self) -> bool:
+        """Check if few-shot examples table exists and has data.
+
+        Returns:
+            True if examples are available, False otherwise
+        """
+        if self._examples_available is not None:
+            return self._examples_available
+
+        try:
+            with self._db_manager.get_session() as session:
+                # Check if table exists and has at least one row
+                result = session.execute(
+                    text("SELECT EXISTS (SELECT 1 FROM sql_few_shot_examples LIMIT 1)")
+                )
+                row = result.fetchone()
+                self._examples_available = row[0] if row else False
+        except Exception as e:
+            # Table doesn't exist or other error
+            logger.debug(f"Few-shot examples not available: {e}")
+            self._examples_available = False
+
+        return self._examples_available
 
     def get_examples(
         self,
@@ -57,54 +84,61 @@ class FewShotRetriever:
         Returns:
             List of FewShotExample sorted by similarity
         """
+        # Early return if no examples available (avoids unnecessary embedding computation)
+        if not self._check_examples_available():
+            logger.debug("No few-shot examples available, skipping retrieval")
+            return []
+
         try:
             # Embed the query
             query_embedding = self._embed_model.get_text_embedding(query)
+            # Convert to string format for pgvector casting
+            embedding_str = "[" + ",".join(str(x) for x in query_embedding) + "]"
 
             # Build SQL with optional filters
             if domain_hint:
                 sql = """
                     SELECT id, sql_prompt, sql_query, sql_context, complexity, domain,
-                           1 - (embedding <=> :embedding) as similarity
+                           1 - (embedding <=> CAST(:embedding AS vector)) as similarity
                     FROM sql_few_shot_examples
                     WHERE domain = :domain OR domain = 'general'
-                    ORDER BY embedding <=> :embedding
+                    ORDER BY embedding <=> CAST(:embedding AS vector)
                     LIMIT :limit
                 """
                 params = {
-                    "embedding": query_embedding,
+                    "embedding": embedding_str,
                     "domain": domain_hint.lower(),
                     "limit": top_k,
                 }
             elif complexity_hint:
                 sql = """
                     SELECT id, sql_prompt, sql_query, sql_context, complexity, domain,
-                           1 - (embedding <=> :embedding) as similarity
+                           1 - (embedding <=> CAST(:embedding AS vector)) as similarity
                     FROM sql_few_shot_examples
                     WHERE complexity = :complexity
-                    ORDER BY embedding <=> :embedding
+                    ORDER BY embedding <=> CAST(:embedding AS vector)
                     LIMIT :limit
                 """
                 params = {
-                    "embedding": query_embedding,
+                    "embedding": embedding_str,
                     "complexity": complexity_hint,
                     "limit": top_k,
                 }
             else:
                 sql = """
                     SELECT id, sql_prompt, sql_query, sql_context, complexity, domain,
-                           1 - (embedding <=> :embedding) as similarity
+                           1 - (embedding <=> CAST(:embedding AS vector)) as similarity
                     FROM sql_few_shot_examples
-                    ORDER BY embedding <=> :embedding
+                    ORDER BY embedding <=> CAST(:embedding AS vector)
                     LIMIT :limit
                 """
                 params = {
-                    "embedding": query_embedding,
+                    "embedding": embedding_str,
                     "limit": top_k,
                 }
 
             with self._db_manager.get_session() as session:
-                result = session.execute(sql, params)
+                result = session.execute(text(sql), params)
                 examples = []
                 for row in result:
                     examples.append(FewShotExample(
@@ -220,7 +254,7 @@ class FewShotRetriever:
         try:
             with self._db_manager.get_session() as session:
                 result = session.execute(
-                    "SELECT DISTINCT domain FROM sql_few_shot_examples ORDER BY domain"
+                    text("SELECT DISTINCT domain FROM sql_few_shot_examples ORDER BY domain")
                 )
                 return [row.domain for row in result if row.domain]
         except Exception:
@@ -238,11 +272,11 @@ class FewShotRetriever:
         try:
             with self._db_manager.get_session() as session:
                 result = session.execute(
-                    """
+                    text("""
                     SELECT id, sql_prompt, sql_query, sql_context, complexity, domain
                     FROM sql_few_shot_examples
                     WHERE id = :id
-                    """,
+                    """),
                     {"id": example_id}
                 )
                 row = result.fetchone()
@@ -277,12 +311,12 @@ class FewShotRetriever:
         try:
             with self._db_manager.get_session() as session:
                 result = session.execute(
-                    """
+                    text("""
                     SELECT id, sql_prompt, sql_query, sql_context, complexity, domain
                     FROM sql_few_shot_examples
                     WHERE UPPER(sql_query) LIKE :pattern
                     LIMIT :limit
-                    """,
+                    """),
                     {"pattern": f"%{pattern.upper()}%", "limit": limit}
                 )
                 return [

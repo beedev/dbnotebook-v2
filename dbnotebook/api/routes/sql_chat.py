@@ -9,12 +9,30 @@ Provides endpoints for:
 """
 
 import logging
-from typing import Optional
+from datetime import datetime, date
+from decimal import Decimal
+from typing import Any, Optional
+from uuid import UUID
 
 from flask import Blueprint, Response, request, jsonify
 import json
 
 from ...core.sql_chat import SQLChatService, DatabaseType, MaskingPolicy
+
+
+class SQLChatJSONEncoder(json.JSONEncoder):
+    """Custom JSON encoder for SQL Chat results."""
+
+    def default(self, obj: Any) -> Any:
+        if isinstance(obj, UUID):
+            return str(obj)
+        if isinstance(obj, (datetime, date)):
+            return obj.isoformat()
+        if isinstance(obj, Decimal):
+            return float(obj)
+        if isinstance(obj, bytes):
+            return obj.decode('utf-8', errors='replace')
+        return super().default(obj)
 
 logger = logging.getLogger(__name__)
 
@@ -705,7 +723,7 @@ def execute_query_stream(session_id: str):
             import asyncio
 
             # Send initial status
-            yield f"data: {json.dumps({'type': 'status', 'status': 'generating'})}\n\n"
+            yield f"data: {json.dumps({'type': 'status', 'status': 'generating'}, cls=SQLChatJSONEncoder)}\n\n"
 
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
@@ -713,12 +731,13 @@ def execute_query_stream(session_id: str):
                 result = loop.run_until_complete(service.execute_query(session_id, nl_query))
 
                 # Send SQL generated
-                yield f"data: {json.dumps({'type': 'sql', 'sql': result.sql_generated})}\n\n"
+                yield f"data: {json.dumps({'type': 'sql', 'sql': result.sql_generated}, cls=SQLChatJSONEncoder)}\n\n"
 
-                # Send final result
+                # Send final result (uses custom encoder to handle UUID, datetime, Decimal)
                 response = {
                     'type': 'result',
                     'success': result.success,
+                    'sql': result.sql_generated,
                     'data': result.data,
                     'columns': [{'name': c.name, 'type': c.type} for c in result.columns],
                     'rowCount': result.row_count,
@@ -732,10 +751,13 @@ def execute_query_stream(session_id: str):
                         'level': result.confidence.level
                     }
 
-                yield f"data: {json.dumps(response)}\n\n"
+                if result.explanation:
+                    response['explanation'] = result.explanation
+
+                yield f"data: {json.dumps(response, cls=SQLChatJSONEncoder)}\n\n"
 
             except Exception as e:
-                yield f"data: {json.dumps({'type': 'error', 'error': str(e)})}\n\n"
+                yield f"data: {json.dumps({'type': 'error', 'error': str(e)}, cls=SQLChatJSONEncoder)}\n\n"
             finally:
                 loop.close()
 
@@ -887,6 +909,99 @@ def health():
         return jsonify({
             'success': False,
             'status': 'unhealthy',
+            'error': str(e)
+        }), 500
+
+
+# =============================================================================
+# Few-Shot Dataset Management
+# =============================================================================
+
+@sql_chat_bp.route('/few-shot/status', methods=['GET'])
+def get_few_shot_status():
+    """
+    Get status of few-shot examples dataset.
+
+    Response JSON:
+        {
+            "success": true,
+            "initialized": false,
+            "exampleCount": 0,
+            "minRequired": 50000
+        }
+    """
+    try:
+        service = get_service()
+
+        status = service.get_few_shot_status()
+
+        return jsonify({
+            'success': True,
+            **status
+        })
+
+    except Exception as e:
+        logger.error(f"Error getting few-shot status: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
+@sql_chat_bp.route('/few-shot/initialize', methods=['POST'])
+def initialize_few_shot():
+    """
+    Initialize few-shot examples by loading Gretel dataset.
+
+    This is a long-running operation (~30 min for full dataset).
+    Consider using smaller maxExamples for faster setup.
+
+    Request JSON:
+        {
+            "maxExamples": 10000  // Optional, default loads all ~100K
+        }
+
+    Response JSON:
+        {
+            "success": true,
+            "message": "Few-shot initialization started",
+            "examplesLoaded": 10000
+        }
+    """
+    try:
+        service = get_service()
+        data = request.get_json() or {}
+
+        max_examples = data.get('maxExamples')
+
+        # Run initialization (async internally)
+        import asyncio
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            success = loop.run_until_complete(
+                service.initialize_few_shot(max_examples=max_examples)
+            )
+        finally:
+            loop.close()
+
+        if success:
+            status = service.get_few_shot_status()
+            return jsonify({
+                'success': True,
+                'message': 'Few-shot dataset loaded successfully',
+                'examplesLoaded': status.get('exampleCount', 0)
+            })
+        else:
+            return jsonify({
+                'success': False,
+                'error': 'Failed to initialize few-shot dataset. Check logs.'
+            }), 500
+
+    except Exception as e:
+        logger.error(f"Error initializing few-shot dataset: {e}")
+        return jsonify({
+            'success': False,
             'error': str(e)
         }), 500
 

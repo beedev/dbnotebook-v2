@@ -23,6 +23,7 @@ from dbnotebook.core.sql_chat.few_shot_retriever import FewShotRetriever
 from dbnotebook.core.sql_chat.intent_classifier import IntentClassifier
 from dbnotebook.core.sql_chat.memory import SQLChatMemory
 from dbnotebook.core.sql_chat.query_engine import TextToSQLEngine
+from dbnotebook.core.sql_chat.response_generator import ResponseGenerator
 from dbnotebook.core.sql_chat.schema import SchemaIntrospector
 from dbnotebook.core.sql_chat.semantic_inspector import SemanticInspector
 from dbnotebook.core.sql_chat.telemetry import TelemetryLogger
@@ -75,8 +76,8 @@ class SQLChatService(BaseService):
         self._llm = llm or pipeline.get_llm()
         self._embed_model = embed_model or pipeline.get_embed_model()
 
-        # Initialize components
-        self._connections = DatabaseConnectionManager()
+        # Initialize components (pass db_manager for persistent storage)
+        self._connections = DatabaseConnectionManager(db_manager=db_manager)
         self._schema = SchemaIntrospector()
         self._validator = QueryValidator()
         self._executor = SafeQueryExecutor()
@@ -85,6 +86,7 @@ class SQLChatService(BaseService):
         self._intent_classifier = IntentClassifier()
         self._confidence_scorer = ConfidenceScorer()
         self._telemetry = TelemetryLogger(db_manager)
+        self._response_generator = ResponseGenerator(self._llm)
 
         # Initialize few-shot retriever (will be None if not set up)
         try:
@@ -393,7 +395,7 @@ class SQLChatService(BaseService):
                             cost_estimate=cost_estimate
                         )
 
-            # Step 6: Execute with semantic inspection
+            # Step 6: Execute with semantic inspection (pass schema for error correction)
             session.status = "executing"
             inspector = SemanticInspector(self._llm)
 
@@ -401,7 +403,7 @@ class SQLChatService(BaseService):
                 return self._executor.execute_readonly(engine, sql_to_run)
 
             result, inspection_passed, retry_count = await inspector.execute_with_inspection(
-                nl_query, sql, execute_fn, session.connection_id
+                nl_query, sql, execute_fn, session.connection_id, schema=session.schema
             )
 
             # Step 7: Apply data masking
@@ -430,7 +432,19 @@ class SQLChatService(BaseService):
 
             result.intent = intent
 
-            # Step 9: Log telemetry
+            # Step 9: Generate natural language explanation
+            if result.success:
+                column_names = [c.name for c in result.columns]
+                result.explanation = self._response_generator.generate(
+                    user_query=nl_query,
+                    sql=result.sql_generated,
+                    data=result.data,
+                    columns=column_names,
+                    row_count=result.row_count,
+                    error_message=result.error_message
+                )
+
+            # Step 10: Log telemetry
             self._telemetry.log_from_result(
                 session_id, nl_query, result, intent.intent.value
             )
@@ -509,6 +523,18 @@ class SQLChatService(BaseService):
         conn = self._connections.get_connection(session.connection_id)
         if conn and conn.masking_policy and result.success:
             result.data = self._data_masker.apply(result.data, conn.masking_policy)
+
+        # Generate natural language explanation
+        if result.success:
+            column_names = [c.name for c in result.columns]
+            result.explanation = self._response_generator.generate(
+                user_query=refinement,
+                sql=result.sql_generated,
+                data=result.data,
+                columns=column_names,
+                row_count=result.row_count,
+                error_message=result.error_message
+            )
 
         # Update memory
         memory.add_exchange(refinement, refined_sql, result)

@@ -163,7 +163,7 @@ class SchemaIntrospector:
             if dialect == 'postgresql':
                 # Use pg_class for fast approximate count
                 sql = text("""
-                    SELECT reltuples::bigint AS count
+                    SELECT CAST(reltuples AS bigint) AS count
                     FROM pg_class
                     WHERE relname = :table_name
                 """)

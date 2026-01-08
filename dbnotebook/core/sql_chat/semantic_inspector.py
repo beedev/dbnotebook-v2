@@ -4,6 +4,9 @@ Semantic Inspector for Chat with Data.
 Implements agentic result inspection (inspired by Smolagents).
 Goes beyond syntax validation to check if results make semantic sense.
 Automatically retries with feedback when results are incorrect/useless.
+
+Key enhancement: Schema-aware error correction.
+When SQL errors mention wrong column names, includes actual schema in retry prompt.
 """
 
 import logging
@@ -12,7 +15,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 from llama_index.core.llms.llm import LLM
 
-from dbnotebook.core.sql_chat.types import QueryResult
+from dbnotebook.core.sql_chat.types import QueryResult, SchemaInfo
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +63,7 @@ class SemanticInspector:
         sql: str,
         execute_fn,
         connection_id: str,
+        schema: Optional[SchemaInfo] = None,
     ) -> Tuple[QueryResult, bool, int]:
         """Execute SQL with semantic validation and auto-retry.
 
@@ -68,6 +72,7 @@ class SemanticInspector:
             sql: Generated SQL
             execute_fn: Function to execute SQL (engine, sql) -> QueryResult
             connection_id: Connection ID
+            schema: Optional schema info for column-aware error correction
 
         Returns:
             Tuple of (QueryResult, success, retry_count)
@@ -79,10 +84,10 @@ class SemanticInspector:
             result = execute_fn(current_sql)
 
             if not result.success:
-                # Syntax error - let LLM fix it
-                feedback = f"SQL error: {result.error_message}"
-                logger.info(f"Attempt {attempt + 1}: Syntax error, retrying")
-                current_sql = await self._retry_with_feedback(nl_query, current_sql, feedback)
+                # Syntax error - let LLM fix it with schema context if available
+                feedback = self._build_error_feedback(result.error_message, schema)
+                logger.info(f"Attempt {attempt + 1}: SQL error, retrying with schema context")
+                current_sql = await self._retry_with_feedback(nl_query, current_sql, feedback, schema)
                 retry_count += 1
                 continue
 
@@ -148,19 +153,26 @@ class SemanticInspector:
         self,
         nl_query: str,
         sql: str,
-        feedback: str
+        feedback: str,
+        schema: Optional[SchemaInfo] = None
     ) -> str:
-        """Ask LLM to fix SQL based on semantic feedback.
+        """Ask LLM to fix SQL based on semantic feedback with schema context.
 
         Args:
             nl_query: Original user query
             sql: Current SQL
-            feedback: Semantic issue description
+            feedback: Semantic issue description (may include schema context)
+            schema: Optional schema info for column reference
 
         Returns:
             Corrected SQL
         """
-        prompt = f"""The following SQL query has a semantic issue:
+        # Include schema context if available for better correction
+        schema_context = ""
+        if schema:
+            schema_context = self._format_schema_context(schema)
+
+        prompt = f"""The following SQL query has an issue that needs correction.
 
 Original question: {nl_query}
 
@@ -168,6 +180,10 @@ SQL query:
 {sql}
 
 Issue detected: {feedback}
+{schema_context}
+IMPORTANT: Use ONLY the exact column and table names from the schema above.
+- For PostgreSQL, use STRING_AGG() instead of GROUP_CONCAT()
+- For PostgreSQL, use COALESCE for null handling
 
 Generate a corrected SQL query that addresses this issue.
 Return ONLY the SQL query, no explanation or markdown.
@@ -307,6 +323,168 @@ Return ONLY the SQL query, no explanation or markdown.
                 terms.add(word)
 
         return terms
+
+    def _build_error_feedback(
+        self,
+        error_message: Optional[str],
+        schema: Optional[SchemaInfo]
+    ) -> str:
+        """Build detailed error feedback with schema context for column/table errors.
+
+        Args:
+            error_message: Original error message from database
+            schema: Schema info for context
+
+        Returns:
+            Enhanced error feedback string
+        """
+        if not error_message:
+            return "Unknown SQL error occurred."
+
+        feedback = f"SQL error: {error_message}"
+
+        # Detect column-related errors
+        column_error_patterns = [
+            r'column ["\']?(\w+\.)?(\w+)["\']? does not exist',
+            r'unknown column ["\']?(\w+\.)?(\w+)["\']?',
+            r'no such column[: ]+["\']?(\w+\.)?(\w+)["\']?',
+            r'column ["\']?(\w+)["\']? not found',
+        ]
+
+        # Detect table-related errors
+        table_error_patterns = [
+            r'relation ["\']?(\w+)["\']? does not exist',
+            r'table ["\']?(\w+)["\']? doesn\'?t exist',
+            r'unknown table ["\']?(\w+)["\']?',
+            r'no such table[: ]+["\']?(\w+)["\']?',
+        ]
+
+        # Detect function errors (like GROUP_CONCAT vs STRING_AGG)
+        function_error_patterns = [
+            r'function (\w+)\([^)]*\) does not exist',
+            r'unknown function[: ]+["\']?(\w+)["\']?',
+        ]
+
+        error_lower = error_message.lower()
+
+        # Check for column errors and extract the bad column name
+        for pattern in column_error_patterns:
+            match = re.search(pattern, error_lower)
+            if match:
+                bad_column = match.group(2) if match.lastindex >= 2 else match.group(1)
+                feedback += f"\n\nThe column '{bad_column}' does not exist in the database."
+                if schema:
+                    feedback += self._suggest_similar_columns(bad_column, schema)
+                break
+
+        # Check for table errors
+        for pattern in table_error_patterns:
+            match = re.search(pattern, error_lower)
+            if match:
+                bad_table = match.group(1)
+                feedback += f"\n\nThe table '{bad_table}' does not exist in the database."
+                if schema:
+                    feedback += f"\n\nAvailable tables: {', '.join(t.name for t in schema.tables)}"
+                break
+
+        # Check for function errors (MySQL vs PostgreSQL syntax)
+        for pattern in function_error_patterns:
+            match = re.search(pattern, error_lower)
+            if match:
+                bad_func = match.group(1)
+                feedback += f"\n\nThe function '{bad_func}' is not available in this database."
+                # Provide common alternatives
+                func_alternatives = {
+                    'group_concat': 'STRING_AGG(column, delimiter) for PostgreSQL',
+                    'concat_ws': 'CONCAT_WS(separator, val1, val2, ...) or use || operator',
+                    'ifnull': 'COALESCE(value, default) for PostgreSQL',
+                    'if': 'CASE WHEN condition THEN value1 ELSE value2 END',
+                }
+                if bad_func.lower() in func_alternatives:
+                    feedback += f"\nUse: {func_alternatives[bad_func.lower()]}"
+                break
+
+        return feedback
+
+    def _suggest_similar_columns(
+        self,
+        bad_column: str,
+        schema: SchemaInfo
+    ) -> str:
+        """Suggest columns that might be what the user intended.
+
+        Args:
+            bad_column: The column name that caused the error
+            schema: Database schema
+
+        Returns:
+            Suggestion string with similar columns
+        """
+        bad_column_lower = bad_column.lower().replace('_', '')
+        suggestions = []
+
+        for table in schema.tables:
+            for col in table.columns:
+                col_name_normalized = col.name.lower().replace('_', '')
+                # Check for partial matches or similar names
+                if (bad_column_lower in col_name_normalized or
+                    col_name_normalized in bad_column_lower or
+                    self._levenshtein_similar(bad_column_lower, col_name_normalized)):
+                    suggestions.append(f"{table.name}.{col.name}")
+
+        if suggestions:
+            return f"\n\nDid you mean one of these columns?\n- " + "\n- ".join(suggestions[:5])
+        return ""
+
+    def _levenshtein_similar(self, s1: str, s2: str, threshold: int = 3) -> bool:
+        """Check if two strings are similar using Levenshtein distance.
+
+        Args:
+            s1: First string
+            s2: Second string
+            threshold: Maximum edit distance to be considered similar
+
+        Returns:
+            True if strings are similar
+        """
+        if abs(len(s1) - len(s2)) > threshold:
+            return False
+
+        # Simple Levenshtein distance calculation
+        if len(s1) < len(s2):
+            s1, s2 = s2, s1
+
+        if not s2:
+            return len(s1) <= threshold
+
+        previous_row = range(len(s2) + 1)
+        for i, c1 in enumerate(s1):
+            current_row = [i + 1]
+            for j, c2 in enumerate(s2):
+                insertions = previous_row[j + 1] + 1
+                deletions = current_row[j] + 1
+                substitutions = previous_row[j] + (c1 != c2)
+                current_row.append(min(insertions, deletions, substitutions))
+            previous_row = current_row
+
+        return previous_row[-1] <= threshold
+
+    def _format_schema_context(self, schema: SchemaInfo) -> str:
+        """Format schema information for inclusion in LLM prompt.
+
+        Args:
+            schema: Database schema
+
+        Returns:
+            Formatted schema string
+        """
+        lines = ["\n\nDatabase Schema (use EXACT column names):"]
+
+        for table in schema.tables[:15]:  # Limit to first 15 tables
+            col_list = ", ".join(c.name for c in table.columns)
+            lines.append(f"\n{table.name}: {col_list}")
+
+        return "\n".join(lines)
 
     def get_inspection_report(
         self,

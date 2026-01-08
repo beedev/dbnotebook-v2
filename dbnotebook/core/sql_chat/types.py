@@ -154,6 +154,7 @@ class QueryResult:
     cost_estimate: Optional[CostEstimate] = None
     intent: Optional[IntentClassification] = None
     retry_count: int = 0
+    explanation: Optional[str] = None  # Natural language explanation of results
 
 
 @dataclass

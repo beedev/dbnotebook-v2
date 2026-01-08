@@ -236,6 +236,14 @@ class LocalRAGPipeline:
     def get_model_name(self) -> str:
         return self._model_name
 
+    def get_llm(self):
+        """Get the current LLM instance for use by services like SQL Chat."""
+        return Settings.llm
+
+    def get_embed_model(self):
+        """Get the current embedding model instance."""
+        return Settings.embed_model
+
     def set_model_name(self, model_name: str) -> None:
         self._model_name = model_name
         logger.debug(f"Model name set to: {model_name}")

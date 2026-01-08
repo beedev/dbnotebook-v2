@@ -92,6 +92,9 @@ class FlaskChatbotUI:
         # The pipeline will load nodes from pgvector when set_engine() is called
         # self._reload_documents_with_metadata()  # DISABLED - using pgvector persistence
 
+        # Initialize few-shot examples for SQL Chat (background, non-blocking)
+        self._init_few_shot_background()
+
         logger.info("Flask UI initialized (using pgvector persistence)")
 
     def _reload_documents_with_metadata(self) -> None:
@@ -151,6 +154,67 @@ class FlaskChatbotUI:
 
         except Exception as e:
             logger.error(f"Error reloading documents with metadata: {e}")
+
+    def _init_few_shot_background(self) -> None:
+        """Initialize few-shot SQL examples in background if not loaded.
+
+        Downloads and embeds the Gretel synthetic_text_to_sql dataset (~100K examples)
+        for few-shot retrieval in Text-to-SQL. Runs in a background thread to avoid
+        blocking app startup.
+        """
+        if not self._db_manager:
+            logger.debug("Few-shot init skipped: no database manager")
+            return
+
+        import threading
+
+        def load_few_shot():
+            import asyncio
+            try:
+                from ..core.sql_chat.few_shot_setup import FewShotSetup
+
+                embed_model = self._pipeline.get_embed_model()
+                if not embed_model:
+                    logger.warning("Few-shot init skipped: no embed model available")
+                    return
+
+                setup = FewShotSetup(self._db_manager, embed_model)
+
+                # Check if already loaded (requires MIN_REQUIRED_EXAMPLES = 50000)
+                if setup.is_initialized():
+                    count = setup.get_example_count()
+                    logger.info(f"Few-shot examples already loaded: {count}")
+                    return
+
+                # Clear partial data and start fresh
+                current_count = setup.get_example_count()
+                if current_count > 0:
+                    logger.info(f"Clearing {current_count} partial examples, loading full dataset...")
+                    setup.clear_examples()
+
+                logger.info("Starting few-shot dataset initialization (background)...")
+
+                # Run async initialize in new event loop
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                try:
+                    # Load limited examples for faster startup (configurable via env)
+                    max_examples = int(os.getenv("FEW_SHOT_MAX_EXAMPLES", "100000"))
+                    success = loop.run_until_complete(setup.initialize(max_examples=max_examples))
+                    if success:
+                        logger.info(f"Few-shot initialization complete: {setup.get_example_count()} examples")
+                    else:
+                        logger.error("Few-shot initialization failed")
+                finally:
+                    loop.close()
+            except ImportError as e:
+                logger.debug(f"Few-shot init skipped: {e}")
+            except Exception as e:
+                logger.error(f"Few-shot background init failed: {e}")
+
+        thread = threading.Thread(target=load_few_shot, daemon=True, name="few-shot-loader")
+        thread.start()
+        logger.debug("Few-shot background loader thread started")
 
     def _format_file_size(self, size_bytes: int) -> str:
         """Format file size in human-readable format."""
