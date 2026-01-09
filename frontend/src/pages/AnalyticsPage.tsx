@@ -7,30 +7,49 @@
  * Supports auto-analysis when navigating from SQL Chat with results.
  */
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { AnalyticsProvider, useAnalytics } from '../contexts/AnalyticsContext';
 import { useApp } from '../contexts/AppContext';
-import { ExcelUploader, DashboardView } from '../components/Analytics';
+import { ExcelUploader, DashboardView, AnalysisLoadingIndicator } from '../components/Analytics';
 
 interface AnalyticsPageProps {
   notebookId?: string;
 }
 
 function AnalyticsContent({ notebookId }: AnalyticsPageProps) {
-  const { analysisState, runFullAnalysis, resetDashboard } = useAnalytics();
+  const { analysisState, analysisProgress, runFullAnalysis, resetDashboard } = useAnalytics();
   const { pendingAnalyticsFile, setPendingAnalyticsFile } = useApp();
   const hasProcessedPendingFile = useRef(false);
+
+  // Track when auto-analysis is starting (to show loading indicator immediately)
+  const [isAutoAnalysisStarting, setIsAutoAnalysisStarting] = useState(false);
+
+  // Check if analysis is actively running (not idle, not complete, not error)
+  // Also consider:
+  // 1. Auto-analysis starting phase (set in useEffect)
+  // 2. Pending file exists but hasn't been processed yet (covers first render before useEffect)
+  // 3. Analysis state is in a loading state
+  const hasPendingFileToProcess = pendingAnalyticsFile && !hasProcessedPendingFile.current;
+  const isAnalyzing = isAutoAnalysisStarting ||
+    hasPendingFileToProcess ||
+    ['uploading', 'parsing', 'profiling', 'analyzing'].includes(analysisState);
 
   // Auto-run analysis when coming from SQL Chat with a pending file
   useEffect(() => {
     if (pendingAnalyticsFile && !hasProcessedPendingFile.current) {
       hasProcessedPendingFile.current = true;
 
+      // Immediately show loading indicator
+      setIsAutoAnalysisStarting(true);
+
       // Reset any existing dashboard first
       resetDashboard();
 
       // Run full analysis on the pending file
-      runFullAnalysis(pendingAnalyticsFile, notebookId);
+      runFullAnalysis(pendingAnalyticsFile, notebookId).finally(() => {
+        // Clear the starting flag once analysis completes or fails
+        setIsAutoAnalysisStarting(false);
+      });
 
       // Clear the pending file
       setPendingAnalyticsFile(null);
@@ -55,7 +74,16 @@ function AnalyticsContent({ notebookId }: AnalyticsPageProps) {
       </div>
 
       <div className="analytics-page__content">
-        {!showDashboard ? (
+        {showDashboard ? (
+          <DashboardView />
+        ) : isAnalyzing ? (
+          <div className="flex-1 flex flex-col items-center justify-center">
+            <AnalysisLoadingIndicator
+              state={analysisState}
+              progress={analysisProgress}
+            />
+          </div>
+        ) : (
           <div className="flex-1 flex flex-col items-center justify-center">
             <div className="text-center mb-8 max-w-md">
               <h2 className="text-2xl font-semibold text-text mb-2">
@@ -68,8 +96,6 @@ function AnalyticsContent({ notebookId }: AnalyticsPageProps) {
             </div>
             <ExcelUploader notebookId={notebookId} />
           </div>
-        ) : (
-          <DashboardView />
         )}
       </div>
     </div>

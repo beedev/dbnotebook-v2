@@ -10,6 +10,7 @@ export { KPICardGrid } from './KPICardGrid';
 export { ChartGrid } from './ChartGrid';
 export { DashboardView } from './DashboardView';
 export { FilteredDataTable } from './FilteredDataTable';
+export { AnalysisLoadingIndicator } from './AnalysisLoadingIndicator';
 
 // Default export for main dashboard view
 export { default } from './DashboardView';
