@@ -473,6 +473,39 @@ class NotebookManager:
             logger.error(f"Failed to update document active status {source_id}: {e}")
             raise
 
+    def update_document_chunk_count(
+        self,
+        source_id: str,
+        chunk_count: int
+    ) -> bool:
+        """
+        Update the chunk_count for a document after embedding creation.
+
+        Args:
+            source_id: UUID of the document source
+            chunk_count: Number of chunks/embeddings created
+
+        Returns:
+            True if updated successfully
+        """
+        try:
+            with self.db.get_session() as session:
+                source = session.query(NotebookSource).filter(
+                    NotebookSource.source_id == UUID(source_id)
+                ).first()
+
+                if not source:
+                    logger.warning(f"Document not found for chunk_count update: {source_id}")
+                    return False
+
+                source.chunk_count = chunk_count
+                logger.info(f"Updated chunk_count to {chunk_count} for source {source_id}")
+                return True
+
+        except Exception as e:
+            logger.error(f"Failed to update chunk_count for {source_id}: {e}")
+            return False
+
     # =========================================================================
     # Statistics and Utilities
     # =========================================================================

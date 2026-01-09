@@ -591,9 +591,23 @@ class LocalDataIngestion:
                                         logger.warning(f"Failed to queue transformations for {file_name}: {te}")
 
                             except ValueError as e:
-                                # Duplicate document detected
-                                logger.warning(f"Skipping {file_name}: {e}")
-                                continue
+                                # Duplicate document detected - but still need to create embeddings
+                                # Try to get existing source_id so we can continue with embedding creation
+                                logger.info(f"Document {file_name} already registered, looking up source_id for embedding creation")
+                                try:
+                                    docs = self._notebook_manager.get_documents(notebook_id)
+                                    for doc in docs:
+                                        if doc.get('file_name') == file_name:
+                                            source_id = doc.get('source_id')
+                                            logger.info(f"Found existing source_id: {source_id} for {file_name}")
+                                            # Track this source for chunk_count update after embedding creation
+                                            if not hasattr(self, '_sources_needing_chunk_update'):
+                                                self._sources_needing_chunk_update = {}
+                                            self._sources_needing_chunk_update[source_id] = len(nodes)
+                                            break
+                                except Exception as lookup_err:
+                                    logger.warning(f"Could not look up existing source_id for {file_name}: {lookup_err}")
+                                # Continue with embedding creation (don't skip)
                             except Exception as e:
                                 logger.error(f"Error registering {file_name} in database: {e}")
                                 raise
@@ -637,6 +651,16 @@ class LocalDataIngestion:
                     f"✓ Added {added_count} nodes to pgvector "
                     f"(total {len(notebook_nodes)} nodes for notebook {notebook_id})"
                 )
+
+                # Update chunk_count for any documents that were duplicates
+                if hasattr(self, '_sources_needing_chunk_update') and self._sources_needing_chunk_update:
+                    for source_id, chunk_count in self._sources_needing_chunk_update.items():
+                        try:
+                            self._notebook_manager.update_document_chunk_count(source_id, chunk_count)
+                        except Exception as update_err:
+                            logger.warning(f"Failed to update chunk_count for {source_id}: {update_err}")
+                    self._sources_needing_chunk_update.clear()
+
             except Exception as e:
                 logger.error(f"Error persisting nodes to pgvector: {e}")
                 import traceback
