@@ -23,11 +23,31 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    """Enable pgvector extension."""
+    """Enable pgvector extension and create embeddings table."""
     # Ensure pgvector extension is enabled
     op.execute("CREATE EXTENSION IF NOT EXISTS vector")
 
+    # Create data_embeddings table (matches LlamaIndex PGVectorStore schema)
+    # IF NOT EXISTS prevents conflict when LlamaIndex also tries to create it
+    op.execute("""
+        CREATE TABLE IF NOT EXISTS data_embeddings (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            text TEXT,
+            metadata_ JSONB,
+            node_id VARCHAR,
+            embedding vector(768)
+        )
+    """)
+
+    # Create index for node_id lookups
+    op.execute("""
+        CREATE INDEX IF NOT EXISTS idx_data_embeddings_node_id
+        ON data_embeddings(node_id)
+    """)
+
 
 def downgrade() -> None:
-    """Disable pgvector extension (note: this will fail if tables use vector type)."""
+    """Drop embeddings table and disable pgvector extension."""
+    op.execute("DROP INDEX IF EXISTS idx_data_embeddings_node_id")
+    op.execute("DROP TABLE IF EXISTS data_embeddings")
     op.execute("DROP EXTENSION IF EXISTS vector CASCADE")
