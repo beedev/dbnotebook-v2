@@ -23,18 +23,17 @@ RUN apt-get update && apt-get install -y \
 RUN python -m venv /app/venv
 ENV PATH="/app/venv/bin:$PATH"
 
-# Install CPU-only PyTorch from pre-downloaded wheel (saves ~90s per build)
-# To update: pip download torch==2.5.1 --index-url https://download.pytorch.org/whl/cpu --platform manylinux2014_aarch64 --python-version 311 --only-binary=:all: --no-deps -d ./wheels/
-COPY ./wheels/torch*.whl /tmp/
-RUN pip install --no-cache-dir /tmp/torch*.whl && rm -f /tmp/torch*.whl
+# Install CPU-only PyTorch from PyPI index
+RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
 
 # Install remaining dependencies (without torch)
 COPY requirements-docker.txt .
 RUN pip install --no-cache-dir -r requirements-docker.txt
 
-# Copy pre-downloaded HuggingFace models from local (avoids 5+ min download during build)
-# Run once locally: HF_HOME=./models/huggingface python -c "from sentence_transformers import CrossEncoder, SentenceTransformer; CrossEncoder('mixedbread-ai/mxbai-rerank-large-v1'); SentenceTransformer('nomic-ai/nomic-embed-text-v1.5', trust_remote_code=True)"
-COPY ./models/huggingface /root/.cache/huggingface
+# Download HuggingFace models during build
+# This caches the embedding and reranking models in the image
+RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('nomic-ai/nomic-embed-text-v1.5', trust_remote_code=True)"
+RUN python -c "from sentence_transformers import CrossEncoder; CrossEncoder('mixedbread-ai/mxbai-rerank-large-v1')"
 
 # Runtime stage
 FROM python:3.11-slim
@@ -56,7 +55,7 @@ RUN apt-get update && apt-get install -y \
 COPY --from=builder /app/venv /app/venv
 ENV PATH="/app/venv/bin:$PATH"
 
-# Copy pre-downloaded HuggingFace models from builder
+# Copy downloaded HuggingFace models from builder
 COPY --from=builder /root/.cache/huggingface /root/.cache/huggingface
 
 # Copy application code
