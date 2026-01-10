@@ -63,6 +63,8 @@ COPY dbnotebook/ dbnotebook/
 COPY --from=frontend-builder /app/frontend/dist frontend/dist/
 COPY alembic/ alembic/
 COPY alembic.ini .
+COPY docker-entrypoint.sh .
+RUN chmod +x docker-entrypoint.sh
 
 # Create mount point directories (config files created at runtime)
 RUN mkdir -p config data/config outputs/studio uploads
@@ -72,4 +74,4 @@ EXPOSE 7860
 ENV OLLAMA_HOST=host.docker.internal
 ENV OLLAMA_PORT=11434
 
-CMD ["python", "-m", "dbnotebook", "--host", "0.0.0.0", "--port", "7860"]
+CMD ["./docker-entrypoint.sh"]
