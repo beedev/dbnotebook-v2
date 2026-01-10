@@ -10,7 +10,7 @@ Provides pre and post-generation SQL validation to ensure:
 
 import logging
 import re
-from typing import List, Optional, Set, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 from dbnotebook.core.sql_chat.types import SchemaInfo
 
@@ -133,7 +133,13 @@ class QueryValidator:
             if not is_valid:
                 return False, error
 
-        # Check 5: No multiple statements (prevent stacked queries)
+        # Check 5: Column reference validation (if schema provided)
+        if schema:
+            is_valid, error = self.check_column_references(sql, schema)
+            if not is_valid:
+                return False, error
+
+        # Check 6: No multiple statements (prevent stacked queries)
         # Allow semicolon at end but not in middle
         sql_stripped = sql.strip().rstrip(';')
         if ';' in sql_stripped:
@@ -180,6 +186,54 @@ class QueryValidator:
         invalid_tables = referenced_tables - allowed_tables
         if invalid_tables:
             return False, f"Unknown table(s): {', '.join(invalid_tables)}"
+
+        return True, ""
+
+    def check_column_references(
+        self,
+        sql: str,
+        schema: SchemaInfo
+    ) -> Tuple[bool, str]:
+        """Verify all column references exist in schema.
+
+        Args:
+            sql: SQL query to check
+            schema: Database schema
+
+        Returns:
+            Tuple of (is_valid, error_message)
+        """
+        # Build mapping of table -> columns
+        table_columns: Dict[str, Set[str]] = {}
+        all_columns: Set[str] = set()
+        for table in schema.tables:
+            table_columns[table.name.lower()] = {c.name.lower() for c in table.columns}
+            all_columns.update(c.name.lower() for c in table.columns)
+
+        # Extract column references - patterns like table.column or just column
+        # Pattern 1: table.column references
+        qualified_patterns = [
+            r'([a-zA-Z_][a-zA-Z0-9_]*)\.([a-zA-Z_][a-zA-Z0-9_]*)',  # table.column
+        ]
+
+        # Check qualified column references (table.column)
+        for pattern in qualified_patterns:
+            matches = re.findall(pattern, sql, re.IGNORECASE)
+            for table_ref, col_ref in matches:
+                table_lower = table_ref.lower()
+                col_lower = col_ref.lower()
+
+                # Skip SQL keywords that might look like table.column
+                sql_keywords = {'count', 'sum', 'avg', 'min', 'max', 'coalesce', 'cast', 'extract'}
+                if table_lower in sql_keywords:
+                    continue
+
+                # If table is known, check column exists in that table
+                if table_lower in table_columns:
+                    if col_lower not in table_columns[table_lower]:
+                        # Get available columns for helpful error message
+                        available = sorted(table_columns[table_lower])[:10]
+                        return False, f"Column '{col_ref}' does not exist in table '{table_ref}'. Available columns: {', '.join(available)}"
 
         return True, ""
 

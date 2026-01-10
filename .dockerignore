@@ -29,3 +29,16 @@ docs/
 
 # Tests
 tests/
+
+# User uploads (created at runtime, not needed in image)
+uploads/
+
+# Playwright MCP data
+.playwright-mcp/
+
+# Large binary files (reduce context transfer time)
+*.pdf
+*.docx
+*.pptx
+*.xlsx
+*.epub

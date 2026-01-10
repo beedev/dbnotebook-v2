@@ -5,9 +5,12 @@ Coordinates all components: connection management, schema introspection,
 SQL generation, execution, and conversation memory.
 """
 
+import asyncio
 import logging
+import threading
 import uuid
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from llama_index.core.embeddings import BaseEmbedding
@@ -37,6 +40,11 @@ from dbnotebook.core.sql_chat.types import (
     SQLChatSession,
 )
 from dbnotebook.core.sql_chat.validators import QueryValidator
+from dbnotebook.core.sql_chat.dictionary_generator import DictionaryGenerator
+from dbnotebook.core.sql_chat.schema_linker import SchemaLinker
+from dbnotebook.core.sql_chat.result_validator import ResultValidator
+from dbnotebook.core.sql_chat.query_decomposer import QueryDecomposer
+from dbnotebook.core.sql_chat.query_learner import QueryLearner
 
 logger = logging.getLogger(__name__)
 
@@ -103,11 +111,24 @@ class SQLChatService(BaseService):
             few_shot_retriever=self._few_shot_retriever
         )
 
+        # New components for enhanced SQL Chat
+        self._dictionary_generator = DictionaryGenerator()
+        self._schema_linker = SchemaLinker(self._embed_model)
+        self._result_validator = ResultValidator()
+        self._query_decomposer = QueryDecomposer(self._llm)
+        self._query_learner = QueryLearner(db_manager, notebook_manager)
+
         # Session storage
         self._sessions: Dict[str, SQLChatSession] = {}
         self._session_memories: Dict[str, SQLChatMemory] = {}
 
-        logger.info("SQLChatService initialized")
+        # Schema fingerprints for smart caching
+        self._schema_fingerprints: Dict[str, str] = {}  # connection_id -> fingerprint
+
+        # Dictionary generation threads (session_id -> Thread)
+        self._dictionary_threads: Dict[str, threading.Thread] = {}
+
+        logger.info("SQLChatService initialized with enhanced components")
 
     # ========== Connection Management ==========
 
@@ -121,6 +142,7 @@ class SQLChatService(BaseService):
         username: str,
         password: str,
         port: Optional[int] = None,
+        schema: Optional[str] = None,
         masking_policy: Optional[MaskingPolicy] = None
     ) -> Tuple[str, Optional[str]]:
         """Create and store a new database connection.
@@ -134,6 +156,7 @@ class SQLChatService(BaseService):
             username: Database username
             password: Database password
             port: Optional port (uses default if not specified)
+            schema: Optional PostgreSQL schema(s) e.g., 'public' or 'sales,hr'
             masking_policy: Optional data masking configuration
 
         Returns:
@@ -148,6 +171,7 @@ class SQLChatService(BaseService):
             username=username,
             password=password,
             port=port,
+            schema=schema,
             masking_policy=masking_policy
         )
 
@@ -172,7 +196,8 @@ class SQLChatService(BaseService):
         port: int,
         database: str,
         username: str,
-        password: str
+        password: str,
+        schema: Optional[str] = None
     ) -> Tuple[bool, str]:
         """Test database connection.
 
@@ -183,12 +208,13 @@ class SQLChatService(BaseService):
             database: Database name
             username: Username
             password: Password
+            schema: Optional PostgreSQL schema(s) e.g., 'public' or 'sales,hr'
 
         Returns:
             Tuple of (success, message)
         """
         return self._connections.test_connection(
-            db_type, host, port, database, username, password
+            db_type, host, port, database, username, password, schema
         )
 
     def list_connections(self, user_id: str) -> List[DatabaseConnection]:
@@ -242,13 +268,18 @@ class SQLChatService(BaseService):
     def create_session(
         self,
         user_id: str,
-        connection_id: str
+        connection_id: str,
+        force_refresh: bool = False,
+        skip_schema_refresh: bool = False
     ) -> Tuple[str, Optional[str]]:
         """Create a new SQL chat session.
 
         Args:
             user_id: User ID
             connection_id: Database connection ID
+            force_refresh: Force refresh schema cache (default False for performance)
+            skip_schema_refresh: Skip schema introspection if already loaded (for performance
+                when frontend already called get_schema via selectConnection)
 
         Returns:
             Tuple of (session_id, error_message)
@@ -258,14 +289,44 @@ class SQLChatService(BaseService):
         if not conn:
             return "", "Connection not found"
 
-        # Get schema
+        # Get engine
         engine = self._connections.get_engine(connection_id)
-        schema = self._schema.introspect(engine, connection_id) if engine else None
+        if not engine:
+            return "", "Failed to connect to database"
 
-        # Ensure query engine is created
-        if not self._query_engine.has_query_engine(connection_id):
-            if engine and schema:
-                self._query_engine.create_query_engine(connection_id, engine, schema)
+        # Fast path: skip schema refresh if already loaded by selectConnection
+        if skip_schema_refresh and self._query_engine.has_query_engine(connection_id):
+            # Use cached schema from query engine
+            schema = self._schema.get_cached_schema(connection_id)
+            if schema:
+                logger.info(f"Skipping schema refresh for {connection_id} (skip_schema_refresh=True)")
+            else:
+                # Fallback: load schema if cache miss
+                schema = self._schema.introspect(engine, connection_id, force_refresh=False)
+        else:
+            # Check if we can reuse cached query engine (fingerprint-based)
+            current_fp = self._schema.get_fingerprint(engine)
+            cached_fp = self._schema_fingerprints.get(connection_id)
+
+            # Reuse existing query engine if schema unchanged
+            if (not force_refresh and
+                cached_fp == current_fp and
+                current_fp and
+                self._query_engine.has_query_engine(connection_id)):
+                logger.info(f"Reusing cached query engine for {connection_id} (fingerprint match)")
+                schema = self._schema.get_cached_schema(connection_id) or \
+                         self._schema.introspect(engine, connection_id, force_refresh=False)
+            else:
+                # Need to refresh schema and/or recreate query engine
+                if force_refresh or cached_fp != current_fp:
+                    logger.info(f"Schema changed or force refresh for {connection_id}, refreshing")
+
+                schema = self._schema.introspect(engine, connection_id, force_refresh=force_refresh)
+
+                if schema:
+                    self._query_engine.remove_query_engine(connection_id)
+                    self._query_engine.create_query_engine(connection_id, engine, schema)
+                    self._schema_fingerprints[connection_id] = current_fp
 
         session_id = str(uuid.uuid4())
         session = SQLChatSession(
@@ -273,12 +334,24 @@ class SQLChatService(BaseService):
             user_id=user_id,
             connection_id=connection_id,
             schema=schema,
-            status="pending",
+            status="generating_dictionary",  # Start in dictionary generation state
             created_at=datetime.utcnow(),
         )
 
         self._sessions[session_id] = session
         self._session_memories[session_id] = SQLChatMemory()
+
+        # Trigger dictionary generation in background thread
+        def run_dictionary_generation():
+            asyncio.run(self._generate_dictionary_async(session_id))
+
+        thread = threading.Thread(
+            target=run_dictionary_generation,
+            name=f"dict-gen-{session_id[:8]}",
+            daemon=True
+        )
+        self._dictionary_threads[session_id] = thread
+        thread.start()
 
         logger.info(f"Created SQL chat session {session_id} for connection {connection_id}")
         return session_id, None
@@ -293,6 +366,43 @@ class SQLChatService(BaseService):
             SQLChatSession or None
         """
         return self._sessions.get(session_id)
+
+    def refresh_session_schema(self, session_id: str) -> Tuple[bool, str]:
+        """Refresh schema for an existing session.
+
+        Forces reload of database schema and recreates query engine.
+        Use this when database schema has changed.
+
+        Args:
+            session_id: Session ID
+
+        Returns:
+            Tuple of (success, message)
+        """
+        session = self._sessions.get(session_id)
+        if not session:
+            return False, "Session not found"
+
+        connection_id = session.connection_id
+        engine = self._connections.get_engine(connection_id)
+        if not engine:
+            return False, "Connection not available"
+
+        # Force refresh schema from database
+        schema = self._schema.introspect(engine, connection_id, force_refresh=True)
+
+        # Recreate query engine with fresh schema
+        self._query_engine.remove_query_engine(connection_id)
+        self._query_engine.create_query_engine(connection_id, engine, schema)
+
+        # Update session with new schema
+        session.schema = schema
+
+        table_count = len(schema.tables) if schema else 0
+        column_count = sum(len(t.columns) for t in schema.tables) if schema else 0
+        logger.info(f"Refreshed schema for session {session_id}: {table_count} tables, {column_count} columns")
+
+        return True, f"Schema refreshed: {table_count} tables, {column_count} columns"
 
     # ========== Query Execution ==========
 
@@ -332,6 +442,18 @@ class SQLChatService(BaseService):
                 error_message="Session not found"
             )
 
+        # Block queries until dictionary generation is complete
+        if session.status == "generating_dictionary":
+            return QueryResult(
+                success=False,
+                sql_generated="",
+                data=[],
+                columns=[],
+                row_count=0,
+                execution_time_ms=0,
+                error_message="Dictionary generation in progress. Please wait for schema analysis to complete."
+            )
+
         # Update session status
         session.status = "generating"
 
@@ -358,11 +480,66 @@ class SQLChatService(BaseService):
         intent = self._intent_classifier.classify(nl_query)
 
         try:
-            # Step 4: Generate SQL
+            # Step 3.5: Smart schema caching with fingerprint detection
+            # Only refresh if schema has changed (fast ~10ms fingerprint check)
+            engine = self._connections.get_engine(session.connection_id)
+            if engine:
+                if self._schema.has_schema_changed(engine, session.connection_id):
+                    logger.info(f"Schema changed for {session.connection_id}, refreshing")
+                    fresh_schema = self._schema.introspect(engine, session.connection_id, force_refresh=True)
+                    session.schema = fresh_schema
+                    self._query_engine.remove_query_engine(session.connection_id)
+                    self._query_engine.create_query_engine(session.connection_id, engine, fresh_schema)
+                    # Update fingerprint cache
+                    current_fp = self._schema.get_fingerprint(engine)
+                    if current_fp:
+                        self._schema_fingerprints[session.connection_id] = current_fp
+                elif not self._query_engine.has_query_engine(session.connection_id):
+                    # Query engine doesn't exist, create it
+                    logger.info(f"Creating missing query engine for {session.connection_id}")
+                    self._query_engine.create_query_engine(session.connection_id, engine, session.schema)
+
+                # Verify query engine was created successfully
+                if not self._query_engine.has_query_engine(session.connection_id):
+                    logger.error(f"Failed to create query engine for {session.connection_id}")
+                    return QueryResult(
+                        success=False,
+                        sql_generated="",
+                        data=[],
+                        columns=[],
+                        row_count=0,
+                        execution_time_ms=0,
+                        error_message="Failed to initialize query engine. Please try again."
+                    )
+
+            # Step 3.6: Schema linking - pre-filter relevant tables
+            focused_schema = session.schema
+            relevant_table_names = []
+            if session.schema and len(session.schema.tables) > self._schema_linker._top_k:
+                relevant_tables = self._schema_linker.link_tables(
+                    nl_query, session.schema, session.connection_id
+                )
+                focused_schema = self._schema_linker.filter_schema(session.schema, relevant_tables)
+                relevant_table_names = [t[0] for t in relevant_tables]  # Extract table names
+                logger.debug(f"Schema linking: {len(relevant_tables)} tables selected")
+            elif session.schema:
+                relevant_table_names = [t.name for t in session.schema.tables]
+
+            # Step 3.7: Retrieve dictionary context for accurate SQL generation
+            dictionary_context = self._get_dictionary_context(
+                session.connection_id,
+                nl_query,
+                relevant_table_names
+            )
+            if dictionary_context:
+                logger.info("Dictionary context retrieved for SQL generation")
+
+            # Step 4: Generate SQL with dictionary context
             sql, success, intent = self._query_engine.generate_with_correction(
                 session.connection_id,
                 nl_query,
-                session.schema
+                session.schema,
+                dictionary_context=dictionary_context
             )
 
             if not success:
@@ -411,6 +588,19 @@ class SQLChatService(BaseService):
             if conn and conn.masking_policy and result.success:
                 result.data = self._data_masker.apply(result.data, conn.masking_policy)
 
+            # Step 7.5: Result validation - sanity checks
+            validation_issues = self._result_validator.validate(
+                nl_query, result.sql_generated, result.data, session.schema
+            )
+            if validation_issues:
+                # Add validation warnings to result
+                result.validation_warnings = [
+                    {"severity": i.severity.value, "message": i.message, "suggestion": i.suggestion}
+                    for i in validation_issues
+                ]
+                if self._result_validator.has_errors(validation_issues):
+                    logger.warning(f"Result validation found errors for query")
+
             # Step 8: Compute confidence
             query_terms = self._confidence_scorer.extract_query_terms(nl_query)
             result_columns = [c.name for c in result.columns]
@@ -449,7 +639,16 @@ class SQLChatService(BaseService):
                 session_id, nl_query, result, intent.intent.value
             )
 
-            # Step 10: Update memory
+            # Step 10.5: Query learning - record successful queries
+            if result.success and result.row_count > 0:
+                try:
+                    self._query_learner.record_success(
+                        session, nl_query, result.sql_generated, result
+                    )
+                except Exception as learn_err:
+                    logger.debug(f"Query learning failed: {learn_err}")
+
+            # Step 11: Update memory
             if memory:
                 memory.add_exchange(nl_query, result.sql_generated, result)
 
@@ -614,7 +813,401 @@ class SQLChatService(BaseService):
         """
         return self._connections.parse_connection_string(connection_string)
 
+    # ========== Dictionary Management ==========
+
+    def generate_dictionary(
+        self,
+        connection_id: str,
+        connection_name: Optional[str] = None
+    ) -> Tuple[str, Optional[str]]:
+        """Generate Markdown dictionary for a connection.
+
+        Args:
+            connection_id: Connection ID
+            connection_name: Optional display name
+
+        Returns:
+            Tuple of (dictionary_markdown, error_message)
+        """
+        # Get engine and introspect WITH sample values for accurate dictionaries
+        engine = self._connections.get_engine(connection_id)
+        if not engine:
+            return "", "Connection not available"
+
+        # Force include_samples=True for dictionary generation
+        schema = self._schema.introspect(
+            engine, connection_id, force_refresh=True, include_samples=True
+        )
+        if not schema:
+            return "", "Schema not available"
+
+        name = connection_name or schema.database_name or connection_id
+        dictionary = self._dictionary_generator.generate_dictionary(
+            schema, name, include_samples=True, include_inferred=True
+        )
+
+        return dictionary, None
+
+    def get_schema_delta(
+        self,
+        connection_id: str,
+        existing_dictionary: str,
+        connection_name: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Compute delta between existing dictionary and current schema.
+
+        Args:
+            connection_id: Connection ID
+            existing_dictionary: Existing dictionary Markdown
+            connection_name: Optional connection name
+
+        Returns:
+            Delta information including added/removed tables/columns
+        """
+        # Get engine and introspect WITH sample values
+        engine = self._connections.get_engine(connection_id)
+        if not engine:
+            return {"error": "Connection not available", "has_changes": False}
+
+        schema = self._schema.introspect(
+            engine, connection_id, force_refresh=True, include_samples=True
+        )
+        if not schema:
+            return {"error": "Schema not available", "has_changes": False}
+
+        name = connection_name or schema.database_name or connection_id
+        delta = self._dictionary_generator.compute_delta(
+            existing_dictionary, schema, name
+        )
+
+        return delta
+
+    def merge_dictionary(
+        self,
+        connection_id: str,
+        existing_dictionary: str
+    ) -> Tuple[str, Optional[str]]:
+        """Merge existing dictionary with current schema, preserving edits.
+
+        Args:
+            connection_id: Connection ID
+            existing_dictionary: Existing dictionary Markdown
+
+        Returns:
+            Tuple of (merged_dictionary, error_message)
+        """
+        schema = self.get_schema(connection_id, force_refresh=True)
+        if not schema:
+            return "", "Schema not available"
+
+        delta = self._dictionary_generator.compute_delta(
+            existing_dictionary, schema, ""
+        )
+
+        merged = self._dictionary_generator.merge_with_delta(
+            existing_dictionary, delta, schema
+        )
+
+        return merged, None
+
+    def _get_dictionary_context(
+        self,
+        connection_id: str,
+        nl_query: str,
+        tables: Optional[List[str]] = None
+    ) -> Optional[str]:
+        """Retrieve relevant dictionary context for SQL generation via RAG.
+
+        The dictionary is stored as a notebook source in "SQL: <connection_name>" notebook.
+        This method queries that notebook to get relevant schema descriptions,
+        sample values, and relationships to improve Text-to-SQL accuracy.
+
+        Args:
+            connection_id: Connection ID
+            nl_query: User's natural language query
+            tables: Optional list of relevant table names
+
+        Returns:
+            Formatted dictionary context for LLM prompt, or None if not available
+        """
+        try:
+            # 1. Get connection info to find notebook name
+            connection = self._connections.get_connection(connection_id)
+            if not connection:
+                logger.debug(f"No connection found for {connection_id}")
+                return None
+
+            conn_name = connection.name
+            sql_notebook_name = f"SQL: {conn_name}"
+
+            # 2. Find the SQL Chat notebook
+            if not self.notebook_manager:
+                logger.debug("No notebook manager available")
+                return None
+
+            user_id = self.pipeline._current_user_id
+            notebooks = self.notebook_manager.list_notebooks(user_id)
+            notebook_id = None
+            for nb in notebooks:
+                if nb.get('name') == sql_notebook_name:
+                    notebook_id = nb.get('id')
+                    break
+
+            if not notebook_id:
+                logger.debug(f"No SQL notebook found for {conn_name}")
+                return None
+
+            # 3. Build retrieval query combining user question + table names
+            table_str = ' '.join(tables) if tables else ''
+            retrieval_query = f"{nl_query} {table_str} columns sample values description"
+
+            # 4. Retrieve from dictionary using vector store
+            if not hasattr(self.pipeline, '_vector_store') or not self.pipeline._vector_store:
+                logger.debug("No vector store available")
+                return None
+
+            # Get query embedding
+            query_embedding = self._embed_model.get_query_embedding(retrieval_query)
+
+            # Query vector store filtered to this notebook
+            results = self.pipeline._vector_store.query(
+                query_embedding=query_embedding,
+                similarity_top_k=10,
+                filters={"notebook_id": notebook_id}
+            )
+
+            if not results:
+                logger.debug(f"No dictionary chunks found for query")
+                return None
+
+            # 5. Format dictionary chunks for prompt
+            context_parts = ["## Dictionary Context (from database documentation):"]
+            for node, score in results[:5]:  # Top 5 most relevant chunks
+                content = node.get_content() if hasattr(node, 'get_content') else str(node)
+                if content:
+                    context_parts.append(content)
+
+            if len(context_parts) == 1:  # Only header, no content
+                return None
+
+            logger.info(f"Retrieved {len(context_parts) - 1} dictionary chunks for SQL generation")
+            return "\n\n".join(context_parts)
+
+        except Exception as e:
+            logger.warning(f"Failed to retrieve dictionary context: {e}")
+            return None
+
+    def get_table_relevance_scores(
+        self,
+        session_id: str,
+        query: str
+    ) -> List[Tuple[str, float]]:
+        """Get table relevance scores for a query (for debugging/UI).
+
+        Args:
+            session_id: Session ID
+            query: Natural language query
+
+        Returns:
+            List of (table_name, score) tuples sorted by score
+        """
+        session = self._sessions.get(session_id)
+        if not session or not session.schema:
+            return []
+
+        return self._schema_linker.get_table_scores(
+            query, session.schema, session.connection_id
+        )
+
+    def get_learned_join_patterns(
+        self,
+        connection_id: str
+    ) -> List[Dict[str, Any]]:
+        """Get learned JOIN patterns for a connection.
+
+        Args:
+            connection_id: Connection ID
+
+        Returns:
+            List of JOIN pattern dicts
+        """
+        patterns = self._query_learner.get_join_patterns(connection_id)
+        return [
+            {
+                "table1": p.table1,
+                "column1": p.column1,
+                "table2": p.table2,
+                "column2": p.column2,
+                "join_type": p.join_type,
+                "usage_count": p.usage_count
+            }
+            for p in patterns
+        ]
+
+    async def _generate_dictionary_async(self, session_id: str) -> None:
+        """Generate dictionary files and upload to SQL notebook asynchronously.
+
+        This method runs in the background after session creation:
+        1. Generates schema_dictionary.md (schema structure)
+        2. Generates sample_values.md (sample data from tables)
+        3. Finds or creates the SQL notebook for the connection
+        4. Uploads both files to the notebook for RAG retrieval
+        5. Sets session.status = "ready" when complete
+
+        Args:
+            session_id: Session ID to generate dictionary for
+        """
+        session = self._sessions.get(session_id)
+        if not session:
+            logger.error(f"Session {session_id} not found for dictionary generation")
+            return
+
+        connection_id = session.connection_id
+        connection = self._connections.get_connection(connection_id)
+        if not connection:
+            logger.error(f"Connection {connection_id} not found for dictionary generation")
+            session.status = "ready"  # Allow queries but without dictionary
+            return
+
+        engine = self._connections.get_engine(connection_id)
+        if not engine:
+            logger.error(f"Could not get engine for {connection_id}")
+            session.status = "ready"
+            return
+
+        try:
+            sql_notebook_name = f"SQL: {connection.name}"
+            user_id = self.pipeline._current_user_id or "00000000-0000-0000-0000-000000000001"
+
+            # 1. Check if dictionary already exists in notebook
+            notebook_id = None
+            dictionary_exists = False
+
+            if self.notebook_manager:
+                notebooks = self.notebook_manager.list_notebooks(user_id)
+                for nb in notebooks:
+                    if nb.get('name') == sql_notebook_name:
+                        notebook_id = nb.get('id')
+                        break
+
+                # Check if dictionary files already exist in the notebook
+                # Accept multiple naming patterns:
+                # - New: schema_dictionary_{id}.md, sample_values_{id}.md
+                # - Old: {name}_dictionary.md, {name}_samples.md
+                # - Generic: any file with "dictionary", "schema", or "sample" in name
+                if notebook_id:
+                    try:
+                        docs = self.notebook_manager.get_documents(notebook_id)
+                        doc_names = [d.get('file_name', '').lower() for d in docs]
+
+                        # Check for schema/dictionary file (any pattern)
+                        has_schema = any(
+                            'schema_dictionary' in name or
+                            '_dictionary' in name or
+                            'dictionary' in name
+                            for name in doc_names
+                        )
+
+                        # Check for sample values file (any pattern)
+                        has_samples = any(
+                            'sample_values' in name or
+                            '_samples' in name or
+                            'sample' in name
+                            for name in doc_names
+                        )
+
+                        if has_schema and has_samples:
+                            dictionary_exists = True
+                            logger.info(f"Dictionary already exists for {connection.name} ({len(docs)} docs), skipping generation")
+                        elif has_schema or has_samples:
+                            # Partial dictionary - log but regenerate to ensure completeness
+                            logger.info(f"Partial dictionary found for {connection.name} (schema={has_schema}, samples={has_samples}), regenerating")
+                    except Exception as e:
+                        logger.debug(f"Could not check existing documents: {e}")
+
+            # 2. If dictionary exists, mark session ready and return
+            if dictionary_exists:
+                session.status = "ready"
+                return
+
+            # 3. Generate dictionary files
+            logger.info(f"Starting dictionary generation for session {session_id}")
+            start_time = datetime.utcnow()
+
+            # Generate schema dictionary (fast - metadata only)
+            schema_md = self._schema.generate_schema_dictionary(engine, connection.name)
+
+            # Generate sample values (one query per table)
+            samples_md = self._schema.generate_sample_values(engine, connection.name, limit=5)
+
+            # 4. Create notebook if it doesn't exist
+            if not notebook_id and self.notebook_manager:
+                try:
+                    nb_result = self.notebook_manager.create_notebook(
+                        user_id=user_id,
+                        name=sql_notebook_name,
+                        description=f"Schema dictionary and sample data for {connection.name} database"
+                    )
+                    notebook_id = nb_result.get('id')
+                    logger.info(f"Created SQL notebook {notebook_id} for {connection.name}")
+                except ValueError as e:
+                    # Notebook might already exist from another session
+                    logger.warning(f"Could not create notebook: {e}")
+
+            # 4. Save dictionary files to disk and ingest
+            if notebook_id:
+                upload_dir = Path("uploads") / "sql_dictionaries"
+                upload_dir.mkdir(parents=True, exist_ok=True)
+
+                # Save and ingest schema dictionary
+                schema_file = upload_dir / f"schema_dictionary_{connection_id}.md"
+                schema_file.write_text(schema_md, encoding='utf-8')
+
+                # Save and ingest sample values
+                samples_file = upload_dir / f"sample_values_{connection_id}.md"
+                samples_file.write_text(samples_md, encoding='utf-8')
+
+                # Store in vector store via pipeline
+                try:
+                    self.pipeline.store_nodes(
+                        input_files=[str(schema_file), str(samples_file)],
+                        notebook_id=notebook_id,
+                        user_id=user_id
+                    )
+                    logger.info(f"Stored dictionary files in notebook {notebook_id}")
+                except Exception as e:
+                    logger.warning(f"Failed to store dictionary in vector store: {e}")
+
+            # 5. Mark session as ready
+            elapsed = (datetime.utcnow() - start_time).total_seconds()
+            session.status = "ready"
+            logger.info(f"Dictionary generation complete for session {session_id} in {elapsed:.2f}s")
+
+        except Exception as e:
+            logger.error(f"Dictionary generation failed for session {session_id}: {e}")
+            session.status = "ready"  # Allow queries but without dictionary
+        finally:
+            # Clean up thread reference
+            self._dictionary_threads.pop(session_id, None)
+
+    def get_session_status(self, session_id: str) -> Optional[str]:
+        """Get the current status of a session.
+
+        Args:
+            session_id: Session ID
+
+        Returns:
+            Session status string or None if session not found
+        """
+        session = self._sessions.get(session_id)
+        return session.status if session else None
+
     def cleanup(self) -> None:
         """Cleanup resources on shutdown."""
+        # Dictionary generation threads are daemon threads, they will be cleaned up on exit
+        self._dictionary_threads.clear()
+
         self._connections.close_all()
+        self._schema_linker.clear_cache()
+        self._query_learner.clear_cache()
         logger.info("SQLChatService cleaned up")

@@ -16,9 +16,12 @@ import {
   Clock,
   Table as TableIcon,
   AlertCircle,
+  AlertTriangle,
+  Info,
   BarChart3,
+  Lightbulb,
 } from 'lucide-react';
-import type { QueryResult, ColumnInfo } from '../../types/sqlChat';
+import type { QueryResult, ColumnInfo, ValidationWarning } from '../../types/sqlChat';
 
 interface ResultsTableProps {
   result: QueryResult | null;
@@ -67,6 +70,57 @@ function downloadCSV(data: Record<string, any>[], columns: ColumnInfo[], filenam
   a.download = filename;
   a.click();
   URL.revokeObjectURL(url);
+}
+
+/**
+ * Validation Warnings Component
+ *
+ * Displays validation issues found in query results.
+ */
+function ValidationWarnings({ warnings }: { warnings: ValidationWarning[] }) {
+  if (!warnings || warnings.length === 0) return null;
+
+  const getIcon = (severity: string) => {
+    switch (severity) {
+      case 'error':
+        return <AlertCircle className="w-4 h-4 text-red-400 flex-shrink-0" />;
+      case 'warning':
+        return <AlertTriangle className="w-4 h-4 text-yellow-400 flex-shrink-0" />;
+      default:
+        return <Info className="w-4 h-4 text-blue-400 flex-shrink-0" />;
+    }
+  };
+
+  const getBgColor = (severity: string) => {
+    switch (severity) {
+      case 'error':
+        return 'bg-red-900/20 border-red-800';
+      case 'warning':
+        return 'bg-yellow-900/20 border-yellow-800';
+      default:
+        return 'bg-blue-900/20 border-blue-800';
+    }
+  };
+
+  return (
+    <div className="space-y-2 mb-4">
+      {warnings.map((warning, idx) => (
+        <div
+          key={`${warning.code}-${idx}`}
+          className={`flex items-start gap-3 p-3 rounded-lg border ${getBgColor(warning.severity)}`}
+        >
+          {getIcon(warning.severity)}
+          <div className="flex-1 min-w-0">
+            <p className="text-sm text-slate-200">{warning.message}</p>
+            <div className="flex items-start gap-1.5 mt-1">
+              <Lightbulb className="w-3 h-3 text-slate-500 mt-0.5 flex-shrink-0" />
+              <p className="text-xs text-slate-400">{warning.suggestion}</p>
+            </div>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
 }
 
 export function ResultsTable({
@@ -161,7 +215,13 @@ export function ResultsTable({
   const hasMore = sortedData.length > maxRows;
 
   return (
-    <div className="border border-slate-700 rounded-lg overflow-hidden">
+    <div>
+      {/* Validation Warnings */}
+      {result.validationWarnings && result.validationWarnings.length > 0 && (
+        <ValidationWarnings warnings={result.validationWarnings} />
+      )}
+
+      <div className="border border-slate-700 rounded-lg overflow-hidden">
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-2 bg-slate-800/50 border-b border-slate-700">
         <div className="flex items-center gap-4 text-sm text-slate-400">
@@ -265,6 +325,7 @@ export function ResultsTable({
           Download CSV for full data.
         </div>
       )}
+      </div>
     </div>
   );
 }

@@ -153,6 +153,10 @@ interface BackendDocumentListResponse {
     active?: boolean;
     file_type?: string;
     chunk_count?: number;
+    // AI Transformation fields
+    dense_summary?: string | null;
+    key_insights?: string[] | null;
+    transformation_status?: 'pending' | 'processing' | 'completed' | 'failed';
   }>;
   count: number;
 }
@@ -168,6 +172,10 @@ export async function getDocuments(
       active: d.active !== false, // default to true
       file_type: d.file_type,
       chunk_count: d.chunk_count,
+      // AI Transformation fields
+      dense_summary: d.dense_summary,
+      key_insights: d.key_insights,
+      transformation_status: d.transformation_status,
     })),
   };
 }

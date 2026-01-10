@@ -368,7 +368,11 @@ class NotebookManager:
                         "file_type": source.file_type,
                         "chunk_count": source.chunk_count,
                         "upload_timestamp": source.upload_timestamp.isoformat(),
-                        "active": getattr(source, 'active', True)  # Default to True for backwards compatibility
+                        "active": getattr(source, 'active', True),  # Default to True for backwards compatibility
+                        # AI Transformation fields
+                        "dense_summary": source.dense_summary,
+                        "key_insights": source.key_insights,
+                        "transformation_status": getattr(source, 'transformation_status', 'pending')
                     })
 
                 logger.info(f"Retrieved {len(result)} documents from notebook {notebook_id}")

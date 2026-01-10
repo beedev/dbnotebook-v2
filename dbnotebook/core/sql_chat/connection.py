@@ -127,7 +127,7 @@ class DatabaseConnectionManager:
             with self._db_manager.get_session() as session:
                 result = session.execute(text("""
                     SELECT id, user_id, name, db_type, host, port, database_name,
-                           username, password_encrypted, masking_policy
+                           schema_name, username, password_encrypted, masking_policy
                     FROM database_connections
                 """))
                 rows = result.fetchall()
@@ -153,6 +153,7 @@ class DatabaseConnectionManager:
                         database=row.database_name or '',
                         username=row.username or '',
                         password_encrypted=row.password_encrypted,
+                        schema=getattr(row, 'schema_name', None),
                         masking_policy=masking_policy,
                         user_id=row.user_id,
                     )
@@ -199,9 +200,9 @@ class DatabaseConnectionManager:
                 session.execute(text("""
                     INSERT INTO database_connections
                     (id, user_id, name, db_type, host, port, database_name,
-                     username, password_encrypted, masking_policy)
+                     schema_name, username, password_encrypted, masking_policy)
                     VALUES (CAST(:id AS uuid), :user_id, :name, :db_type, :host, :port,
-                            :database_name, :username, :password_encrypted,
+                            :database_name, :schema_name, :username, :password_encrypted,
                             CAST(:masking_policy AS jsonb))
                 """), {
                     'id': config.id,
@@ -211,6 +212,7 @@ class DatabaseConnectionManager:
                     'host': config.host,
                     'port': config.port,
                     'database_name': config.database,
+                    'schema_name': config.schema,
                     'username': config.username,
                     'password_encrypted': config.password_encrypted,
                     'masking_policy': masking_json,
@@ -275,7 +277,8 @@ class DatabaseConnectionManager:
         port: int,
         database: str,
         username: str,
-        password: str
+        password: str,
+        schema: Optional[str] = None
     ) -> str:
         """Build SQLAlchemy connection URI.
 
@@ -286,6 +289,7 @@ class DatabaseConnectionManager:
             database: Database name
             username: Username
             password: Password (plain text)
+            schema: PostgreSQL schema(s) - comma-separated for multiple
 
         Returns:
             SQLAlchemy connection URI
@@ -299,7 +303,16 @@ class DatabaseConnectionManager:
 
         # URL-encode password to handle special characters
         encoded_password = quote_plus(password)
-        return f"{driver}://{username}:{encoded_password}@{host}:{port}/{database}"
+        base_uri = f"{driver}://{username}:{encoded_password}@{host}:{port}/{database}"
+
+        # Add schema as search_path for PostgreSQL
+        if db_type == "postgresql" and schema:
+            # URL-encode the options parameter
+            # Format: options=-csearch_path%3Dschema_name
+            encoded_schema = quote_plus(schema)
+            base_uri += f"?options=-csearch_path%3D{encoded_schema}"
+
+        return base_uri
 
     def _create_engine(
         self,
@@ -321,7 +334,8 @@ class DatabaseConnectionManager:
             port=config.port,
             database=config.database,
             username=config.username,
-            password=password
+            password=password,
+            schema=config.schema
         )
 
         # Pool configuration (not applicable to SQLite)
@@ -347,6 +361,7 @@ class DatabaseConnectionManager:
         username: str,
         password: str,
         port: Optional[int] = None,
+        schema: Optional[str] = None,
         masking_policy: Optional[MaskingPolicy] = None
     ) -> Tuple[str, Optional[str]]:
         """Create and store a new database connection.
@@ -360,6 +375,7 @@ class DatabaseConnectionManager:
             username: Database username
             password: Database password (will be encrypted)
             port: Database port (uses default if not specified)
+            schema: PostgreSQL schema(s) - comma-separated for multiple
             masking_policy: Optional data masking configuration
 
         Returns:
@@ -381,6 +397,7 @@ class DatabaseConnectionManager:
             database=database,
             username=username,
             password_encrypted=self._encrypt_password(password),
+            schema=schema,
             masking_policy=masking_policy,
             user_id=user_id,
         )
@@ -469,7 +486,8 @@ class DatabaseConnectionManager:
         port: int,
         database: str,
         username: str,
-        password: str
+        password: str,
+        schema: Optional[str] = None
     ) -> Tuple[bool, str]:
         """Test connection with provided credentials.
 
@@ -482,6 +500,7 @@ class DatabaseConnectionManager:
             database: Database name
             username: Username
             password: Password
+            schema: Optional PostgreSQL schema(s) e.g., 'public' or 'sales,hr'
 
         Returns:
             Tuple of (success, message)
@@ -494,6 +513,7 @@ class DatabaseConnectionManager:
             port=port,
             database=database,
             username=username,
+            schema=schema,
         )
         return self.test_connection_config(temp_config, password)
 

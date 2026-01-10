@@ -40,6 +40,9 @@ class TextToSQLEngine:
     - Few-shot learning with Gretel dataset
     - Intent classification for SQL shape optimization
     - Self-correction on syntax errors
+
+    NOTE: Query engines are NOT cached to ensure fresh schema.
+    Accuracy is prioritized over speed.
     """
 
     TABLE_THRESHOLD = 20  # Use retriever for schemas with >20 tables
@@ -69,7 +72,7 @@ class TextToSQLEngine:
         self._table_threshold = table_threshold
         self._intent_classifier = IntentClassifier()
 
-        # Cache for query engines per connection
+        # Store engines temporarily per connection (recreated each query for accuracy)
         self._query_engines: Dict[str, any] = {}
         self._sql_databases: Dict[str, SQLDatabase] = {}
 
@@ -149,7 +152,8 @@ class TextToSQLEngine:
         connection_id: str,
         nl_query: str,
         schema: Optional[SchemaInfo] = None,
-        include_few_shot: bool = True
+        include_few_shot: bool = True,
+        dictionary_context: Optional[str] = None
     ) -> Tuple[str, str, IntentClassification]:
         """Generate SQL from natural language query.
 
@@ -158,6 +162,7 @@ class TextToSQLEngine:
             nl_query: Natural language query
             schema: Optional schema for few-shot domain inference
             include_few_shot: Whether to include few-shot examples
+            dictionary_context: Optional dictionary context from RAG (sample values, descriptions)
 
         Returns:
             Tuple of (sql_query, natural_response, intent)
@@ -170,9 +175,9 @@ class TextToSQLEngine:
         intent = self._intent_classifier.classify(nl_query)
         logger.debug(f"Intent: {intent.intent.value} (confidence: {intent.confidence})")
 
-        # Build enhanced prompt
+        # Build enhanced prompt with dictionary context
         enhanced_query = self._build_enhanced_query(
-            nl_query, intent, schema, include_few_shot
+            nl_query, intent, schema, include_few_shot, dictionary_context
         )
 
         # Generate SQL via LlamaIndex
@@ -195,20 +200,46 @@ class TextToSQLEngine:
         nl_query: str,
         intent: IntentClassification,
         schema: Optional[SchemaInfo] = None,
-        include_few_shot: bool = True
+        include_few_shot: bool = True,
+        dictionary_context: Optional[str] = None
     ) -> str:
-        """Build enhanced query with few-shot examples and hints.
+        """Build enhanced query with dictionary context, few-shot examples and hints.
 
         Args:
             nl_query: Original user query
             intent: Classified intent
             schema: Optional schema for domain inference
             include_few_shot: Whether to include few-shot examples
+            dictionary_context: Optional dictionary context from RAG with sample values, descriptions
 
         Returns:
             Enhanced query string
         """
         parts = []
+
+        # Add dictionary context FIRST - contains sample values and descriptions
+        # This helps the LLM understand exact column names and value formats
+        if dictionary_context:
+            parts.append(dictionary_context)
+            parts.append("")  # Separator
+
+        # Add explicit schema context - CRITICAL for column name accuracy
+        if schema:
+            schema_lines = ["Database Schema (ONLY use these exact table and column names):"]
+            for table in schema.tables:
+                # Include column types and sample values if available
+                col_parts = []
+                for col in table.columns:
+                    col_info = col.name
+                    # Add sample values if available in schema
+                    if table.sample_values and col.name in table.sample_values:
+                        samples = table.sample_values[col.name][:3]
+                        sample_str = ', '.join(repr(s) for s in samples)
+                        col_info += f" [e.g., {sample_str}]"
+                    col_parts.append(col_info)
+                cols = ", ".join(col_parts)
+                schema_lines.append(f"  - {table.name}: {cols}")
+            parts.append("\n".join(schema_lines))
 
         # Add few-shot examples if available
         if include_few_shot and self._few_shot_retriever:
@@ -229,6 +260,18 @@ class TextToSQLEngine:
         if intent.prompt_hints:
             parts.append(f"\nSQL Generation Hints: {intent.prompt_hints}")
 
+        # Add best practices for readable output
+        parts.append("""
+CRITICAL SQL Generation Rules:
+- ONLY use exact column names from the schema above. NEVER invent or guess column names.
+- If user says "customer", look for columns like customer_name, customer_id in the schema
+- If user says "Ayna", match it to the sample value (e.g., 'Ayna.AI LLC') from the dictionary
+- When filtering by partial names, use the full value from sample values when available
+- When grouping or aggregating, prefer name columns over ID columns for readability
+- Include both ID and name when the name might not be unique
+- Use meaningful column aliases in SELECT
+""")
+
         # Add the actual query
         parts.append(f"\nUser Question: {nl_query}")
 
@@ -238,7 +281,8 @@ class TextToSQLEngine:
         self,
         connection_id: str,
         nl_query: str,
-        schema: Optional[SchemaInfo] = None
+        schema: Optional[SchemaInfo] = None,
+        dictionary_context: Optional[str] = None
     ) -> Tuple[str, bool, IntentClassification]:
         """Generate SQL with automatic retry on syntax errors.
 
@@ -246,11 +290,14 @@ class TextToSQLEngine:
             connection_id: Connection ID
             nl_query: Natural language query
             schema: Optional schema
+            dictionary_context: Optional dictionary context from RAG (sample values, descriptions)
 
         Returns:
             Tuple of (sql, success, intent)
         """
-        sql, _, intent = self.generate_sql(connection_id, nl_query, schema)
+        sql, _, intent = self.generate_sql(
+            connection_id, nl_query, schema, dictionary_context=dictionary_context
+        )
 
         for attempt in range(self.MAX_CORRECTION_ATTEMPTS):
             is_valid, error = self._validator.validate_generated_sql(sql, schema)
@@ -327,12 +374,27 @@ Generate a corrected SQL query. Return ONLY the SQL, no explanation.
         Returns:
             Modified SQL query
         """
-        prompt = f"""Modify the following SQL query based on the user's request.
+        # Build schema context
+        schema_context = ""
+        if schema:
+            tables_info = []
+            for table in schema.tables:
+                cols = ", ".join([c.name for c in table.columns])
+                tables_info.append(f"  - {table.name}: {cols}")
+            schema_context = f"""
+Available tables and columns (ONLY use these tables):
+{chr(10).join(tables_info)}
 
+"""
+
+        prompt = f"""Modify the following SQL query based on the user's request.
+{schema_context}
 Previous SQL:
 {previous_sql}
 
 User's modification request: {refinement}
+
+IMPORTANT: Only use tables and columns from the schema above. Do not invent or assume table names.
 
 Generate the modified SQL query. Return ONLY the SQL, no explanation.
 """

@@ -49,6 +49,9 @@ export function SQLChatProvider({ children }: { children: ReactNode }) {
   const [activeSession, setActiveSession] = useState<SQLChatSession | null>(null);
   const [isCreatingSession, setIsCreatingSession] = useState(false);
 
+  // Cache sessions per connection to avoid recreating
+  const [sessionCache, setSessionCache] = useState<Record<string, SQLChatSession>>({});
+
   // Schema state
   const [schema, setSchema] = useState<SchemaInfo | null>(null);
   const [isLoadingSchema, setIsLoadingSchema] = useState(false);
@@ -206,36 +209,56 @@ export function SQLChatProvider({ children }: { children: ReactNode }) {
     const connection = connections.find(c => c.id === connectionId);
     if (connection) {
       setActiveConnection(connection);
-      setActiveSession(null);
+
+      // Check if we have a cached session for this connection
+      const cachedSession = sessionCache[connectionId];
+      if (cachedSession) {
+        setActiveSession(cachedSession);
+        // Load history for cached session
+        await loadHistory(cachedSession.id);
+      } else {
+        setActiveSession(null);
+        setMessages([]);
+        setQueryResult(null);
+        setQueryHistory([]);
+      }
+
       setSchema(null);
-      setMessages([]);
-      setQueryResult(null);
-      setQueryHistory([]);
 
       // Load schema for the connection
       await loadSchema(connectionId);
     }
-  }, [connections]);
+  }, [connections, sessionCache]);
 
   // ========================================
   // Session Management
   // ========================================
 
   const createSession = useCallback(async (connectionId: string): Promise<string | null> => {
+    // Check cache first - reuse existing session for this connection
+    if (sessionCache[connectionId]) {
+      const cachedSession = sessionCache[connectionId];
+      setActiveSession(cachedSession);
+      // Reload history for cached session
+      await loadHistory(cachedSession.id);
+      return cachedSession.id;
+    }
+
     setIsCreatingSession(true);
     setError(null);
 
     try {
+      // Performance optimization: skip schema refresh since selectConnection already loaded it
       const response = await fetch(`${API_BASE}/sessions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ connectionId }),
+        body: JSON.stringify({ connectionId, skipSchemaRefresh: true }),
       });
 
       const data = await response.json();
 
       if (data.success && data.sessionId) {
-        // Load the session details
+        // Load the session details and cache it
         await loadSession(data.sessionId);
         return data.sessionId;
       } else {
@@ -248,7 +271,7 @@ export function SQLChatProvider({ children }: { children: ReactNode }) {
     } finally {
       setIsCreatingSession(false);
     }
-  }, []);
+  }, [sessionCache]);
 
   const loadSession = useCallback(async (sessionId: string) => {
     try {
@@ -265,6 +288,12 @@ export function SQLChatProvider({ children }: { children: ReactNode }) {
           lastQueryAt: data.session.lastQueryAt,
         };
         setActiveSession(session);
+
+        // Cache session by connection ID for reuse
+        setSessionCache(prev => ({
+          ...prev,
+          [session.connectionId]: session,
+        }));
 
         // Load history for this session
         await loadHistory(sessionId);

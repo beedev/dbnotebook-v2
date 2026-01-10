@@ -63,6 +63,7 @@ export function SQLChatPage() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [schemaCollapsed, setSchemaCollapsed] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isRegeneratingDict, setIsRegeneratingDict] = useState(false);
 
   // Load connections on mount
   useEffect(() => {
@@ -106,6 +107,26 @@ export function SQLChatPage() {
   const handleSendQuery = useCallback((query: string) => {
     sendQuery(query);
   }, [sendQuery]);
+
+  // Handle dictionary regeneration
+  const handleRegenerateDictionary = useCallback(async () => {
+    if (!activeConnection) return;
+
+    setIsRegeneratingDict(true);
+    try {
+      const response = await fetch(`/api/sql-chat/connections/${activeConnection.id}/dictionary/regenerate`, {
+        method: 'POST',
+      });
+      const data = await response.json();
+      if (!data.success) {
+        console.error('Failed to regenerate dictionary:', data.error);
+      }
+    } catch (err) {
+      console.error('Dictionary regeneration error:', err);
+    } finally {
+      setIsRegeneratingDict(false);
+    }
+  }, [activeConnection]);
 
   return (
     <div className="h-full flex bg-slate-900">
@@ -270,6 +291,9 @@ export function SQLChatPage() {
                     schema={schema}
                     isLoading={isLoadingSchema}
                     onRefresh={() => activeConnection && refreshSchema(activeConnection.id)}
+                    onRegenerateDictionary={handleRegenerateDictionary}
+                    isRegenerating={isRegeneratingDict}
+                    dictionaryReady={!!activeSession}
                   />
                 </div>
               )}
@@ -312,6 +336,7 @@ export function SQLChatPage() {
           </div>
         </div>
       )}
+
     </div>
   );
 }

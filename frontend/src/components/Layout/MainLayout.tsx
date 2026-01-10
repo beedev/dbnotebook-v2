@@ -26,7 +26,7 @@ export function MainLayout({ header, sidebar, children }: MainLayoutProps) {
           </div>
 
           {/* Content */}
-          <div className="relative flex-1 flex flex-col min-h-0">
+          <div className="relative flex-1 flex flex-col min-h-0 overflow-auto">
             {children}
           </div>
         </main>

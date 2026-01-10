@@ -7,7 +7,7 @@
  * - Deep space terminal theme styling
  */
 
-import { MessageSquare, BarChart3, Database, Cpu, Sparkles, Bot, Cloud, Zap } from 'lucide-react';
+import { MessageSquare, BarChart3, Database, Cpu, Sparkles, Bot, Cloud, Zap, Terminal } from 'lucide-react';
 import { useApp, type AppView } from '../../contexts/AppContext';
 import type { ModelProvider } from '../../types';
 
@@ -61,6 +61,13 @@ const navTabs: NavTab[] = [
     icon: <Database className="w-4 h-4" />,
     color: 'text-cyan-400',
     hoverColor: 'hover:bg-cyan-500/10',
+  },
+  {
+    id: 'query-api',
+    label: 'Query API',
+    icon: <Terminal className="w-4 h-4" />,
+    color: 'text-amber-400',
+    hoverColor: 'hover:bg-amber-500/10',
   },
 ];
 

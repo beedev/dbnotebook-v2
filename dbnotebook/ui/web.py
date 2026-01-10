@@ -22,6 +22,7 @@ from ..api.routes.agents import create_agent_routes
 from ..api.routes.multi_notebook import create_multi_notebook_routes
 from ..api.routes.analytics import create_analytics_routes
 from ..api.routes.sql_chat import create_sql_chat_routes
+from ..api.routes.query import create_query_routes
 from ..core.ingestion import WebContentIngestion, SynopsisManager
 from ..core.studio import StudioManager
 
@@ -1481,6 +1482,18 @@ Output ONLY valid JSON, nothing else."""
             logger.info("SQL Chat API routes registered")
         except Exception as e:
             logger.warning(f"SQL Chat API routes not available: {e}")
+
+        # Register Simple Query API routes (programmatic access)
+        try:
+            create_query_routes(
+                self._app,
+                pipeline=self._pipeline,
+                db_manager=self._db_manager,
+                notebook_manager=self._notebook_manager
+            )
+            logger.info("Simple Query API routes registered (/api/query)")
+        except Exception as e:
+            logger.warning(f"Query API routes not available: {e}")
 
         # === Query Logging & Observability Endpoints ===
 

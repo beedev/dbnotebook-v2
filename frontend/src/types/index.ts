@@ -47,6 +47,10 @@ export interface Document {
   chunk_count?: number;
   uploadedAt?: Date;
   active?: boolean;
+  // AI Transformation fields
+  dense_summary?: string | null;
+  key_insights?: string[] | null;
+  transformation_status?: 'pending' | 'processing' | 'completed' | 'failed';
 }
 
 export interface DocumentListResponse {

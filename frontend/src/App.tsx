@@ -8,7 +8,7 @@ import { AppProviders, useNotebook, useDocument, SQLChatProvider, useApp } from 
 import { useNotebooks } from './hooks/useNotebooks';
 import { useModels } from './hooks/useModels';
 import { useToast } from './hooks/useToast';
-import { AnalyticsPage } from './pages';
+import { AnalyticsPage, QueryPage } from './pages';
 import { SQLChatPage } from './components/SQLChat';
 
 function AppContent() {
@@ -138,12 +138,20 @@ function AppContent() {
   // Render SQL Chat page
   if (currentView === 'sql-chat') {
     return (
-      <SQLChatProvider>
-        <MainLayout header={<Header />}>
-          <SQLChatPage />
-          <ToastContainer toasts={toasts} onDismiss={removeToast} />
-        </MainLayout>
-      </SQLChatProvider>
+      <MainLayout header={<Header />}>
+        <SQLChatPage />
+        <ToastContainer toasts={toasts} onDismiss={removeToast} />
+      </MainLayout>
+    );
+  }
+
+  // Render Query API page
+  if (currentView === 'query-api') {
+    return (
+      <MainLayout header={<Header />}>
+        <QueryPage />
+        <ToastContainer toasts={toasts} onDismiss={removeToast} />
+      </MainLayout>
     );
   }
 
@@ -184,7 +192,9 @@ function AppContent() {
 function App() {
   return (
     <AppProviders>
-      <AppContent />
+      <SQLChatProvider>
+        <AppContent />
+      </SQLChatProvider>
     </AppProviders>
   );
 }

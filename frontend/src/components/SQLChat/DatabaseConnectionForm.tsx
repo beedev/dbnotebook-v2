@@ -60,6 +60,7 @@ export function DatabaseConnectionForm({
   const [host, setHost] = useState('localhost');
   const [port, setPort] = useState(5432);
   const [databaseName, setDatabaseName] = useState('');
+  const [schema, setSchema] = useState('');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -96,13 +97,14 @@ export function DatabaseConnectionForm({
       host: dbType !== 'sqlite' ? host : undefined,
       port: dbType !== 'sqlite' ? port : undefined,
       databaseName,
+      schema: dbType === 'postgresql' && schema ? schema : undefined,
       username: dbType !== 'sqlite' ? username : undefined,
       password: dbType !== 'sqlite' ? password : undefined,
       connectionString: useConnectionString ? connectionString : undefined,
       useConnectionString,
       maskingPolicy,
     };
-  }, [name, dbType, host, port, databaseName, username, password, useConnectionString, connectionString, maskColumns, redactColumns, hashColumns]);
+  }, [name, dbType, host, port, databaseName, schema, username, password, useConnectionString, connectionString, maskColumns, redactColumns, hashColumns]);
 
   // Handle DB type change
   const handleDbTypeChange = useCallback((newType: DatabaseType) => {
@@ -310,6 +312,26 @@ export function DatabaseConnectionForm({
                          text-white placeholder-slate-500 focus:border-cyan-500 focus:outline-none"
             />
           </div>
+
+          {/* Schema (PostgreSQL only) */}
+          {dbType === 'postgresql' && (
+            <div>
+              <label className="block text-sm font-medium text-slate-300 mb-2">
+                Schema (optional)
+              </label>
+              <input
+                type="text"
+                value={schema}
+                onChange={(e) => setSchema(e.target.value)}
+                placeholder="public"
+                className="w-full px-4 py-2 bg-slate-800 border border-slate-700 rounded-lg
+                           text-white placeholder-slate-500 focus:border-cyan-500 focus:outline-none"
+              />
+              <p className="mt-1 text-xs text-slate-500">
+                Leave empty for default schema. Use comma-separated values for multiple schemas (e.g., sales,hr).
+              </p>
+            </div>
+          )}
         </>
       )}
 

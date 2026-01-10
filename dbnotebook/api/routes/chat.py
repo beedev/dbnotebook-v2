@@ -146,13 +146,13 @@ def create_chat_routes(app, pipeline, db_manager=None):
                 pipeline.set_engine(force_reset=True)
                 logger.info("Engine configured without notebook filter")
 
-            # Get fresh nodes from database for source attribution
+            # Get nodes from cache for source attribution (uses pipeline's node cache)
             nodes = []
-            if notebook_ids and hasattr(pipeline, '_vector_store') and pipeline._vector_store:
+            if notebook_ids and hasattr(pipeline, '_get_cached_nodes'):
                 for nb_id in notebook_ids:
-                    nb_nodes = pipeline._vector_store.get_nodes_by_notebook_sql(nb_id)
+                    nb_nodes = pipeline._get_cached_nodes(nb_id)
                     nodes.extend(nb_nodes)
-                logger.info(f"Retrieved {len(nodes)} nodes for source attribution")
+                logger.debug(f"Got {len(nodes)} cached nodes for source attribution")
 
                 # Filter nodes to selected documents if routing provided specific docs
                 if routing_result and routing_result.selected_document_ids:
@@ -173,13 +173,14 @@ def create_chat_routes(app, pipeline, db_manager=None):
 
             if nodes and notebook_ids:
                 try:
-                    # Get retriever configured for these notebooks
+                    # Get retriever configured for these notebooks (uses retriever cache)
                     retriever = pipeline._engine._retriever.get_retrievers(
                         llm=Settings.llm,
                         language="eng",
                         nodes=nodes,
                         offering_filter=notebook_ids,  # offering_filter actually filters by notebook_id!
-                        vector_store=pipeline._vector_store
+                        vector_store=pipeline._vector_store,
+                        notebook_id=notebook_ids[0] if len(notebook_ids) == 1 else None  # Cache for single notebook
                     )
 
                     # Retrieve relevant chunks with scores

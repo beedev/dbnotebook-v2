@@ -19,6 +19,8 @@ import {
   Search,
   RefreshCw,
   Loader2,
+  Database,
+  Check,
 } from 'lucide-react';
 import type { SchemaInfo, TableInfo, ColumnInfo } from '../../types/sqlChat';
 
@@ -26,6 +28,9 @@ interface SchemaExplorerProps {
   schema: SchemaInfo | null;
   isLoading?: boolean;
   onRefresh?: () => void;
+  onRegenerateDictionary?: () => void;
+  isRegenerating?: boolean;
+  dictionaryReady?: boolean;
 }
 
 function ColumnTypeIcon({ column }: { column: ColumnInfo }) {
@@ -141,6 +146,9 @@ export function SchemaExplorer({
   schema,
   isLoading = false,
   onRefresh,
+  onRegenerateDictionary,
+  isRegenerating = false,
+  dictionaryReady = true,
 }: SchemaExplorerProps) {
   const [searchQuery, setSearchQuery] = useState('');
 
@@ -176,7 +184,8 @@ export function SchemaExplorer({
 
   return (
     <div className="space-y-4">
-      {/* Header with search and refresh */}
+
+      {/* Header with search, dictionary, and refresh */}
       <div className="flex items-center gap-3">
         <div className="flex-1 relative">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
@@ -188,6 +197,32 @@ export function SchemaExplorer({
             className="w-full pl-9 pr-4 py-2 bg-slate-800 border border-slate-700 rounded-lg
                        text-white text-sm placeholder-slate-500 focus:border-cyan-500 focus:outline-none"
           />
+        </div>
+
+        {/* Dictionary status and regenerate */}
+        <div className="flex items-center gap-2">
+          {dictionaryReady && (
+            <span className="flex items-center gap-1 text-xs text-green-400" title="Dictionary ready for queries">
+              <Check className="w-3 h-3" />
+              <span className="hidden sm:inline">Ready</span>
+            </span>
+          )}
+          {onRegenerateDictionary && (
+            <button
+              onClick={onRegenerateDictionary}
+              disabled={isRegenerating}
+              className="flex items-center gap-1.5 px-2 py-1.5 text-xs text-slate-400 hover:text-cyan-300
+                         hover:bg-slate-700 rounded-lg transition-colors disabled:opacity-50"
+              title="Regenerate dictionary (use when schema changes)"
+            >
+              {isRegenerating ? (
+                <Loader2 className="w-3 h-3 animate-spin" />
+              ) : (
+                <Database className="w-3 h-3" />
+              )}
+              <span className="hidden sm:inline">{isRegenerating ? 'Regenerating...' : 'Regenerate'}</span>
+            </button>
+          )}
         </div>
 
         {onRefresh && (

@@ -26,6 +26,8 @@ services:
       - ./data:/app/data                # documents, cache
       - ./outputs:/app/outputs          # generated content
       - ./uploads:/app/uploads          # user uploads
+      - ./dbnotebook:/app/dbnotebook    # backend source - instant code changes
+      - ./frontend/dist:/app/frontend/dist:ro  # frontend build - npm run build
     extra_hosts:
       - "host.docker.internal:host-gateway"
     networks:

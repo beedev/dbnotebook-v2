@@ -209,6 +209,14 @@ def parse_file(session_id: str):
         # Parse the file
         parsed_data = service.parse_file(session_id)
 
+        # Debug logging for parse response
+        logger.info(f"[PARSE API] parsed_data type: {type(parsed_data)}")
+        logger.info(f"[PARSE API] parsed_data keys: {parsed_data.keys() if parsed_data else 'None'}")
+        if parsed_data:
+            data_val = parsed_data.get('data', [])
+            logger.info(f"[PARSE API] data length: {len(data_val) if data_val else 0}")
+            logger.info(f"[PARSE API] row_count: {parsed_data.get('row_count', 0)}")
+
         if not parsed_data:
             session = service.get_session(session_id)
             return jsonify({
@@ -491,6 +499,14 @@ def analyze_dashboard(session_id: str):
         service.complete_analysis_with_prompt(session_id, dashboard_config, generation_prompt)
 
         logger.info(f"Dashboard analysis completed for session {session_id}")
+
+        # Debug logging
+        logger.info(f"[ANALYZE API] dashboard_config keys: {dashboard_config.keys()}")
+        logger.info(f"[ANALYZE API] kpis count: {len(dashboard_config.get('kpis', []))}")
+        logger.info(f"[ANALYZE API] charts count: {len(dashboard_config.get('charts', []))}")
+        logger.info(f"[ANALYZE API] filters count: {len(dashboard_config.get('filters', []))}")
+        logger.info(f"[ANALYZE API] kpis: {dashboard_config.get('kpis', [])}")
+        logger.info(f"[ANALYZE API] charts: {dashboard_config.get('charts', [])}")
 
         # Get modification state
         mod_state = service.get_modification_state(session_id)

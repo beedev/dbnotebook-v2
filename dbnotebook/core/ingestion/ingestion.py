@@ -433,11 +433,23 @@ class LocalDataIngestion:
         file_name = Path(input_file).name
         file_path = Path(input_file)
 
-        # Check memory cache first
-        if file_name in self._node_store:
-            return file_name, self._node_store[file_name], ""
+        # Calculate current file hash for cache validation
+        current_file_hash = self._calculate_file_hash(input_file)
 
-        # Check disk cache
+        # Check memory cache first - but validate hash to detect file changes
+        if file_name in self._node_store:
+            cached_nodes = self._node_store[file_name]
+            # Check if file has changed by comparing hash
+            if cached_nodes and len(cached_nodes) > 0:
+                cached_hash = cached_nodes[0].metadata.get("file_hash", "")
+                if cached_hash == current_file_hash:
+                    return file_name, cached_nodes, ""
+                else:
+                    # File changed, invalidate memory cache
+                    logger.info(f"File {file_name} changed, invalidating memory cache")
+                    del self._node_store[file_name]
+
+        # Check disk cache (uses mtime in key, so auto-invalidates on file change)
         if self._cache:
             cached_nodes = self._cache.get(input_file)
             if cached_nodes:

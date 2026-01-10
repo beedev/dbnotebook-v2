@@ -168,3 +168,6 @@ junit.xml
 # Generated images
 outputs/
 .env.dev
+
+# Pre-downloaded HuggingFace models for Docker builds (~2.7GB)
+models/

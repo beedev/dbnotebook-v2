@@ -13,7 +13,16 @@ from typing import Any, Dict, List, Literal, Optional
 
 # Type aliases
 DatabaseType = Literal["postgresql", "mysql", "sqlite"]
-QueryState = Literal["pending", "generating", "validating", "executing", "complete", "error"]
+QueryState = Literal[
+    "pending",
+    "generating_dictionary",  # Dictionary batch generation in progress
+    "ready",                  # Dictionary ready, queries enabled
+    "generating",
+    "validating",
+    "executing",
+    "complete",
+    "error"
+]
 
 
 class QueryIntent(str, Enum):
@@ -54,6 +63,7 @@ class DatabaseConnection:
         host: Database host address
         port: Database port
         database: Database name
+        schema: PostgreSQL schema(s) - comma-separated for multiple
         username: Database username
         password_encrypted: Encrypted password (Fernet encryption)
         masking_policy: Optional data masking configuration
@@ -68,6 +78,7 @@ class DatabaseConnection:
     database: str
     username: str
     password_encrypted: Optional[str] = None
+    schema: Optional[str] = None  # PostgreSQL schema(s) e.g., 'public' or 'sales,hr'
     masking_policy: Optional[MaskingPolicy] = None
     created_at: Optional[datetime] = None
     last_used_at: Optional[datetime] = None
@@ -155,6 +166,7 @@ class QueryResult:
     intent: Optional[IntentClassification] = None
     retry_count: int = 0
     explanation: Optional[str] = None  # Natural language explanation of results
+    validation_warnings: Optional[List[Dict[str, str]]] = None  # Result validation warnings
 
 
 @dataclass

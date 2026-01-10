@@ -1,7 +1,8 @@
 import logging
 import re
+import time
 from enum import Enum
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Dict
 
 from dotenv import load_dotenv
 from llama_index.core.retrievers import (
@@ -151,8 +152,16 @@ class LocalRetriever:
         self._host = host
         self._index_cache: Optional[VectorStoreIndex] = None
         self._cached_node_count: int = 0
+        self._cached_notebook_id: Optional[str] = None
         # Query-time settings (updated per-request, cleared after use)
         self._query_settings: Optional[QueryTimeSettings] = None
+
+        # Retriever cache for performance optimization
+        # Cache format: {cache_key: (retriever, timestamp)}
+        # Cache key: f"{notebook_id}:{node_count}"
+        self._retriever_cache: Dict[str, Tuple[BaseRetriever, float]] = {}
+        self._retriever_cache_ttl = 300  # 5 minutes TTL
+
         logger.debug("LocalRetriever initialized")
 
     def set_query_settings(self, settings: Optional[QueryTimeSettings]) -> None:
@@ -305,20 +314,39 @@ class LocalRetriever:
     def _get_or_create_index(
         self,
         nodes: List[BaseNode],
+        notebook_id: Optional[str] = None,
         force_rebuild: bool = False
     ) -> VectorStoreIndex:
-        """Get cached index or create new one."""
-        if (
+        """Get cached index or create new one.
+
+        Args:
+            nodes: Document nodes to index
+            notebook_id: Notebook ID for cache isolation
+            force_rebuild: Force rebuild even if cached
+
+        Returns:
+            VectorStoreIndex for the nodes
+        """
+        # Check if cache is valid (same notebook and node count)
+        cache_valid = (
             not force_rebuild and
             self._index_cache is not None and
-            len(nodes) == self._cached_node_count
-        ):
-            logger.debug("Using cached vector index")
+            len(nodes) == self._cached_node_count and
+            notebook_id == self._cached_notebook_id
+        )
+
+        if cache_valid:
+            logger.debug(f"Using cached vector index for notebook {notebook_id}")
             return self._index_cache
 
-        logger.debug(f"Creating new vector index with {len(nodes)} nodes")
+        # Build new index
+        start_time = time.time()
+        logger.debug(f"Creating new vector index with {len(nodes)} nodes for notebook {notebook_id}")
         self._index_cache = VectorStoreIndex(nodes=nodes)
         self._cached_node_count = len(nodes)
+        self._cached_notebook_id = notebook_id
+        build_time_ms = int((time.time() - start_time) * 1000)
+        logger.info(f"Built vector index: {len(nodes)} nodes in {build_time_ms}ms")
         return self._index_cache
 
     def _get_normal_retriever(
@@ -431,10 +459,14 @@ class LocalRetriever:
         nodes: List[BaseNode],
         offering_filter: Optional[List[str]] = None,
         practice_filter: Optional[List[str]] = None,
-        vector_store=None
+        vector_store=None,
+        notebook_id: Optional[str] = None
     ) -> BaseRetriever:
         """
         Get appropriate retriever based on collection size with optional filtering.
+
+        Uses caching to avoid rebuilding retrievers for repeat queries.
+        Cache is invalidated after TTL (5 minutes) or when notebook/nodes change.
 
         Args:
             llm: Language model for query generation
@@ -443,10 +475,26 @@ class LocalRetriever:
             offering_filter: List of offering IDs to filter by (OR operation)
             practice_filter: List of practice names to filter by (OR operation)
             vector_store: Optional LocalVectorStore instance for metadata filtering
+            notebook_id: Notebook ID for cache isolation
 
         Returns:
             Configured retriever instance
         """
+        # Check retriever cache first
+        cache_key = f"{notebook_id}:{len(nodes)}"
+        current_time = time.time()
+
+        if cache_key in self._retriever_cache:
+            retriever, timestamp = self._retriever_cache[cache_key]
+            if current_time - timestamp < self._retriever_cache_ttl:
+                logger.debug(f"Retriever cache hit for {cache_key}")
+                return retriever
+            else:
+                logger.debug(f"Retriever cache expired for {cache_key}")
+
+        # Cache miss - build retriever
+        start_time = time.time()
+
         # Apply metadata filtering if requested
         filtered_nodes = nodes
 
@@ -460,7 +508,7 @@ class LocalRetriever:
 
             if filtered_index is None:
                 logger.warning("No nodes matched the filters, using unfiltered retriever")
-                vector_index = self._get_or_create_index(nodes)
+                vector_index = self._get_or_create_index(nodes, notebook_id=notebook_id)
             else:
                 vector_index = filtered_index
                 # Update filtered_nodes count for retriever selection
@@ -516,20 +564,27 @@ class LocalRetriever:
                 f"(offerings={offering_filter}, practices={practice_filter})"
             )
 
-            vector_index = self._get_or_create_index(filtered_nodes)
+            vector_index = self._get_or_create_index(filtered_nodes, notebook_id=notebook_id)
         else:
             # No filtering
-            vector_index = self._get_or_create_index(nodes)
+            vector_index = self._get_or_create_index(nodes, notebook_id=notebook_id)
 
         # Select retriever strategy based on node count
         node_count = len(filtered_nodes)
 
         if node_count > self._setting.retriever.top_k_rerank:
             logger.debug(f"Using router retriever for {node_count} nodes")
-            return self._get_router_retriever(vector_index, llm, language)
+            retriever = self._get_router_retriever(vector_index, llm, language)
         else:
             logger.debug(f"Using simple retriever for {node_count} nodes")
-            return self._get_normal_retriever(vector_index, llm, language)
+            retriever = self._get_normal_retriever(vector_index, llm, language)
+
+        # Cache the retriever
+        build_time_ms = int((time.time() - start_time) * 1000)
+        self._retriever_cache[cache_key] = (retriever, current_time)
+        logger.info(f"Cached retriever for {cache_key} (built in {build_time_ms}ms)")
+
+        return retriever
 
     def get_all_nodes_for_offering(
         self,
@@ -571,10 +626,12 @@ class LocalRetriever:
         return filtered_nodes
 
     def clear_cache(self) -> None:
-        """Clear the index cache."""
+        """Clear all caches (index cache and retriever cache)."""
         self._index_cache = None
         self._cached_node_count = 0
-        logger.debug("Retriever cache cleared")
+        self._cached_notebook_id = None
+        self._retriever_cache.clear()
+        logger.debug("Retriever caches cleared (index + retriever)")
 
     def get_raptor_aware_retriever(
         self,

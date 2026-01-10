@@ -24,6 +24,7 @@ export interface DatabaseConnection {
   host?: string;
   port?: number;
   databaseName?: string;
+  schema?: string;           // PostgreSQL schema (e.g., 'public', 'sales')
   username?: string;
   maskingPolicy?: MaskingPolicy;
   createdAt: string;
@@ -37,6 +38,7 @@ export interface ConnectionFormData {
   host?: string;
   port?: number;
   databaseName?: string;
+  schema?: string;           // PostgreSQL schema (e.g., 'public', 'sales')
   username?: string;
   password?: string;
   connectionString?: string;
@@ -108,6 +110,16 @@ export interface CostEstimate {
   warning?: string;
 }
 
+// Validation Warning
+export type ValidationSeverity = 'info' | 'warning' | 'error';
+
+export interface ValidationWarning {
+  severity: ValidationSeverity;
+  code: string;
+  message: string;
+  suggestion: string;
+}
+
 // Query Result
 export interface QueryResult {
   success: boolean;
@@ -120,6 +132,7 @@ export interface QueryResult {
   intent?: IntentClassification;
   confidence?: ConfidenceScore;
   costEstimate?: CostEstimate;
+  validationWarnings?: ValidationWarning[];
   errorMessage?: string;
   retryCount?: number;
 }

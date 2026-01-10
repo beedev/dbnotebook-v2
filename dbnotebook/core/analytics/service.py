@@ -313,6 +313,13 @@ class AnalyticsService:
         # Sample for LLM
         sample_df = df.head(self._sample_size)
         sample_data = sample_df.replace({pd.NA: None, pd.NaT: None}).to_dict("records")
+        # Handle NaN values in sample data (numpy NaN not caught by pd.NA)
+        for row in sample_data:
+            for k, v in row.items():
+                if pd.isna(v):
+                    row[k] = None
+                elif hasattr(v, "isoformat"):
+                    row[k] = v.isoformat()
 
         return ParsedData(
             data=data,

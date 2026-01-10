@@ -3,11 +3,13 @@ Database Schema Introspection for Chat with Data.
 
 Extracts and caches database schema information for LLM context.
 Provides formatted schema representations optimized for Text-to-SQL.
+Includes fingerprinting for fast change detection.
 """
 
+import hashlib
 import logging
-from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional
+from datetime import datetime
+from typing import Any, Dict, List, Optional, Tuple
 
 from sqlalchemy import inspect, text
 from sqlalchemy.engine import Engine
@@ -23,50 +25,129 @@ logger = logging.getLogger(__name__)
 
 
 class SchemaIntrospector:
-    """Extract and cache database schema for LLM context.
+    """Extract database schema for LLM context.
 
     Provides:
     - Schema introspection for PostgreSQL, MySQL, SQLite
     - Sample value extraction for column context
     - Compact schema formatting for LLM prompts
-    - TTL-based caching
+    - Fingerprint-based caching for performance
+
+    Caching Strategy:
+    - Uses fast fingerprint (~10ms) to detect schema changes
+    - Only performs full introspection when fingerprint changes
+    - Balances accuracy with performance
     """
 
-    CACHE_TTL_SECONDS = 3600  # 1 hour default
-
-    def __init__(self, cache_ttl_seconds: int = 3600):
+    def __init__(self, cache_ttl_seconds: int = 300):
         """Initialize schema introspector.
 
         Args:
-            cache_ttl_seconds: How long to cache schema (default 1 hour)
+            cache_ttl_seconds: Cache TTL in seconds (default 5 minutes)
         """
-        self._cache: Dict[str, SchemaInfo] = {}
+        self._cache: Dict[str, Tuple[SchemaInfo, str, datetime]] = {}  # conn_id -> (schema, fingerprint, timestamp)
         self._cache_ttl = cache_ttl_seconds
+
+    def get_fingerprint(self, engine: Engine) -> str:
+        """Get fast fingerprint for schema change detection (~10ms).
+
+        Uses database-specific queries to compute a hash of table/column structure
+        without fetching full schema details.
+
+        Args:
+            engine: SQLAlchemy engine
+
+        Returns:
+            MD5 hash of schema structure
+        """
+        try:
+            dialect = engine.dialect.name
+
+            if dialect == 'postgresql':
+                sql = text("""
+                    SELECT string_agg(
+                        table_name || ':' || column_count::text,
+                        ',' ORDER BY table_name
+                    )
+                    FROM (
+                        SELECT table_name, COUNT(*) as column_count
+                        FROM information_schema.columns
+                        WHERE table_schema = 'public'
+                        GROUP BY table_name
+                    ) t
+                """)
+            elif dialect == 'mysql':
+                sql = text("""
+                    SELECT GROUP_CONCAT(
+                        CONCAT(table_name, ':', column_count)
+                        ORDER BY table_name
+                        SEPARATOR ','
+                    )
+                    FROM (
+                        SELECT table_name, COUNT(*) as column_count
+                        FROM information_schema.columns
+                        WHERE table_schema = DATABASE()
+                        GROUP BY table_name
+                    ) t
+                """)
+            else:  # sqlite
+                # SQLite doesn't have information_schema, use pragma
+                tables_sql = text("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
+                with engine.connect() as conn:
+                    tables = conn.execute(tables_sql).fetchall()
+                    parts = []
+                    for (table_name,) in tables:
+                        if table_name.startswith('sqlite_'):
+                            continue
+                        col_sql = text(f"SELECT COUNT(*) FROM pragma_table_info('{table_name}')")
+                        result = conn.execute(col_sql)
+                        col_count = result.scalar() or 0
+                        parts.append(f"{table_name}:{col_count}")
+                    fingerprint_str = ','.join(parts)
+                    return hashlib.md5(fingerprint_str.encode()).hexdigest()
+
+            with engine.connect() as conn:
+                result = conn.execute(sql)
+                fingerprint_str = result.scalar() or ""
+                return hashlib.md5(fingerprint_str.encode()).hexdigest()
+
+        except Exception as e:
+            logger.warning(f"Failed to get fingerprint: {e}")
+            # Return empty string to force full introspection
+            return ""
 
     def introspect(
         self,
         engine: Engine,
         connection_id: str,
-        force_refresh: bool = False
+        force_refresh: bool = False,
+        include_samples: bool = False
     ) -> SchemaInfo:
-        """Extract complete database schema.
+        """Extract complete database schema with fingerprint-based caching.
 
         Args:
             engine: SQLAlchemy engine
             connection_id: Connection ID for caching
-            force_refresh: Force cache refresh
+            force_refresh: Force full introspection even if fingerprint matches
+            include_samples: Include sample values for columns (slow, default False)
 
         Returns:
             SchemaInfo with tables and relationships
         """
-        # Check cache
+        # Check cache first (unless force_refresh)
         if not force_refresh and connection_id in self._cache:
-            cached = self._cache[connection_id]
-            if cached.cached_at:
-                age = datetime.utcnow() - cached.cached_at
-                if age < timedelta(seconds=self._cache_ttl):
-                    logger.debug(f"Using cached schema for {connection_id}")
-                    return cached
+            cached_schema, cached_fp, cached_time = self._cache[connection_id]
+
+            # Check TTL
+            age = (datetime.utcnow() - cached_time).total_seconds()
+            if age < self._cache_ttl:
+                # Check fingerprint
+                current_fp = self.get_fingerprint(engine)
+                if current_fp and current_fp == cached_fp:
+                    logger.debug(f"Using cached schema for {connection_id} (age: {age:.1f}s)")
+                    return cached_schema
+                elif current_fp:
+                    logger.info(f"Schema fingerprint changed for {connection_id}, refreshing")
 
         logger.info(f"Introspecting schema for {connection_id}")
 
@@ -115,8 +196,11 @@ class SchemaIntrospector:
             # Get row count (approximate for large tables)
             row_count = self._get_row_count(engine, table_name)
 
-            # Get sample values
-            sample_values = self._get_sample_values(engine, table_name, columns)
+            # Get sample values only if requested (slow for remote DBs)
+            if include_samples:
+                sample_values = self._get_sample_values(engine, table_name, columns)
+            else:
+                sample_values = {}
 
             tables.append(TableInfo(
                 name=table_name,
@@ -139,9 +223,11 @@ class SchemaIntrospector:
             database_name=db_name,
         )
 
-        # Cache result
-        self._cache[connection_id] = schema
-        logger.info(f"Schema cached: {len(tables)} tables, {len(relationships)} relationships")
+        # Cache schema with fingerprint
+        fingerprint = self.get_fingerprint(engine)
+        self._cache[connection_id] = (schema, fingerprint, datetime.utcnow())
+
+        logger.info(f"Schema introspected: {len(tables)} tables, {len(relationships)} relationships")
 
         return schema
 
@@ -207,11 +293,13 @@ class SchemaIntrospector:
         samples: Dict[str, List[Any]] = {}
 
         try:
-            # Get distinct values for each column
-            for col in columns[:10]:  # Limit columns to sample
-                # Skip large text/binary columns
+            # Get distinct values for each column (all columns, 5 rows each)
+            for col in columns:
+                # Skip only truly binary/large object columns
+                # NOTE: TEXT columns are allowed - they often contain valuable
+                # entity names (customer_name, employee_name, etc.) for SQL Chat
                 type_lower = col.type.lower()
-                if any(t in type_lower for t in ['text', 'blob', 'bytea', 'clob']):
+                if any(t in type_lower for t in ['blob', 'bytea', 'clob', 'binary']):
                     continue
 
                 try:
@@ -223,7 +311,13 @@ class SchemaIntrospector:
                     """)  # noqa: S608
                     with engine.connect() as conn:
                         result = conn.execute(sql, {"limit": limit})
-                        values = [row[0] for row in result]
+                        values = []
+                        for row in result:
+                            val = row[0]
+                            # Truncate long text values
+                            if isinstance(val, str) and len(val) > 50:
+                                val = val[:47] + "..."
+                            values.append(val)
                         if values:
                             samples[col.name] = values
                 except Exception:
@@ -353,5 +447,168 @@ class SchemaIntrospector:
         """
         if connection_id:
             self._cache.pop(connection_id, None)
+            logger.debug(f"Cleared cache for {connection_id}")
         else:
             self._cache.clear()
+            logger.debug("Cleared all schema cache")
+
+    def get_cached_schema(self, connection_id: str) -> Optional[SchemaInfo]:
+        """Get cached schema without introspection.
+
+        Used by skip_schema_refresh optimization to avoid redundant
+        introspection when frontend already loaded schema via selectConnection.
+
+        Args:
+            connection_id: Connection ID
+
+        Returns:
+            Cached SchemaInfo or None if not cached
+        """
+        if connection_id in self._cache:
+            schema, _, cached_time = self._cache[connection_id]
+            age = (datetime.utcnow() - cached_time).total_seconds()
+            if age < self._cache_ttl:
+                logger.debug(f"Returning cached schema for {connection_id} (age: {age:.1f}s)")
+                return schema
+            else:
+                logger.debug(f"Cached schema expired for {connection_id} (age: {age:.1f}s)")
+        return None
+
+    def has_schema_changed(self, engine: Engine, connection_id: str) -> bool:
+        """Check if schema has changed since last introspection.
+
+        Args:
+            engine: SQLAlchemy engine
+            connection_id: Connection ID
+
+        Returns:
+            True if schema has changed or no cached version exists.
+            Returns False if fingerprint check fails (assume no change).
+        """
+        if connection_id not in self._cache:
+            return True
+
+        _, cached_fp, _ = self._cache[connection_id]
+        current_fp = self.get_fingerprint(engine)
+
+        # If fingerprint check failed (returns ""), assume no change
+        # This prevents unnecessary schema refresh on network timeouts
+        if not current_fp:
+            logger.debug(f"Fingerprint check failed for {connection_id}, assuming no schema change")
+            return False
+
+        return current_fp != cached_fp
+
+    # ========== Batch Dictionary Generation ==========
+
+    def generate_schema_dictionary(self, engine: Engine, connection_name: str) -> str:
+        """Generate markdown dictionary of schema structure.
+
+        Fast method that only queries schema metadata (no sample values).
+        Used for batch dictionary file generation.
+
+        Args:
+            engine: SQLAlchemy engine
+            connection_name: Human-readable connection name
+
+        Returns:
+            Markdown string for schema_dictionary.md
+        """
+        lines = [f"# Database Schema: {connection_name}\n"]
+
+        inspector = inspect(engine)
+        table_names = inspector.get_table_names()
+
+        for table_name in table_names:
+            lines.append(f"## Table: {table_name}")
+
+            # Get columns
+            columns = inspector.get_columns(table_name)
+            pk_cols = set(inspector.get_pk_constraint(table_name).get('constrained_columns', []))
+
+            for col in columns:
+                parts = [f"- **{col['name']}** ({col['type']}"]
+                if col['name'] in pk_cols:
+                    parts.append(", PK")
+                parts.append(")")
+                lines.append("".join(parts))
+
+            lines.append("")
+
+        # Add relationships section
+        lines.append("## Relationships")
+        for table_name in table_names:
+            for fk in inspector.get_foreign_keys(table_name):
+                for i, col in enumerate(fk.get('constrained_columns', [])):
+                    ref_cols = fk.get('referred_columns', [])
+                    if i < len(ref_cols):
+                        lines.append(f"- {table_name}.{col} → {fk['referred_table']}.{ref_cols[i]}")
+
+        logger.info(f"Generated schema dictionary for {connection_name}: {len(table_names)} tables")
+        return "\n".join(lines)
+
+    def generate_sample_values(
+        self,
+        engine: Engine,
+        connection_name: str,
+        limit: int = 5
+    ) -> str:
+        """Generate markdown with sample values for each table.
+
+        Efficient method using ONE query per table (SELECT * LIMIT 5)
+        instead of one query per column.
+
+        Args:
+            engine: SQLAlchemy engine
+            connection_name: Human-readable connection name
+            limit: Number of sample rows per table
+
+        Returns:
+            Markdown string for sample_values.md
+        """
+        lines = [f"# Sample Data: {connection_name}\n"]
+
+        inspector = inspect(engine)
+        table_names = inspector.get_table_names()
+        tables_sampled = 0
+
+        for table_name in table_names:
+            try:
+                # ONE query per table - much faster than per-column
+                sql = text(f'SELECT * FROM "{table_name}" LIMIT :limit')  # noqa: S608
+                with engine.connect() as conn:
+                    result = conn.execute(sql, {"limit": limit})
+                    rows = result.fetchall()
+                    columns = list(result.keys())
+
+                if not rows:
+                    continue
+
+                tables_sampled += 1
+                lines.append(f"## Table: {table_name} ({len(rows)} sample rows)\n")
+
+                # Header row
+                lines.append("| " + " | ".join(columns) + " |")
+                lines.append("| " + " | ".join(["---"] * len(columns)) + " |")
+
+                # Data rows
+                for row in rows:
+                    values = []
+                    for val in row:
+                        if val is None:
+                            values.append("NULL")
+                        elif isinstance(val, str) and len(val) > 30:
+                            values.append(val[:27] + "...")
+                        else:
+                            # Escape pipe characters in markdown
+                            val_str = str(val).replace("|", "\\|")
+                            values.append(val_str)
+                    lines.append("| " + " | ".join(values) + " |")
+
+                lines.append("")
+
+            except Exception as e:
+                logger.debug(f"Could not sample {table_name}: {e}")
+
+        logger.info(f"Generated sample values for {connection_name}: {tables_sampled}/{len(table_names)} tables")
+        return "\n".join(lines)
