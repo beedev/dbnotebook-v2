@@ -44,6 +44,9 @@ LABEL org.opencontainers.image.version="1.1.0"
 
 WORKDIR /app
 
+# Set PYTHONPATH for alembic migrations (required for GitHub Actions builds)
+ENV PYTHONPATH=/app
+
 RUN apt-get update && apt-get install -y \
     libpq5 \
     curl \
