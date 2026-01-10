@@ -10,6 +10,7 @@ NOTE: The embeddings table (data_embeddings) is managed by LlamaIndex PGVectorSt
 which automatically creates it with HNSW indexes. This migration only ensures the
 pgvector extension is available.
 """
+import os
 from typing import Sequence, Union
 
 from alembic import op
@@ -27,15 +28,18 @@ def upgrade() -> None:
     # Ensure pgvector extension is enabled
     op.execute("CREATE EXTENSION IF NOT EXISTS vector")
 
+    # Read embedding dimension from environment (768 for HuggingFace nomic, 1536 for OpenAI)
+    embed_dim = os.getenv("PGVECTOR_EMBED_DIM", "768")
+
     # Create data_embeddings table (matches LlamaIndex PGVectorStore schema)
     # IF NOT EXISTS prevents conflict when LlamaIndex also tries to create it
-    op.execute("""
+    op.execute(f"""
         CREATE TABLE IF NOT EXISTS data_embeddings (
             id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
             text TEXT,
             metadata_ JSONB,
             node_id VARCHAR,
-            embedding vector(768)
+            embedding vector({embed_dim})
         )
     """)
 

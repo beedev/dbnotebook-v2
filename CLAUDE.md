@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**DBNotebook** - A multimodal RAG system using LlamaIndex, PostgreSQL/pgvector, and Flask. Features NotebookLM-style document organization, persistent conversations, RAPTOR hierarchical retrieval, hybrid BM25+vector search, multi-provider LLM support (Ollama, OpenAI, Anthropic, Gemini), vision-based image understanding, Content Studio for multimodal content generation, Excel Analytics with AI-powered dashboard generation, and agentic query analysis with document routing.
+**DBNotebook** - A multimodal RAG system using LlamaIndex, PostgreSQL/pgvector, and Flask. Features NotebookLM-style document organization, persistent conversations, RAPTOR hierarchical retrieval, hybrid BM25+vector search, multi-provider LLM support (Ollama, OpenAI, Anthropic, Gemini), vision-based image understanding, Content Studio for multimodal content generation, Excel Analytics with AI-powered dashboard generation, SQL Chat (natural language to SQL) with multi-database support, and agentic query analysis with document routing.
 
 ## Development Commands
 
@@ -13,6 +13,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```bash
 # Start application (ALWAYS use Docker)
 docker compose up --build     # Primary method - builds and starts all services
+docker compose up -d          # Run in background
+docker compose logs -f        # Follow logs
+
+# Docker development workflow (hot reload via volume mounts)
+# Backend changes: ./dbnotebook/ mounted - changes apply instantly
+# Frontend changes: npm run build, then refresh browser
+# Config changes: ./config/ mounted - restart container to apply
 
 # Frontend development (React + Vite)
 cd frontend
@@ -118,6 +125,32 @@ Tree building flow: Document chunks (level 0) → Cluster by similarity → Summ
 - `query_analyzer.py` - Analyzes queries to determine retrieval strategy
 - `document_analyzer.py` - Analyzes document content for routing decisions
 
+### SQL Chat (Chat with Data)
+
+**`dbnotebook/core/sql_chat/`** - Natural language to SQL with multi-database support:
+- `service.py` - SQLChatService: Main orchestrator for SQL chat functionality
+- `connections.py` - Database connection management (PostgreSQL, MySQL, SQLite)
+- `schema.py` - Schema introspection, caching, and dictionary generation
+- `query_engine.py` - LlamaIndex NLSQLTableQueryEngine integration
+- `query_learner.py` - Learns JOIN patterns from successful queries
+- `telemetry.py` - Query metrics and accuracy tracking
+
+**SQL Chat API Flow** (`/api/sql-chat/*`):
+1. `POST /connections` - Create database connection with credentials
+2. `POST /connections/test` - Test connection before saving
+3. `GET /schema/<connection_id>` - Get schema with tables, columns, relationships
+4. `POST /sessions` - Create chat session for a connection
+5. `POST /query/<session_id>` - Execute natural language query → SQL → results
+6. `POST /query/<session_id>/stream` - SSE streaming for query execution
+7. `GET /connections/<connection_id>/dictionary` - Generate schema dictionary for RAG
+
+**Key Features**:
+- Read-only enforcement (prevents destructive queries)
+- Schema fingerprinting for fast change detection
+- Few-shot learning with Gretel dataset (~100K examples)
+- Confidence scoring and query validation
+- Automatic notebook creation with schema dictionary for RAG queries
+
 ### Excel Analytics & AI Dashboards
 
 Complete Excel/CSV analysis pipeline with LLM-powered dashboard generation.
@@ -200,8 +233,27 @@ Routes in `dbnotebook/api/routes/`:
 - `multi_notebook.py` - `/api/multi-notebook/*` - Cross-notebook queries
 - `analytics.py` - `/api/analytics/*` - Excel profiling and AI dashboard generation
 - `agents.py` - `/api/agents/*` - Agentic query analysis endpoints
+- `sql_chat.py` - `/api/sql-chat/*` - Natural language to SQL queries
+- `query.py` - `/api/query` - Programmatic RAG API (for scripting/automation)
 
 Routes follow pattern: `create_*_routes(app, pipeline, db_manager, notebook_manager)`
+
+### Programmatic API
+
+Simple REST API for scripting and automation (`/api/query`):
+```python
+# POST /api/query
+{
+    "notebook_id": "uuid",
+    "query": "What are the key findings?",
+    "mode": "chat",           # Optional: chat|QA
+    "include_sources": true,  # Optional
+    "max_sources": 6          # Optional
+}
+# Returns: response, sources with scores, execution metadata
+```
+- Optional `X-API-Key` header auth via `API_KEY` env var
+- `GET /api/query/notebooks` - List available notebooks
 
 ### Database Layer
 
@@ -214,6 +266,9 @@ Routes follow pattern: `create_*_routes(app, pipeline, db_manager, notebook_mana
 - `conversations` - Persistent chat history per notebook
 - `data_embeddings` - pgvector embeddings with JSONB metadata
 - `generated_content` - Content Studio outputs
+- `sql_connections` - Database connections for SQL Chat
+- `sql_sessions` - Chat sessions for SQL queries
+- `sql_query_history` - Query telemetry and metrics
 
 ## Environment Configuration
 
@@ -249,6 +304,9 @@ JINA_API_KEY=...                # Optional (higher rate limits)
 
 # Contextual Retrieval (optional, enriches chunks with LLM context)
 CONTEXTUAL_RETRIEVAL_ENABLED=false
+
+# SQL Chat (optional)
+SQL_CHAT_SKIP_READONLY_CHECK=false  # Set true for dev/testing only
 ```
 
 ## Frontend
@@ -324,3 +382,6 @@ class MyService(BaseService):
 - **Migration conflicts**: Run `alembic heads` to check for multiple heads
 - **LLM connection issues**: Check `OLLAMA_HOST` (default: localhost:11434)
 - **Context overflow**: Reduce `CHAT_TOKEN_LIMIT` or increase `CONTEXT_WINDOW`
+- **SQL Chat connection fails**: Verify database credentials, check read-only enforcement
+- **Docker backend changes not reflected**: Check volume mount in docker-compose.yml (`./dbnotebook:/app/dbnotebook`)
+- **Frontend build issues**: Run `npm run typecheck` to see TypeScript errors before `npm run build`
