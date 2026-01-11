@@ -217,6 +217,113 @@ class FlaskChatbotUI:
         thread.start()
         logger.debug("Few-shot background loader thread started")
 
+    def _fast_chat(self, notebook_ids: list, message: str, history: list, max_sources: int = 6) -> dict:
+        """
+        Fast stateless chat - same pattern as /api/query.
+        No engine resets, single retrieval, direct LLM call.
+        Uses the same rich system prompt as the original chat engine.
+
+        Args:
+            notebook_ids: List of notebook UUIDs to query
+            message: User's query message
+            history: Conversation history [[user, assistant], ...]
+            max_sources: Maximum number of sources to return
+
+        Returns:
+            dict with 'response' (str) and 'sources' (list)
+        """
+        from llama_index.core import Settings
+        from llama_index.core.schema import QueryBundle
+        from ..core.prompt import get_system_prompt, get_context_prompt
+
+        # 1. Get cached nodes (thread-safe)
+        nodes = []
+        for nb_id in notebook_ids:
+            nb_nodes = self._pipeline._get_cached_nodes(nb_id)
+            if nb_nodes:
+                nodes.extend(nb_nodes)
+
+        if not nodes:
+            return {"response": "No documents found in selected notebooks.", "sources": []}
+
+        # 2. Create retriever (reuse existing pattern, no engine reset)
+        retriever = self._pipeline._engine._retriever.get_retrievers(
+            llm=Settings.llm,
+            language="eng",
+            nodes=nodes,
+            offering_filter=notebook_ids,
+            vector_store=self._pipeline._vector_store,
+            notebook_id=notebook_ids[0] if notebook_ids else None
+        )
+
+        # 3. Single retrieval
+        query_bundle = QueryBundle(query_str=message)
+        retrieval_results = retriever.retrieve(query_bundle)
+
+        # 4. Extract sources and build context
+        sources = []
+        context_parts = []
+        seen_sources = set()
+
+        for node_with_score in retrieval_results[:max_sources]:
+            node = node_with_score.node
+            metadata = node.metadata or {}
+
+            # Skip transformation nodes (summaries, insights, questions)
+            if metadata.get('node_type') in ('summary', 'insight', 'question'):
+                continue
+
+            filename = metadata.get('file_name') or metadata.get('filename') or 'Unknown'
+            page = metadata.get('page_label') or metadata.get('page') or metadata.get('page_number')
+            source_key = f"{filename}:{page}" if page else filename
+
+            if source_key not in seen_sources:
+                seen_sources.add(source_key)
+                source_info = {
+                    'filename': filename,
+                    'score': float(round(node_with_score.score, 3)) if node_with_score.score else None,
+                    'snippet': node.text[:200] + '...' if len(node.text) > 200 else node.text
+                }
+                if page:
+                    source_info['page'] = page
+                sources.append(source_info)
+                context_parts.append(f"[Source: {filename}]\n{node.text}")
+
+        context_str = "\n\n---\n\n".join(context_parts)
+
+        # 5. Build conversation history for context
+        history_context = ""
+        if history and len(history) > 0:
+            recent_history = history[-6:]  # Last 3 exchanges (6 messages)
+            history_parts = []
+            for h in recent_history:
+                if isinstance(h, list) and len(h) >= 2:
+                    history_parts.append(f"User: {h[0]}\nAssistant: {h[1]}")
+            if history_parts:
+                history_context = "Chat History:\n" + "\n\n".join(history_parts) + "\n\n"
+
+        # 6. Use the same rich system prompt as the original chat engine
+        system_prompt = get_system_prompt("eng", is_rag_prompt=True)
+        context_prompt_template = get_context_prompt("eng")
+        context_prompt = context_prompt_template.format(context_str=context_str)
+
+        # 7. Build the full prompt with system instructions, context, history, and question
+        full_prompt = f"""{system_prompt}
+
+{context_prompt}
+
+{history_context}User question: {message}"""
+
+        # 8. Generate response (stateless, direct LLM call)
+        response = Settings.llm.complete(full_prompt)
+
+        logger.info(f"Fast chat: retrieved {len(sources)} sources, generated response")
+
+        return {
+            "response": response.text,
+            "sources": sources
+        }
+
     def _format_file_size(self, size_bytes: int) -> str:
         """Format file size in human-readable format."""
         for unit in ['B', 'KB', 'MB', 'GB']:
@@ -546,73 +653,47 @@ Output ONLY valid JSON, nothing else."""
                     # Query RAG pipeline to get relevant document content
                     yield f"data: {json.dumps({'token': ''})}\n\n"
 
-                    # Pre-extract sources BEFORE streaming (same pattern as /api/chat)
-                    # This is necessary because source_nodes is empty after streaming completes
-                    pre_extracted_sources = []
-                    if selected_notebooks:
-                        try:
-                            from llama_index.core.schema import QueryBundle
-                            from llama_index.core import Settings
-                            nodes = []
-                            for nb_id in selected_notebooks:
-                                nb_nodes = self._pipeline._get_cached_nodes(nb_id)
-                                if nb_nodes:
-                                    nodes.extend(nb_nodes)
-
-                            if nodes and hasattr(self._pipeline, '_engine') and self._pipeline._engine is not None:
-                                # Set engine first to ensure retriever is configured
-                                self._pipeline.set_engine(offering_filter=selected_notebooks, force_reset=True)
-
-                                if hasattr(self._pipeline._engine, '_retriever'):
-                                    retriever = self._pipeline._engine._retriever.get_retrievers(
-                                        llm=Settings.llm,
-                                        language="eng",
-                                        nodes=nodes,
-                                        offering_filter=selected_notebooks,
-                                        vector_store=self._pipeline._vector_store,
-                                        notebook_id=notebook_id
-                                    )
-                                    query_bundle = QueryBundle(query_str=message)
-                                    retrieval_results = retriever.retrieve(query_bundle)
-
-                                    seen_sources = set()
-                                    for node_with_score in retrieval_results[:6]:
-                                        node = node_with_score.node
-                                        metadata = node.metadata or {}
-                                        # Skip transformation nodes
-                                        if metadata.get('node_type') in ('summary', 'insight', 'question'):
-                                            continue
-                                        filename = metadata.get('file_name') or metadata.get('filename') or 'Unknown'
-                                        page = metadata.get('page_label') or metadata.get('page') or metadata.get('page_number')
-                                        source_key = f"{filename}:{page}" if page else filename
-                                        if source_key not in seen_sources:
-                                            seen_sources.add(source_key)
-                                            source_info = {
-                                                'filename': filename,
-                                                'score': float(round(node_with_score.score, 3)) if node_with_score.score else None,
-                                                'snippet': node.text[:200] + '...' if len(node.text) > 200 else node.text
-                                            }
-                                            if page:
-                                                source_info['page'] = page
-                                            pre_extracted_sources.append(source_info)
-                                    logger.info(f"Pre-extracted {len(pre_extracted_sources)} sources from retriever")
-                        except Exception as e:
-                            logger.warning(f"Could not pre-extract sources: {e}")
-
                     # Choose query method based on selection
                     if selected_notebooks:
-                        # NOTEBOOK MODE: Use simple query() method for direct Q&A with notebook documents
-                        # Engine already set during source extraction above
-                        # force_reset=False since we already set it
-                        if not hasattr(self._pipeline, '_engine') or self._pipeline._engine is None:
-                            self._pipeline.set_engine(offering_filter=selected_notebooks, force_reset=True)
-                        rag_response = self._pipeline.query(
-                            mode=mode,
-                            message=message,
-                            chatbot=history,
-                            query_settings=query_settings_obj
-                        )
-                    elif selected_offerings:
+                        # FAST PATH: Use stateless _fast_chat() for notebook mode
+                        # Single retrieval, direct LLM call, no engine resets
+                        # Same pattern as /api/query - proven with 20 concurrent users
+                        try:
+                            fast_result = self._fast_chat(
+                                notebook_ids=selected_notebooks,
+                                message=message,
+                                history=history,
+                                max_sources=6
+                            )
+
+                            # Stream the response character by character
+                            response_text = fast_result["response"]
+                            for token in response_text:
+                                yield f"data: {json.dumps({'token': token})}\n\n"
+
+                            # Store in session memory for cross-request persistence
+                            if notebook_id:
+                                try:
+                                    self._pipeline.store_conversation_exchange(
+                                        user_message=message,
+                                        assistant_message=response_text,
+                                        notebook_id=notebook_id
+                                    )
+                                except Exception as save_err:
+                                    logger.warning(f"Failed to store in session memory: {save_err}")
+
+                            # Send sources with the done signal
+                            yield f"data: {json.dumps({'done': True, 'sources': fast_result['sources']})}\n\n"
+                            return  # Exit early - fast path complete
+
+                        except Exception as fast_err:
+                            logger.warning(f"Fast chat failed, falling back to slow path: {fast_err}")
+                            # Fall through to slow path below
+
+                    # SLOW PATH: For offerings mode, general chat, or fast path fallback
+                    pre_extracted_sources = []
+
+                    if selected_offerings:
                         # SALES MODE: Use query_sales_mode for intelligent classification
                         # Only use when offerings are explicitly selected
                         rag_response = self._pipeline.query_sales_mode(
