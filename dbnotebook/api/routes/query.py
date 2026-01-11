@@ -144,14 +144,15 @@ def create_query_routes(app, pipeline, db_manager, notebook_manager):
                             "error": "Pipeline not initialized. Please try again."
                         }), 503
 
-                    # Create per-request retriever (stateless, no shared state)
-                    retriever = pipeline._engine._retriever.get_retrievers(
+                    # Create RAPTOR-aware retriever (same as UI /chat)
+                    # This enables hierarchical retrieval + reranking for cross-document understanding
+                    retriever = pipeline._engine._retriever.get_combined_raptor_retriever(
                         llm=Settings.llm,
                         language="eng",
                         nodes=nodes,
-                        offering_filter=[notebook_id],
                         vector_store=pipeline._vector_store,
-                        notebook_id=notebook_id
+                        notebook_id=notebook_id,
+                        source_ids=None,  # Will check all sources in notebook
                     )
 
                     # Retrieve relevant chunks
@@ -166,7 +167,7 @@ def create_query_routes(app, pipeline, db_manager, notebook_manager):
                             sources.append({
                                 "document": metadata.get("file_name", "Unknown"),
                                 "excerpt": node.text[:200] + "..." if len(node.text) > 200 else node.text,
-                                "score": round(node_with_score.score or 0.0, 3)
+                                "score": float(round(node_with_score.score or 0.0, 3))
                             })
 
                     retrieval_strategy = retriever.__class__.__name__.replace("Retriever", "").lower()
@@ -187,16 +188,19 @@ def create_query_routes(app, pipeline, db_manager, notebook_manager):
             context = "\n\n---\n\n".join(context_parts) if context_parts else "No relevant context found."
 
             # Generate response using global LLM (stateless, thread-safe)
+            # Use the same rich system prompt as UI /chat for intelligent responses
             from llama_index.core import Settings
-            prompt = f"""Based on the following context from the user's documents, answer their question.
-If the context doesn't contain relevant information, say so clearly.
+            from dbnotebook.core.prompt import get_system_prompt, get_context_prompt
 
-Context:
-{context}
+            system_prompt = get_system_prompt("eng", is_rag_prompt=True)
+            context_prompt_template = get_context_prompt("eng")
+            context_prompt = context_prompt_template.format(context_str=context)
 
-Question: {query}
+            prompt = f"""{system_prompt}
 
-Answer:"""
+{context_prompt}
+
+User question: {query}"""
 
             response = Settings.llm.complete(prompt)
             response_text = response.text
