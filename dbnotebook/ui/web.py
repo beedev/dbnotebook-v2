@@ -546,13 +546,66 @@ Output ONLY valid JSON, nothing else."""
                     # Query RAG pipeline to get relevant document content
                     yield f"data: {json.dumps({'token': ''})}\n\n"
 
+                    # Pre-extract sources BEFORE streaming (same pattern as /api/chat)
+                    # This is necessary because source_nodes is empty after streaming completes
+                    pre_extracted_sources = []
+                    if selected_notebooks:
+                        try:
+                            from llama_index.core.schema import QueryBundle
+                            from llama_index.core import Settings
+                            nodes = []
+                            for nb_id in selected_notebooks:
+                                nb_nodes = self._pipeline._get_cached_nodes(nb_id)
+                                if nb_nodes:
+                                    nodes.extend(nb_nodes)
+
+                            if nodes and hasattr(self._pipeline, '_engine') and self._pipeline._engine is not None:
+                                # Set engine first to ensure retriever is configured
+                                self._pipeline.set_engine(offering_filter=selected_notebooks, force_reset=True)
+
+                                if hasattr(self._pipeline._engine, '_retriever'):
+                                    retriever = self._pipeline._engine._retriever.get_retrievers(
+                                        llm=Settings.llm,
+                                        language="eng",
+                                        nodes=nodes,
+                                        offering_filter=selected_notebooks,
+                                        vector_store=self._pipeline._vector_store,
+                                        notebook_id=notebook_id
+                                    )
+                                    query_bundle = QueryBundle(query_str=message)
+                                    retrieval_results = retriever.retrieve(query_bundle)
+
+                                    seen_sources = set()
+                                    for node_with_score in retrieval_results[:6]:
+                                        node = node_with_score.node
+                                        metadata = node.metadata or {}
+                                        # Skip transformation nodes
+                                        if metadata.get('node_type') in ('summary', 'insight', 'question'):
+                                            continue
+                                        filename = metadata.get('file_name') or metadata.get('filename') or 'Unknown'
+                                        page = metadata.get('page_label') or metadata.get('page') or metadata.get('page_number')
+                                        source_key = f"{filename}:{page}" if page else filename
+                                        if source_key not in seen_sources:
+                                            seen_sources.add(source_key)
+                                            source_info = {
+                                                'filename': filename,
+                                                'score': float(round(node_with_score.score, 3)) if node_with_score.score else None,
+                                                'snippet': node.text[:200] + '...' if len(node.text) > 200 else node.text
+                                            }
+                                            if page:
+                                                source_info['page'] = page
+                                            pre_extracted_sources.append(source_info)
+                                    logger.info(f"Pre-extracted {len(pre_extracted_sources)} sources from retriever")
+                        except Exception as e:
+                            logger.warning(f"Could not pre-extract sources: {e}")
+
                     # Choose query method based on selection
                     if selected_notebooks:
                         # NOTEBOOK MODE: Use simple query() method for direct Q&A with notebook documents
-                        # Set engine with notebook filter before querying
-                        # force_reset=True ensures fresh document load (respects active toggle)
-                        # while preserving session chat history in engine memory
-                        self._pipeline.set_engine(offering_filter=selected_notebooks, force_reset=True)
+                        # Engine already set during source extraction above
+                        # force_reset=False since we already set it
+                        if not hasattr(self._pipeline, '_engine') or self._pipeline._engine is None:
+                            self._pipeline.set_engine(offering_filter=selected_notebooks, force_reset=True)
                         rag_response = self._pipeline.query(
                             mode=mode,
                             message=message,
@@ -667,59 +720,11 @@ Output ONLY valid JSON, nothing else."""
                         for token in document_context:
                             yield f"data: {json.dumps({'token': token})}\n\n"
 
-                        # STEP 6: Extract and send source citations
-                        sources = []
-                        try:
-                            source_nodes = getattr(rag_response, 'source_nodes', [])
-                            if source_nodes:
-                                seen_sources = set()  # Deduplicate sources
-                                for node in source_nodes:
-                                    # Extract metadata from the node
-                                    metadata = getattr(node.node, 'metadata', {}) if hasattr(node, 'node') else {}
-
-                                    # Skip transformation nodes - they help retrieval but shouldn't appear as sources
-                                    node_type = metadata.get('node_type', 'chunk')
-                                    if node_type in ('summary', 'insight', 'question'):
-                                        continue
-
-                                    # Get filename from various possible metadata keys
-                                    filename = (
-                                        metadata.get('file_name') or
-                                        metadata.get('filename') or
-                                        metadata.get('source') or
-                                        metadata.get('document_title') or
-                                        'Unknown source'
-                                    )
-
-                                    # Get page number if available
-                                    page = metadata.get('page_label') or metadata.get('page') or metadata.get('page_number')
-
-                                    # Get relevance score
-                                    score = getattr(node, 'score', None)
-
-                                    # Create a unique key for deduplication
-                                    source_key = f"{filename}:{page}" if page else filename
-
-                                    if source_key not in seen_sources:
-                                        seen_sources.add(source_key)
-                                        source_info = {
-                                            'filename': filename,
-                                            # Convert numpy float32 to Python float for JSON serialization
-                                            'score': float(round(score, 3)) if score is not None else None
-                                        }
-                                        if page:
-                                            source_info['page'] = page
-
-                                        # Include a text snippet for context
-                                        text_content = getattr(node.node, 'text', '') if hasattr(node, 'node') else ''
-                                        if text_content:
-                                            source_info['snippet'] = text_content[:200] + '...' if len(text_content) > 200 else text_content
-
-                                        sources.append(source_info)
-
-                                logger.info(f"Found {len(sources)} unique sources for response")
-                        except Exception as src_err:
-                            logger.warning(f"Error extracting sources: {src_err}")
+                        # STEP 6: Use pre-extracted sources (extracted before streaming)
+                        # Note: source_nodes from rag_response is empty after streaming completes
+                        # So we use pre_extracted_sources which were retrieved BEFORE the chat
+                        sources = pre_extracted_sources
+                        logger.info(f"Using {len(sources)} pre-extracted sources for response")
 
                         # Store in session memory for cross-request persistence
                         if notebook_id:

@@ -25,13 +25,13 @@ docker compose logs -f        # Follow logs
 cd frontend
 npm install
 npm run dev                   # Dev server on :3000 (proxies to Flask :7860)
-npm run build                 # Production build (tsc + vite)
+npm run build                 # Production build (tsc -b && vite build)
 npm run lint                  # ESLint
-npm run typecheck             # TypeScript check (tsc -b)
+npm run preview               # Preview production build
 
-# Database migrations (Alembic)
-alembic upgrade head          # Apply migrations
-alembic revision --autogenerate -m "description"  # Create migration
+# Database migrations (Alembic) - run inside container or with PYTHONPATH
+docker compose exec dbnotebook alembic upgrade head
+docker compose exec dbnotebook alembic revision --autogenerate -m "description"
 
 # Tests
 pytest                        # All tests
@@ -129,11 +129,15 @@ Tree building flow: Document chunks (level 0) → Cluster by similarity → Summ
 
 **`dbnotebook/core/sql_chat/`** - Natural language to SQL with multi-database support:
 - `service.py` - SQLChatService: Main orchestrator for SQL chat functionality
-- `connections.py` - Database connection management (PostgreSQL, MySQL, SQLite)
+- `connection.py` - Database connection management (PostgreSQL, MySQL, SQLite)
 - `schema.py` - Schema introspection, caching, and dictionary generation
 - `query_engine.py` - LlamaIndex NLSQLTableQueryEngine integration
 - `query_learner.py` - Learns JOIN patterns from successful queries
+- `few_shot_retriever.py` - RAG-based few-shot example retrieval from Gretel dataset
 - `telemetry.py` - Query metrics and accuracy tracking
+- `intent_classifier.py` - Classifies query intent (aggregation, join, filter, etc.)
+- `confidence_scorer.py` - Confidence scoring for generated SQL
+- `result_validator.py` - Validates SQL results before returning
 
 **SQL Chat API Flow** (`/api/sql-chat/*`):
 1. `POST /connections` - Create database connection with credentials
@@ -147,7 +151,7 @@ Tree building flow: Document chunks (level 0) → Cluster by similarity → Summ
 **Key Features**:
 - Read-only enforcement (prevents destructive queries)
 - Schema fingerprinting for fast change detection
-- Few-shot learning with Gretel dataset (~100K examples)
+- Few-shot learning with Gretel dataset (~100K examples) via vector retrieval
 - Confidence scoring and query validation
 - Automatic notebook creation with schema dictionary for RAG queries
 
@@ -278,8 +282,8 @@ Copy `.env.example` to `.env`. Key variables:
 # Core providers
 LLM_PROVIDER=ollama              # ollama|openai|anthropic|gemini
 LLM_MODEL=llama3.1:latest
-EMBEDDING_PROVIDER=huggingface
-EMBEDDING_MODEL=nomic-ai/nomic-embed-text-v1.5
+EMBEDDING_PROVIDER=openai        # openai|huggingface
+EMBEDDING_MODEL=text-embedding-3-small
 RETRIEVAL_STRATEGY=hybrid        # hybrid|semantic|keyword
 
 # Database
@@ -289,6 +293,9 @@ POSTGRES_HOST=localhost
 POSTGRES_PORT=5433
 POSTGRES_DB=dbnotebook_dev
 
+# pgvector embedding dimension (must match embedding model)
+PGVECTOR_EMBED_DIM=1536          # 1536 for OpenAI, 768 for nomic
+
 # Context Window
 CONTEXT_WINDOW=128000            # Model context window (llama3.1 supports 128K)
 CHAT_TOKEN_LIMIT=32000           # Chat memory buffer limit
@@ -296,17 +303,16 @@ CHAT_TOKEN_LIMIT=32000           # Chat memory buffer limit
 # Vision & Image Generation
 VISION_PROVIDER=gemini           # gemini|openai
 IMAGE_GENERATION_PROVIDER=gemini
-GEMINI_IMAGE_MODEL=imagen-4.0-generate-001
+GEMINI_IMAGE_MODEL=gemini-3-pro-image-preview  # or imagen-4.0-generate-001
 
 # Web Search (optional)
 FIRECRAWL_API_KEY=...           # Required for web search
 JINA_API_KEY=...                # Optional (higher rate limits)
 
-# Contextual Retrieval (optional, enriches chunks with LLM context)
-CONTEXTUAL_RETRIEVAL_ENABLED=false
-
 # SQL Chat (optional)
 SQL_CHAT_SKIP_READONLY_CHECK=false  # Set true for dev/testing only
+SQL_CHAT_ENCRYPTION_KEY=...     # Fernet key for stored credentials
+FEW_SHOT_MAX_EXAMPLES=100000    # Max examples for SQL generation
 ```
 
 ## Frontend
@@ -322,10 +328,11 @@ Located in `/frontend/`:
 
 - Flask: http://localhost:7860
 - Frontend dev: http://localhost:3000
-- PostgreSQL: localhost:5433 (Docker) or 5432 (local)
+- PostgreSQL: localhost:5433 (Docker maps to internal 5432)
 - Chunk size: 512 tokens, overlap: 32
 - Similarity top-k: 20, rerank top-k: 6
-- Embedding dimension: 768 (nomic) or 1536 (OpenAI)
+- Embedding dimension: 1536 (OpenAI text-embedding-3-small) or 768 (nomic)
+- Reranker: `mixedbread-ai/mxbai-rerank-large-v1`
 
 ## Document Processing Pipeline
 
@@ -376,12 +383,13 @@ class MyService(BaseService):
 ## Debugging Tips
 
 - **Chat not retrieving**: Check `_current_notebook_id` is set in pipeline
-- **Embeddings failing**: Verify `EMBEDDING_MODEL` and vector dimension match
+- **Embeddings failing**: Verify `EMBEDDING_MODEL` and `PGVECTOR_EMBED_DIM` match (1536 for OpenAI, 768 for nomic)
 - **RAPTOR tree not building**: Check `raptor_status` in `notebook_sources` table
 - **Frontend proxy issues**: Ensure Flask running on :7860 before `npm run dev`
 - **Migration conflicts**: Run `alembic heads` to check for multiple heads
-- **LLM connection issues**: Check `OLLAMA_HOST` (default: localhost:11434)
+- **LLM connection issues**: Check `OLLAMA_HOST` (default: localhost:11434, Docker uses host.docker.internal)
 - **Context overflow**: Reduce `CHAT_TOKEN_LIMIT` or increase `CONTEXT_WINDOW`
-- **SQL Chat connection fails**: Verify database credentials, check read-only enforcement
+- **SQL Chat connection fails**: Verify database credentials, check read-only enforcement, ensure `SQL_CHAT_SKIP_READONLY_CHECK` if needed
 - **Docker backend changes not reflected**: Check volume mount in docker-compose.yml (`./dbnotebook:/app/dbnotebook`)
-- **Frontend build issues**: Run `npm run typecheck` to see TypeScript errors before `npm run build`
+- **Frontend build issues**: Run `npm run lint` and check TypeScript errors (build runs `tsc -b` first)
+- **Model detection**: Check `LocalRAGModel` in `core/model/model.py` for supported model names per provider

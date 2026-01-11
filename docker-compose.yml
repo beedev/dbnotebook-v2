@@ -8,13 +8,13 @@ services:
     env_file:
       - .env
     environment:
-      # Docker-specific overrides (these take precedence over .env)
-      - DATABASE_URL=postgresql://dbnotebook:dbnotebook@postgres:5432/dbnotebook_dev
+      # Docker-specific overrides (uses .env values with defaults)
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-dbnotebook}:${POSTGRES_PASSWORD:-dbnotebook}@postgres:5432/${POSTGRES_DB:-dbnotebook_dev}
       - POSTGRES_HOST=postgres
       - POSTGRES_PORT=5432
-      - POSTGRES_DB=dbnotebook_dev
-      - POSTGRES_USER=dbnotebook
-      - POSTGRES_PASSWORD=dbnotebook
+      - POSTGRES_DB=${POSTGRES_DB:-dbnotebook_dev}
+      - POSTGRES_USER=${POSTGRES_USER:-dbnotebook}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-dbnotebook}
       - OLLAMA_HOST=host.docker.internal
       # SQL Chat dev mode - skip read-only check for testing
       - SQL_CHAT_SKIP_READONLY_CHECK=true
@@ -46,9 +46,9 @@ services:
     ports:
       - "5433:5432"
     environment:
-      POSTGRES_USER: dbnotebook
-      POSTGRES_PASSWORD: dbnotebook
-      POSTGRES_DB: dbnotebook_dev
+      POSTGRES_USER: ${POSTGRES_USER:-dbnotebook}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-dbnotebook}
+      POSTGRES_DB: ${POSTGRES_DB:-dbnotebook_dev}
     command:
       - "postgres"
       - "-c"
@@ -60,7 +60,7 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U dbnotebook -d dbnotebook_dev"]
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
       interval: 5s
       timeout: 5s
       retries: 5

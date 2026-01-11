@@ -30,6 +30,7 @@ providers:
     requires_api_key: true
     env_key: "OPENAI_API_KEY"
     models:
+      # GPT-4 series
       - name: "gpt-4.1"
         display_name: "GPT-4.1"
       - name: "gpt-4o"
@@ -42,21 +43,6 @@ providers:
         display_name: "GPT-4"
       - name: "gpt-3.5-turbo"
         display_name: "GPT-3.5 Turbo"
-
-  anthropic:
-    enabled: true
-    type: api
-    requires_api_key: true
-    env_key: "ANTHROPIC_API_KEY"
-    models:
-      - name: "claude-sonnet-4-20250514"
-        display_name: "Claude Sonnet 4"
-      - name: "claude-3-5-sonnet-20241022"
-        display_name: "Claude 3.5 Sonnet"
-      - name: "claude-3-5-haiku-20241022"
-        display_name: "Claude 3.5 Haiku"
-      - name: "claude-3-opus-20240229"
-        display_name: "Claude 3 Opus"
 
   google:
     enabled: true

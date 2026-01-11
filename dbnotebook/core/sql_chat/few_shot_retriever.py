@@ -63,6 +63,7 @@ class FewShotRetriever:
         self._reranker = None
 
         # Initialize reranker if enabled
+        # Note: FewShotRetriever needs its own instance because it mutates top_n per-query
         if self._rag_config["enabled"] and self._rag_config["use_reranker"]:
             try:
                 from llama_index.core.postprocessor import SentenceTransformerRerank

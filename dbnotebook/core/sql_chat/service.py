@@ -80,7 +80,10 @@ class SQLChatService(BaseService):
         """
         super().__init__(pipeline, db_manager, notebook_manager)
 
-        # Get LLM and embedding model
+        # Store pipeline for dynamic LLM access
+        self._pipeline = pipeline
+
+        # Get LLM and embedding model (will be refreshed before each query)
         self._llm = llm or pipeline.get_llm()
         self._embed_model = embed_model or pipeline.get_embed_model()
 
@@ -129,6 +132,22 @@ class SQLChatService(BaseService):
         self._dictionary_threads: Dict[str, threading.Thread] = {}
 
         logger.info("SQLChatService initialized with enhanced components")
+
+    def _refresh_llm(self) -> None:
+        """Refresh LLM from pipeline to pick up model changes from UI."""
+        current_llm = self._pipeline.get_llm()
+        if current_llm != self._llm:
+            self._llm = current_llm
+            # Update components that use LLM
+            self._response_generator = ResponseGenerator(self._llm)
+            self._query_engine = TextToSQLEngine(
+                llm=self._llm,
+                embed_model=self._embed_model,
+                validator=self._validator,
+                few_shot_retriever=self._few_shot_retriever
+            )
+            self._query_decomposer = QueryDecomposer(self._llm)
+            logger.info(f"SQL Chat LLM refreshed to: {getattr(self._llm, 'model', 'unknown')}")
 
     # ========== Connection Management ==========
 
@@ -430,6 +449,9 @@ class SQLChatService(BaseService):
         Returns:
             QueryResult
         """
+        # Refresh LLM to pick up any model changes from UI
+        self._refresh_llm()
+
         session = self._sessions.get(session_id)
         if not session:
             return QueryResult(

@@ -16,6 +16,7 @@ from typing import List, Optional, Dict, Any, Callable, Tuple
 
 from llama_index.core import VectorStoreIndex, StorageContext
 from llama_index.core.schema import BaseNode, TextNode
+from llama_index.core.vector_stores import VectorStoreQuery, MetadataFilters, MetadataFilter
 from llama_index.vector_stores.postgres import PGVectorStore as LlamaPGVectorStore
 from dotenv import load_dotenv
 from sqlalchemy import create_engine, text
@@ -321,18 +322,30 @@ class PGVectorStore(IVectorStore):
         Args:
             query_embedding: Query vector embedding
             similarity_top_k: Maximum number of results to return
-            filters: Optional metadata filters to apply
+            filters: Optional metadata filters to apply (e.g., {"notebook_id": "..."})
 
         Returns:
             List of (node, similarity_score) tuples, sorted by relevance
         """
         try:
-            # Use LlamaIndex's built-in query method
-            results = self._vector_store.query(
+            # Convert dict filters to LlamaIndex MetadataFilters if provided
+            metadata_filters = None
+            if filters:
+                filter_list = [
+                    MetadataFilter(key=k, value=v)
+                    for k, v in filters.items()
+                ]
+                metadata_filters = MetadataFilters(filters=filter_list)
+
+            # Create VectorStoreQuery object (required by LlamaIndex PGVectorStore)
+            vs_query = VectorStoreQuery(
                 query_embedding=query_embedding,
                 similarity_top_k=similarity_top_k,
-                filters=filters
+                filters=metadata_filters,
             )
+
+            # Use LlamaIndex's built-in query method
+            results = self._vector_store.query(vs_query)
 
             # Convert to expected format
             return [(node, score) for node, score in zip(results.nodes, results.similarities)]

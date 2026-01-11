@@ -20,14 +20,27 @@ class LocalRAGModel:
     """Manages LLM model initialization and caching."""
 
     OPENAI_MODELS = {
+        # GPT-3.5 and GPT-4 models
         "gpt-3.5-turbo", "gpt-4", "gpt-4-turbo", "gpt-4o", "gpt-4.1",
         "gpt-4o-mini", "gpt-4-turbo-preview",
         "gpt-4-0125-preview", "gpt-4-1106-preview",  # GPT-4 Turbo versions
         "gpt-4o-2024-11-20", "gpt-4o-2024-08-06",     # GPT-4o versions
-        "o1", "o1-mini", "o1-preview"                  # O1 reasoning models
+        # GPT-5 models (400K context)
+        "gpt-5", "gpt-5-mini", "gpt-5-nano", "gpt-5-pro",
+        "gpt-5.1", "gpt-5.1-chat-latest",
+        "gpt-5.2", "gpt-5.2-pro",
+        # O-series reasoning models
+        "o1", "o1-mini", "o1-preview",
+        "o3", "o3-mini", "o4-mini"
     }
-    CLAUDE_MODELS = {"claude-3-5-sonnet-20241022", "claude-3-5-haiku-20241022", "claude-3-opus-20240229"}
-    GEMINI_MODELS = {"gemini-3-pro-preview", "gemini-2.0-flash-exp", "gemini-1.5-pro", "gemini-1.5-flash"}
+    CLAUDE_MODELS = {
+        "claude-sonnet-4-20250514", "claude-3-5-sonnet-20241022",
+        "claude-3-5-haiku-20241022", "claude-3-opus-20240229"
+    }
+    GEMINI_MODELS = {
+        "gemini-3-pro-preview", "gemini-2.5-pro", "gemini-2.5-flash",
+        "gemini-2.0-flash-exp", "gemini-1.5-pro", "gemini-1.5-flash"
+    }
 
     @staticmethod
     def set(

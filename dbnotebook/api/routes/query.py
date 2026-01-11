@@ -56,11 +56,18 @@ def create_query_routes(app, pipeline, db_manager, notebook_manager):
             {
                 "notebook_id": "uuid",           # Required
                 "query": "string",               # Required
+                "model": "gpt-4.1",              # Optional, default: uses pipeline default
                 "mode": "chat|QA",               # Optional, default: "chat"
                 "include_sources": true,         # Optional, default: true
                 "max_sources": 6,                # Optional, default: 6
                 "session_id": "uuid"             # Optional, for conversation continuity
             }
+
+        Supported models:
+            - OpenAI: gpt-4.1, gpt-4o, gpt-4o-mini, gpt-4-turbo, gpt-4, gpt-3.5-turbo
+            - Anthropic: claude-sonnet-4-20250514, claude-3-5-sonnet-20241022
+            - Google: gemini-2.5-pro, gemini-2.5-flash, gemini-1.5-pro
+            - Ollama: llama3.1:latest, or any model running on your Ollama server
 
         Response JSON:
             {
@@ -102,11 +109,12 @@ def create_query_routes(app, pipeline, db_manager, notebook_manager):
                 }), 400
 
             # Optional parameters
+            model = data.get("model")  # None means use pipeline default
             mode = data.get("mode", "chat")
             include_sources = data.get("include_sources", True)
             max_sources = min(data.get("max_sources", 6), 20)  # Cap at 20
 
-            logger.info(f"API query: notebook_id={notebook_id}, mode={mode}, include_sources={include_sources}")
+            logger.info(f"API query: notebook_id={notebook_id}, model={model or 'default'}, mode={mode}, include_sources={include_sources}")
 
             # Verify notebook exists
             notebook = notebook_manager.get_notebook(notebook_id)
@@ -118,6 +126,10 @@ def create_query_routes(app, pipeline, db_manager, notebook_manager):
 
             # Configure pipeline for this notebook (uses caching internally)
             pipeline.set_language(pipeline._language)
+
+            # Set model if specified, otherwise use pipeline default
+            if model:
+                pipeline.set_model_name(model)
             pipeline.set_model()
             pipeline.set_engine(offering_filter=[notebook_id], force_reset=False)
 

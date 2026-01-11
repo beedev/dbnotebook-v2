@@ -13,7 +13,7 @@ from llama_index.core.retrievers import (
 )
 from llama_index.core.callbacks.base import CallbackManager
 from llama_index.core.retrievers.fusion_retriever import FUSION_MODES
-from llama_index.core.postprocessor import SentenceTransformerRerank
+from dbnotebook.core.providers.reranker_provider import get_shared_reranker
 from llama_index.core.tools import RetrieverTool
 from llama_index.core.selectors import LLMSingleSelector
 from llama_index.core.schema import BaseNode, NodeWithScore, QueryBundle, IndexNode
@@ -101,11 +101,11 @@ class TwoStageRetriever(QueryFusionRetriever):
             use_async, verbose, callback_manager, objects, object_map, retriever_weights
         )
         self._setting = setting or get_settings()
-        self._rerank_model = SentenceTransformerRerank(
-            top_n=self._setting.retriever.top_k_rerank,
+        self._rerank_model = get_shared_reranker(
             model=self._setting.retriever.rerank_llm,
+            top_n=self._setting.retriever.top_k_rerank
         )
-        logger.debug(f"TwoStageRetriever initialized with rerank model: {self._setting.retriever.rerank_llm}")
+        logger.debug(f"TwoStageRetriever using shared rerank model: {self._setting.retriever.rerank_llm}")
 
     def _retrieve(self, query_bundle: QueryBundle) -> List[NodeWithScore]:
         queries: List[QueryBundle] = [query_bundle]
