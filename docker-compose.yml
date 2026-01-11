@@ -18,6 +18,8 @@ services:
       - OLLAMA_HOST=host.docker.internal
       # SQL Chat dev mode - skip read-only check for testing
       - SQL_CHAT_SKIP_READONLY_CHECK=true
+      # API Key for authentication (optional - enables X-API-Key header requirement)
+      - API_KEY=dbnotebook-secure-api-key-2026
     depends_on:
       postgres:
         condition: service_healthy

@@ -1,5 +1,6 @@
 import logging
 import os
+import threading
 import time
 from typing import Optional, Dict, Tuple, List
 
@@ -71,6 +72,7 @@ class LocalRAGPipeline:
         # Cache format: {notebook_id: (nodes, timestamp, node_count)}
         self._node_cache: Dict[str, Tuple[List[TextNode], float, int]] = {}
         self._node_cache_ttl = 300  # 5 minutes TTL
+        self._node_cache_lock = threading.Lock()  # Thread-safe cache access for multi-user
 
         # Sales mode components (optional, disabled by default)
         # These are legacy components for sales enablement features that are not currently implemented
@@ -259,52 +261,57 @@ class LocalRAGPipeline:
         - TTL expires (5 minutes)
         - Node count changes (document added/removed)
 
+        Thread-safe for multi-user concurrent access.
+
         Args:
             notebook_id: UUID of the notebook
 
         Returns:
             List of TextNode objects for the notebook
         """
-        current_time = time.time()
+        with self._node_cache_lock:
+            current_time = time.time()
 
-        # Check cache
-        if notebook_id in self._node_cache:
-            nodes, timestamp, cached_count = self._node_cache[notebook_id]
+            # Check cache
+            if notebook_id in self._node_cache:
+                nodes, timestamp, cached_count = self._node_cache[notebook_id]
 
-            # Check TTL
-            if current_time - timestamp < self._node_cache_ttl:
-                logger.debug(f"Cache hit for notebook {notebook_id}: {len(nodes)} nodes")
-                return nodes
-            else:
-                logger.debug(f"Cache expired for notebook {notebook_id}")
+                # Check TTL
+                if current_time - timestamp < self._node_cache_ttl:
+                    logger.debug(f"Cache hit for notebook {notebook_id}: {len(nodes)} nodes")
+                    return nodes
+                else:
+                    logger.debug(f"Cache expired for notebook {notebook_id}")
 
-        # Cache miss - load from DB
-        start_time = time.time()
-        nodes = self._vector_store.get_nodes_by_notebook_sql(notebook_id)
-        load_time_ms = int((time.time() - start_time) * 1000)
+            # Cache miss - load from DB
+            start_time = time.time()
+            nodes = self._vector_store.get_nodes_by_notebook_sql(notebook_id)
+            load_time_ms = int((time.time() - start_time) * 1000)
 
-        # Store in cache
-        self._node_cache[notebook_id] = (nodes, current_time, len(nodes))
-        logger.info(f"Cached {len(nodes)} nodes for notebook {notebook_id} (loaded in {load_time_ms}ms)")
+            # Store in cache
+            self._node_cache[notebook_id] = (nodes, current_time, len(nodes))
+            logger.info(f"Cached {len(nodes)} nodes for notebook {notebook_id} (loaded in {load_time_ms}ms)")
 
-        return nodes
+            return nodes
 
     def invalidate_node_cache(self, notebook_id: Optional[str] = None) -> None:
         """
         Invalidate node cache for a notebook or all notebooks.
 
         Call this after document upload/delete to ensure fresh nodes.
+        Thread-safe for multi-user concurrent access.
 
         Args:
             notebook_id: Specific notebook to invalidate, or None for all
         """
-        if notebook_id:
-            if notebook_id in self._node_cache:
-                del self._node_cache[notebook_id]
-                logger.debug(f"Invalidated node cache for notebook {notebook_id}")
-        else:
-            self._node_cache.clear()
-            logger.debug("Invalidated all node caches")
+        with self._node_cache_lock:
+            if notebook_id:
+                if notebook_id in self._node_cache:
+                    del self._node_cache[notebook_id]
+                    logger.debug(f"Invalidated node cache for notebook {notebook_id}")
+            else:
+                self._node_cache.clear()
+                logger.debug("Invalidated all node caches")
 
     def set_model_name(self, model_name: str) -> None:
         self._model_name = model_name

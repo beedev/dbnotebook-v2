@@ -1,0 +1,353 @@
+openapi: 3.0.3
+info:
+  title: DBNotebook RAG Query API
+  description: |
+    Multi-user safe programmatic API for RAG (Retrieval-Augmented Generation) queries.
+
+    This API allows you to query documents stored in notebooks using natural language.
+    The system retrieves relevant document chunks and generates AI-powered responses.
+
+    ## Features
+    - **Multi-user safe**: Thread-safe for concurrent requests
+    - **Stateless**: No session state, each request is independent
+    - **Document isolation**: Each notebook's documents are isolated
+    - **Source attribution**: Responses include source documents with relevance scores
+
+    ## Authentication
+    Optional API key authentication via `X-API-Key` header.
+    Set the `API_KEY` environment variable to enable authentication.
+
+  version: 1.0.0
+  contact:
+    name: DBNotebook Support
+  license:
+    name: Apache 2.0
+    url: https://www.apache.org/licenses/LICENSE-2.0
+
+servers:
+  - url: http://localhost:7860
+    description: Local development server
+  - url: https://your-domain.com
+    description: Production server
+
+tags:
+  - name: Query
+    description: RAG query operations
+  - name: Notebooks
+    description: Notebook management
+
+paths:
+  /api/query:
+    post:
+      tags:
+        - Query
+      summary: Execute RAG query
+      description: |
+        Execute a natural language query against documents in a specific notebook.
+
+        The system will:
+        1. Retrieve relevant document chunks using hybrid search (BM25 + vector)
+        2. Build context from the top matching chunks
+        3. Generate a response using the configured LLM
+        4. Return the response with source attribution
+
+      operationId: executeQuery
+      security:
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/QueryRequest'
+            examples:
+              simple:
+                summary: Simple query
+                value:
+                  notebook_id: "990b1f11-fb85-4c7c-ab49-f44d0caaab7d"
+                  query: "What is the main topic of these documents?"
+              sales_pitch:
+                summary: Sales pitch generation
+                value:
+                  notebook_id: "990b1f11-fb85-4c7c-ab49-f44d0caaab7d"
+                  query: "Create a sales pitch for digital offerings to the Retail industry"
+                  max_sources: 5
+              no_sources:
+                summary: Query without sources
+                value:
+                  notebook_id: "990b1f11-fb85-4c7c-ab49-f44d0caaab7d"
+                  query: "Summarize the key points"
+                  include_sources: false
+      responses:
+        '200':
+          description: Successful query response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QueryResponse'
+              examples:
+                success:
+                  summary: Successful response
+                  value:
+                    success: true
+                    response: "The main topic is digital transformation and automation solutions for enterprises..."
+                    sources:
+                      - document: "Automation.md"
+                        excerpt: "The MODERNIZE offering is a comprehensive solution..."
+                        score: 0.492
+                      - document: "AIDigitalEngineering.md"
+                        excerpt: "AI-enabled digital engineering combines..."
+                        score: 0.385
+                    metadata:
+                      execution_time_ms: 3500
+                      model: "gpt-4.1"
+                      retrieval_strategy: "hybrid"
+                      node_count: 77
+        '400':
+          description: Bad request - missing required fields
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                missing_notebook:
+                  value:
+                    success: false
+                    error: "notebook_id is required"
+                missing_query:
+                  value:
+                    success: false
+                    error: "query is required"
+        '401':
+          description: Unauthorized - invalid or missing API key
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                success: false
+                error: "Invalid or missing API key"
+        '404':
+          description: Notebook not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                success: false
+                error: "Notebook not found: 990b1f11-fb85-4c7c-ab49-f44d0caaab7d"
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                success: false
+                error: "Internal server error"
+        '503':
+          description: Service unavailable - pipeline not initialized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                success: false
+                error: "Pipeline not initialized. Please try again."
+
+  /api/query/notebooks:
+    get:
+      tags:
+        - Notebooks
+      summary: List available notebooks
+      description: |
+        Retrieve a list of all notebooks available for querying.
+        Each notebook contains a collection of documents that can be queried.
+      operationId: listNotebooks
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - name: user_id
+          in: query
+          description: User ID to filter notebooks (optional, defaults to system user)
+          required: false
+          schema:
+            type: string
+            format: uuid
+            example: "00000000-0000-0000-0000-000000000001"
+      responses:
+        '200':
+          description: List of notebooks
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NotebooksResponse'
+              example:
+                success: true
+                notebooks:
+                  - id: "990b1f11-fb85-4c7c-ab49-f44d0caaab7d"
+                    name: "Digital"
+                    document_count: 4
+                    created_at: "2026-01-11T09:01:17.738829"
+                  - id: "f4eb5943-6ae9-44c4-99f1-e61fc2c483da"
+                    name: "Daaji"
+                    document_count: 1
+                    created_at: "2026-01-11T09:01:45.393501"
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: |
+        API key for authentication (optional).
+        Only required if the `API_KEY` environment variable is set on the server.
+
+  schemas:
+    QueryRequest:
+      type: object
+      required:
+        - notebook_id
+        - query
+      properties:
+        notebook_id:
+          type: string
+          format: uuid
+          description: UUID of the notebook to query
+          example: "990b1f11-fb85-4c7c-ab49-f44d0caaab7d"
+        query:
+          type: string
+          description: Natural language query
+          minLength: 1
+          maxLength: 10000
+          example: "What are the key features of the digital offering?"
+        mode:
+          type: string
+          enum: [chat, QA]
+          default: chat
+          description: Query mode (kept for API compatibility, currently ignored)
+        include_sources:
+          type: boolean
+          default: true
+          description: Whether to include source documents in response
+        max_sources:
+          type: integer
+          minimum: 1
+          maximum: 20
+          default: 6
+          description: Maximum number of source documents to return
+
+    QueryResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          description: Whether the query was successful
+          example: true
+        response:
+          type: string
+          description: Generated response from the LLM
+          example: "Based on the documents, the main features include..."
+        sources:
+          type: array
+          description: Source documents used to generate the response
+          items:
+            $ref: '#/components/schemas/Source'
+        metadata:
+          $ref: '#/components/schemas/QueryMetadata'
+
+    Source:
+      type: object
+      properties:
+        document:
+          type: string
+          description: Name of the source document
+          example: "Automation.md"
+        excerpt:
+          type: string
+          description: Relevant excerpt from the document (max 200 chars)
+          example: "The MODERNIZE offering is a comprehensive solution..."
+        score:
+          type: number
+          format: float
+          minimum: 0
+          maximum: 1
+          description: Relevance score (higher is more relevant)
+          example: 0.492
+
+    QueryMetadata:
+      type: object
+      properties:
+        execution_time_ms:
+          type: integer
+          description: Total execution time in milliseconds
+          example: 3500
+        model:
+          type: string
+          description: LLM model used for generation
+          example: "gpt-4.1"
+        retrieval_strategy:
+          type: string
+          description: Retrieval strategy used
+          example: "hybrid"
+        node_count:
+          type: integer
+          description: Number of document chunks in the notebook
+          example: 77
+
+    NotebooksResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        notebooks:
+          type: array
+          items:
+            $ref: '#/components/schemas/Notebook'
+
+    Notebook:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Unique notebook identifier
+          example: "990b1f11-fb85-4c7c-ab49-f44d0caaab7d"
+        name:
+          type: string
+          description: Notebook name
+          example: "Digital"
+        document_count:
+          type: integer
+          description: Number of documents in the notebook
+          example: 4
+        created_at:
+          type: string
+          format: date-time
+          description: Creation timestamp
+          example: "2026-01-11T09:01:17.738829"
+
+    ErrorResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: false
+        error:
+          type: string
+          description: Error message
+          example: "notebook_id is required"
