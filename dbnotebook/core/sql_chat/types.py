@@ -167,6 +167,7 @@ class QueryResult:
     retry_count: int = 0
     explanation: Optional[str] = None  # Natural language explanation of results
     validation_warnings: Optional[List[Dict[str, str]]] = None  # Result validation warnings
+    timings: Optional[Dict[str, int]] = None  # Per-stage timing breakdown
 
 
 @dataclass

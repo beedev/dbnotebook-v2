@@ -3,6 +3,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { User, Bot, Copy, Check, ChevronDown, ChevronUp } from 'lucide-react';
 import type { Message, SourceCitation } from '../../types';
+import { TimingBreakdown, RAG_CHAT_STAGES } from '../shared/TimingBreakdown';
 
 interface MessageBubbleProps {
   message: Message;
@@ -209,6 +210,18 @@ export const MessageBubble = memo(function MessageBubble({
         {/* Source citations */}
         {!isUser && message.sources && message.sources.length > 0 && !message.isStreaming && (
           <SourceCitations sources={message.sources} />
+        )}
+
+        {/* Performance timings */}
+        {!isUser && message.metadata?.timings && Object.keys(message.metadata.timings).length > 0 && !message.isStreaming && (
+          <div className="mt-4">
+            <TimingBreakdown
+              totalTimeMs={message.metadata.execution_time_ms || 0}
+              timings={message.metadata.timings}
+              stages={RAG_CHAT_STAGES}
+              title="Performance Timings"
+            />
+          </div>
         )}
 
         {/* Streaming indicator */}

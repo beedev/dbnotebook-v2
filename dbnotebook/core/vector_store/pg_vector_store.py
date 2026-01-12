@@ -1576,6 +1576,81 @@ class PGVectorStore(IVectorStore):
 
         return nodes
 
+    def get_top_raptor_summaries(
+        self,
+        notebook_id: str,
+        query_embedding: List[float],
+        top_k: int = 5,
+    ) -> List[Tuple[BaseNode, float]]:
+        """
+        Single ANN lookup for RAPTOR cluster summaries (tree_level >= 1).
+
+        O(log n) using pgvector HNSW index with metadata filtering.
+        Bounded by top_k (default 5) to prevent context bloat.
+
+        Args:
+            notebook_id: Notebook UUID to filter by
+            query_embedding: Query vector for similarity search
+            top_k: Maximum summaries to return (default: 5)
+
+        Returns:
+            List of (node, similarity_score) tuples, sorted by relevance
+        """
+        try:
+            session = self._session_factory()
+            try:
+                # Format embedding as pgvector-compatible array string
+                # pgvector expects format: '[0.1, 0.2, ...]'
+                embedding_str = '[' + ','.join(str(x) for x in query_embedding) + ']'
+
+                # Use pgvector's <=> cosine distance operator
+                # Filter for tree_level >= 1 (summaries only)
+                result = session.execute(
+                    text(f"""
+                        SELECT id, text, metadata_, embedding,
+                               1 - (embedding <=> '{embedding_str}'::vector) as similarity
+                        FROM {self._actual_table_name}
+                        WHERE metadata_->>'notebook_id' = :notebook_id
+                        AND (metadata_->>'tree_level')::int >= 1
+                        ORDER BY embedding <=> '{embedding_str}'::vector
+                        LIMIT :top_k
+                    """),
+                    {
+                        "notebook_id": notebook_id,
+                        "top_k": top_k
+                    }
+                )
+                rows = result.fetchall()
+
+                if not rows:
+                    return []
+
+                # Convert to (node, score) tuples
+                results = []
+                for row in rows:
+                    node_id, text_content, metadata, embedding, similarity = row
+
+                    if isinstance(metadata, str):
+                        import json
+                        metadata = json.loads(metadata)
+
+                    node = TextNode(
+                        id_=str(node_id),
+                        text=text_content or "",
+                        metadata=metadata or {},
+                    )
+                    results.append((node, float(similarity)))
+
+                logger.debug(f"Retrieved {len(results)} RAPTOR summaries for notebook {notebook_id}")
+                return results
+
+            finally:
+                session.close()
+
+        except Exception as e:
+            logger.warning(f"RAPTOR summary retrieval failed: {e}")
+            return []  # Graceful fallback - continue without summaries
+
     def __del__(self):
         """Clean up resources on deletion."""
         if self._owns_pool and hasattr(self, '_engine'):

@@ -9,7 +9,6 @@ from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, List, Optional
 
-import pymupdf
 from llama_index.core import Document, Settings
 from llama_index.core.schema import BaseNode, TextNode
 from llama_index.core.node_parser import SentenceSplitter
@@ -99,15 +98,10 @@ class DocumentReader:
             return ""
 
     def _read_pdf_like(self, file_path: str) -> str:
-        """Read PDF, EPUB, or TXT files using pymupdf."""
+        """Read PDF using pymupdf4llm for table-aware markdown extraction."""
         try:
-            document = pymupdf.open(file_path)
-            all_text = []
-            for page in document:
-                page_text = page.get_text("text")
-                all_text.append(page_text)
-            document.close()
-            return " ".join(all_text)
+            import pymupdf4llm
+            return pymupdf4llm.to_markdown(file_path)
         except Exception as e:
             logger.error(f"Error reading {file_path}: {e}")
             return ""

@@ -62,5 +62,5 @@ providers:
         display_name: "Gemini 1.5 Flash"
 
 # Default model to select on startup (optional)
-default_model: "llama3.1:latest"
-default_provider: "ollama"
+default_model: "gpt-4.1"
+default_provider: "openai"

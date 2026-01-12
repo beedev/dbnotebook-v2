@@ -436,6 +436,7 @@ export function SQLChatProvider({ children }: { children: ReactNode }) {
                     errorMessage: data.errorMessage,
                     confidence: data.confidence,
                     explanation: data.explanation,
+                    timings: data.timings,  // Per-stage timing breakdown
                   };
                   setQueryResult(result);
                 } else if (data.type === 'error') {

@@ -6,6 +6,21 @@ export interface SourceCitation {
   snippet?: string;
 }
 
+// Chat message metadata with timing information
+export interface MessageMetadata {
+  execution_time_ms?: number;
+  node_count?: number;
+  model?: string;
+  retrieval_strategy?: string;
+  timings?: Record<string, number>;
+  routing?: {
+    strategy: string;
+    reasoning: string;
+    confidence: number;
+    selected_documents?: string[];
+  };
+}
+
 // Chat types
 export interface Message {
   id: string;
@@ -15,6 +30,7 @@ export interface Message {
   isStreaming?: boolean;
   images?: string[]; // Generated image paths
   sources?: SourceCitation[]; // Document sources/citations
+  metadata?: MessageMetadata; // Performance timings and metadata
 }
 
 export interface ChatSession {

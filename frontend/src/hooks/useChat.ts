@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
-import type { Message, ChatState, SourceCitation, QuerySettings } from '../types';
+import type { Message, ChatState, SourceCitation, QuerySettings, MessageMetadata } from '../types';
 import * as api from '../services/api';
 
 const initialState: ChatState = {
@@ -85,7 +85,7 @@ export function useChat(notebookId?: string, model?: string) {
   }, []);
 
   // Complete the streaming message
-  const completeStreamingMessage = useCallback((images?: string[], sources?: SourceCitation[]) => {
+  const completeStreamingMessage = useCallback((images?: string[], sources?: SourceCitation[], metadata?: MessageMetadata) => {
     setState((prev) => ({
       ...prev,
       isStreaming: false,
@@ -96,6 +96,7 @@ export function useChat(notebookId?: string, model?: string) {
               isStreaming: false,
               images: images || msg.images,
               sources: sources || msg.sources,
+              metadata: metadata || msg.metadata,
             }
           : msg
       ),
@@ -136,10 +137,11 @@ export function useChat(notebookId?: string, model?: string) {
             onToken: (token) => {
               updateStreamingMessage(token);
             },
-            onComplete: (_fullResponse, sources) => {
+            onComplete: (_fullResponse, sources, metadata) => {
               completeStreamingMessage(
                 generatedImages.length > 0 ? generatedImages : undefined,
-                sources
+                sources,
+                metadata
               );
               setState((prev) => ({ ...prev, isLoading: false }));
             },

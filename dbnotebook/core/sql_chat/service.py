@@ -8,6 +8,7 @@ SQL generation, execution, and conversation memory.
 import asyncio
 import logging
 import threading
+import time
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -452,6 +453,9 @@ class SQLChatService(BaseService):
         # Refresh LLM to pick up any model changes from UI
         self._refresh_llm()
 
+        start_time = time.time()
+        timings = {}  # Track per-stage timing
+
         session = self._sessions.get(session_id)
         if not session:
             return QueryResult(
@@ -480,7 +484,9 @@ class SQLChatService(BaseService):
         session.status = "generating"
 
         # Step 1: Validate user input
+        t1 = time.time()
         is_valid, error = self._validator.validate_user_input(nl_query)
+        timings["1_input_validation_ms"] = int((time.time() - t1) * 1000)
         if not is_valid:
             return QueryResult(
                 success=False,
@@ -489,7 +495,8 @@ class SQLChatService(BaseService):
                 columns=[],
                 row_count=0,
                 execution_time_ms=0,
-                error_message=error
+                error_message=error,
+                timings=timings
             )
 
         # Step 2: Check if this is a refinement
@@ -498,12 +505,15 @@ class SQLChatService(BaseService):
             return await self._execute_refinement(session, nl_query, memory)
 
         # Step 3: Classify intent
+        t2 = time.time()
         session.status = "generating"
         intent = self._intent_classifier.classify(nl_query)
+        timings["2_intent_classification_ms"] = int((time.time() - t2) * 1000)
 
         try:
             # Step 3.5: Smart schema caching with fingerprint detection
             # Only refresh if schema has changed (fast ~10ms fingerprint check)
+            t3 = time.time()
             engine = self._connections.get_engine(session.connection_id)
             if engine:
                 if self._schema.has_schema_changed(engine, session.connection_id):
@@ -531,10 +541,13 @@ class SQLChatService(BaseService):
                         columns=[],
                         row_count=0,
                         execution_time_ms=0,
-                        error_message="Failed to initialize query engine. Please try again."
+                        error_message="Failed to initialize query engine. Please try again.",
+                        timings=timings
                     )
+            timings["3_schema_check_ms"] = int((time.time() - t3) * 1000)
 
             # Step 3.6: Schema linking - pre-filter relevant tables
+            t4 = time.time()
             focused_schema = session.schema
             relevant_table_names = []
             if session.schema and len(session.schema.tables) > self._schema_linker._top_k:
@@ -546,23 +559,28 @@ class SQLChatService(BaseService):
                 logger.debug(f"Schema linking: {len(relevant_tables)} tables selected")
             elif session.schema:
                 relevant_table_names = [t.name for t in session.schema.tables]
+            timings["4_schema_linking_ms"] = int((time.time() - t4) * 1000)
 
             # Step 3.7: Retrieve dictionary context for accurate SQL generation
+            t5 = time.time()
             dictionary_context = self._get_dictionary_context(
                 session.connection_id,
                 nl_query,
                 relevant_table_names
             )
+            timings["5_dictionary_context_ms"] = int((time.time() - t5) * 1000)
             if dictionary_context:
                 logger.info("Dictionary context retrieved for SQL generation")
 
             # Step 4: Generate SQL with dictionary context
+            t6 = time.time()
             sql, success, intent = self._query_engine.generate_with_correction(
                 session.connection_id,
                 nl_query,
                 session.schema,
                 dictionary_context=dictionary_context
             )
+            timings["6_sql_generation_ms"] = int((time.time() - t6) * 1000)
 
             if not success:
                 return QueryResult(
@@ -572,17 +590,21 @@ class SQLChatService(BaseService):
                     columns=[],
                     row_count=0,
                     execution_time_ms=0,
-                    error_message="Failed to generate valid SQL"
+                    error_message="Failed to generate valid SQL",
+                    timings=timings
                 )
 
             # Step 5: Estimate cost
+            t7 = time.time()
             session.status = "validating"
             engine = self._connections.get_engine(session.connection_id)
+            cost_estimate = None
             if engine:
                 cost_estimate = self._cost_estimator.estimate(engine, sql)
                 if cost_estimate:
                     is_safe, warning = self._cost_estimator.is_safe(cost_estimate)
                     if not is_safe:
+                        timings["7_cost_estimation_ms"] = int((time.time() - t7) * 1000)
                         return QueryResult(
                             success=False,
                             sql_generated=sql,
@@ -591,10 +613,13 @@ class SQLChatService(BaseService):
                             row_count=0,
                             execution_time_ms=0,
                             error_message=warning,
-                            cost_estimate=cost_estimate
+                            cost_estimate=cost_estimate,
+                            timings=timings
                         )
+            timings["7_cost_estimation_ms"] = int((time.time() - t7) * 1000)
 
             # Step 6: Execute with semantic inspection (pass schema for error correction)
+            t8 = time.time()
             session.status = "executing"
             inspector = SemanticInspector(self._llm)
 
@@ -604,11 +629,14 @@ class SQLChatService(BaseService):
             result, inspection_passed, retry_count = await inspector.execute_with_inspection(
                 nl_query, sql, execute_fn, session.connection_id, schema=session.schema
             )
+            timings["8_sql_execution_ms"] = int((time.time() - t8) * 1000)
 
             # Step 7: Apply data masking
+            t9 = time.time()
             conn = self._connections.get_connection(session.connection_id)
             if conn and conn.masking_policy and result.success:
                 result.data = self._data_masker.apply(result.data, conn.masking_policy)
+            timings["9_data_masking_ms"] = int((time.time() - t9) * 1000)
 
             # Step 7.5: Result validation - sanity checks
             validation_issues = self._result_validator.validate(
@@ -624,6 +652,7 @@ class SQLChatService(BaseService):
                     logger.warning(f"Result validation found errors for query")
 
             # Step 8: Compute confidence
+            t10 = time.time()
             query_terms = self._confidence_scorer.extract_query_terms(nl_query)
             result_columns = [c.name for c in result.columns]
             column_overlap = self._confidence_scorer.compute_column_overlap(query_terms, result_columns)
@@ -641,10 +670,12 @@ class SQLChatService(BaseService):
                 retry_count=retry_count,
                 column_intent_overlap=column_overlap
             )
+            timings["10_confidence_scoring_ms"] = int((time.time() - t10) * 1000)
 
             result.intent = intent
 
             # Step 9: Generate natural language explanation
+            t11 = time.time()
             if result.success:
                 column_names = [c.name for c in result.columns]
                 result.explanation = self._response_generator.generate(
@@ -655,6 +686,11 @@ class SQLChatService(BaseService):
                     row_count=result.row_count,
                     error_message=result.error_message
                 )
+            timings["11_response_generation_ms"] = int((time.time() - t11) * 1000)
+
+            # Set total execution time and timings on result
+            result.execution_time_ms = int((time.time() - start_time) * 1000)
+            result.timings = timings
 
             # Step 10: Log telemetry
             self._telemetry.log_from_result(

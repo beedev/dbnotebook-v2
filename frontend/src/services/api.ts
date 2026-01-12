@@ -324,9 +324,17 @@ export interface SourceCitation {
   snippet?: string;
 }
 
+export interface ChatMetadata {
+  execution_time_ms?: number;
+  timings?: Record<string, number>;
+  node_count?: number;
+  model?: string;
+  retrieval_strategy?: string;
+}
+
 export interface StreamCallbacks {
   onToken: (token: string) => void;
-  onComplete: (fullResponse: string, sources?: SourceCitation[]) => void;
+  onComplete: (fullResponse: string, sources?: SourceCitation[], metadata?: ChatMetadata) => void;
   onError: (error: string) => void;
   onImages?: (images: string[]) => void;
 }
@@ -393,10 +401,11 @@ export async function sendChatMessage(
               callbacks.onImages(parsed.images);
             }
 
-            // Handle done signal with optional sources
+            // Handle done signal with optional sources and metadata
             if (parsed.done) {
               const sources = parsed.sources || [];
-              callbacks.onComplete(fullResponse, sources);
+              const metadata = parsed.metadata || undefined;
+              callbacks.onComplete(fullResponse, sources, metadata);
               return;
             }
 

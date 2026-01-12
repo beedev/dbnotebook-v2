@@ -6,6 +6,7 @@ Includes two-stage LLM document routing for intelligent retrieval:
 """
 
 import logging
+import time
 from flask import Blueprint, request, jsonify
 from llama_index.core.llms import ChatMessage
 from llama_index.core import Settings
@@ -64,6 +65,9 @@ def create_chat_routes(app, pipeline, db_manager=None):
                 "retrieval_strategy": "hybrid"
             }
         """
+        start_time = time.time()
+        timings = {}  # Track per-stage timing
+
         try:
             data = request.json
 
@@ -98,11 +102,13 @@ def create_chat_routes(app, pipeline, db_manager=None):
             if routing_service and notebook_ids and len(notebook_ids) == 1:
                 # Use routing service for single-notebook queries
                 try:
+                    t1 = time.time()
                     notebook_id = notebook_ids[0]
                     routing_result = routing_service.route_query(
                         query=message,
                         notebook_id=notebook_id
                     )
+                    timings["1_routing_analysis_ms"] = int((time.time() - t1) * 1000)
 
                     logger.info(
                         f"Routing decision: strategy={routing_result.strategy.value}, "
@@ -113,6 +119,7 @@ def create_chat_routes(app, pipeline, db_manager=None):
                     # Handle DIRECT_SYNTHESIS - return immediately without retrieval
                     if routing_result.strategy == RoutingStrategy.DIRECT_SYNTHESIS:
                         logger.info("Using DIRECT_SYNTHESIS - returning synthesized response")
+                        execution_time_ms = int((time.time() - start_time) * 1000)
                         return jsonify({
                             "success": True,
                             "response": routing_result.direct_response,
@@ -123,6 +130,10 @@ def create_chat_routes(app, pipeline, db_manager=None):
                                 "strategy": routing_result.strategy.value,
                                 "reasoning": routing_result.reasoning,
                                 "confidence": routing_result.confidence
+                            },
+                            "metadata": {
+                                "execution_time_ms": execution_time_ms,
+                                "timings": timings
                             }
                         })
 
@@ -139,14 +150,17 @@ def create_chat_routes(app, pipeline, db_manager=None):
 
             # Initialize chat engine WITH notebook filter so it uses the right documents
             # This is critical - set_engine() loads nodes from the specified notebooks
+            t2 = time.time()
             if notebook_ids:
                 pipeline.set_engine(offering_filter=notebook_ids, force_reset=True)
                 logger.info(f"Engine configured with notebook filter: {notebook_ids}")
             else:
                 pipeline.set_engine(force_reset=True)
                 logger.info("Engine configured without notebook filter")
+            timings["2_notebook_switch_ms"] = int((time.time() - t2) * 1000)
 
             # Get nodes from cache for source attribution (uses pipeline's node cache)
+            t3 = time.time()
             nodes = []
             if notebook_ids and hasattr(pipeline, '_get_cached_nodes'):
                 for nb_id in notebook_ids:
@@ -166,6 +180,7 @@ def create_chat_routes(app, pipeline, db_manager=None):
                         f"Filtered nodes from {original_count} to {len(nodes)} "
                         f"based on routing selection: {selected_source_ids}"
                     )
+            timings["3_node_cache_ms"] = int((time.time() - t3) * 1000)
 
             # Perform retrieval to get source metadata BEFORE chat response
             sources = []
@@ -174,6 +189,7 @@ def create_chat_routes(app, pipeline, db_manager=None):
             if nodes and notebook_ids:
                 try:
                     # Get retriever configured for these notebooks (uses retriever cache)
+                    t4 = time.time()
                     retriever = pipeline._engine._retriever.get_retrievers(
                         llm=Settings.llm,
                         language="eng",
@@ -182,15 +198,19 @@ def create_chat_routes(app, pipeline, db_manager=None):
                         vector_store=pipeline._vector_store,
                         notebook_id=notebook_ids[0] if len(notebook_ids) == 1 else None  # Cache for single notebook
                     )
+                    timings["4_retriever_creation_ms"] = int((time.time() - t4) * 1000)
 
                     # Retrieve relevant chunks with scores
+                    t5 = time.time()
                     from llama_index.core.schema import QueryBundle
                     query_bundle = QueryBundle(query_str=message)
                     retrieval_results = retriever.retrieve(query_bundle)
+                    timings["5_chunk_retrieval_ms"] = int((time.time() - t5) * 1000)
 
                     logger.info(f"Retrieved {len(retrieval_results)} chunks for source attribution")
 
                     # Format sources from retrieval results
+                    t6 = time.time()
                     for idx, node_with_score in enumerate(retrieval_results[:6], 1):  # Top 6 sources
                         node = node_with_score.node
                         metadata = node.metadata or {}
@@ -210,6 +230,7 @@ def create_chat_routes(app, pipeline, db_manager=None):
                             "notebook_id": metadata.get("notebook_id", ""),
                             "source_id": metadata.get("source_id", "")
                         })
+                    timings["6_source_formatting_ms"] = int((time.time() - t6) * 1000)
 
                     retrieval_strategy = retriever.__class__.__name__.replace("Retriever", "").lower()
 
@@ -241,6 +262,7 @@ def create_chat_routes(app, pipeline, db_manager=None):
                     chatbot_history.append([msg.content, ""])  # [user_msg, assistant_msg]
 
                 # Call pipeline.query() which returns StreamingAgentChatResponse
+                t7 = time.time()
                 streaming_response = pipeline.query(
                     mode=mode,
                     message=message,
@@ -251,16 +273,24 @@ def create_chat_routes(app, pipeline, db_manager=None):
                 response_text = ""
                 for chunk in streaming_response.response_gen:
                     response_text += chunk
+                timings["7_llm_completion_ms"] = int((time.time() - t7) * 1000)
 
                 logger.debug(f"Chat response received: {response_text[:100]}...")
                 logger.info(f"Returning response with {len(sources)} sources")
+
+                execution_time_ms = int((time.time() - start_time) * 1000)
 
                 response_data = {
                     "success": True,
                     "response": response_text,
                     "sources": sources,
                     "notebook_ids": notebook_ids,
-                    "retrieval_strategy": retrieval_strategy
+                    "retrieval_strategy": retrieval_strategy,
+                    "metadata": {
+                        "execution_time_ms": execution_time_ms,
+                        "node_count": len(nodes),
+                        "timings": timings
+                    }
                 }
 
                 # Add routing metadata if routing was used

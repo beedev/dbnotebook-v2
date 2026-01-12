@@ -742,6 +742,10 @@ def execute_query(session_id: str):
         if result.validation_warnings:
             response['result']['validationWarnings'] = result.validation_warnings
 
+        # Add per-stage timings if available
+        if result.timings:
+            response['result']['timings'] = result.timings
+
         return jsonify(response), 200 if result.success else 400
 
     except Exception as e:
@@ -819,6 +823,10 @@ def execute_query_stream(session_id: str):
                 # Add validation warnings if available
                 if result.validation_warnings:
                     response['validationWarnings'] = result.validation_warnings
+
+                # Add per-stage timings if available
+                if result.timings:
+                    response['timings'] = result.timings
 
                 yield f"data: {json.dumps(response, cls=SQLChatJSONEncoder)}\n\n"
 

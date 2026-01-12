@@ -22,6 +22,7 @@ import {
 import type { SQLChatMessage, QueryState } from '../../types/sqlChat';
 import { SQLPreview } from './SQLPreview';
 import { ResultsTable } from './ResultsTable';
+import { TimingBreakdown, SQL_CHAT_STAGES } from '../shared/TimingBreakdown';
 
 interface QueryChatProps {
   messages: SQLChatMessage[];
@@ -184,6 +185,16 @@ export function QueryChat({
                     <ResultsTable
                       result={message.result}
                       onAnalyzeInDashboard={onAnalyzeInDashboard}
+                    />
+                  )}
+
+                  {/* Performance timings */}
+                  {message.result && message.result.timings && (
+                    <TimingBreakdown
+                      totalTimeMs={message.result.executionTimeMs || 0}
+                      timings={message.result.timings}
+                      stages={SQL_CHAT_STAGES}
+                      title="Performance Timings"
                     />
                   )}
                 </div>

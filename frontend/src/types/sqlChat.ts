@@ -135,6 +135,7 @@ export interface QueryResult {
   validationWarnings?: ValidationWarning[];
   errorMessage?: string;
   retryCount?: number;
+  timings?: Record<string, number>;  // Per-stage timing breakdown
 }
 
 // Few-Shot Example

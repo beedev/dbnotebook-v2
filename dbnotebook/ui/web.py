@@ -542,28 +542,41 @@ Output ONLY valid JSON, nothing else."""
 
             # STEP 1: Always query documents first to get context
             def process_request() -> Generator[str, None, None]:
+                import time as timing_module
+                start_time = timing_module.time()
+                timings = {}
+
                 try:
                     # Query RAG pipeline to get relevant document content
                     yield f"data: {json.dumps({'token': ''})}\n\n"
 
                     # Pre-extract sources BEFORE streaming (same pattern as /api/chat)
                     # This is necessary because source_nodes is empty after streaming completes
+                    t1 = timing_module.time()
                     pre_extracted_sources = []
                     if selected_notebooks:
                         try:
                             from llama_index.core.schema import QueryBundle
                             from llama_index.core import Settings
+
+                            # Stage 3: Get cached nodes
+                            t_cache = timing_module.time()
                             nodes = []
                             for nb_id in selected_notebooks:
                                 nb_nodes = self._pipeline._get_cached_nodes(nb_id)
                                 if nb_nodes:
                                     nodes.extend(nb_nodes)
+                            timings["3_node_cache_ms"] = int((timing_module.time() - t_cache) * 1000)
 
                             if nodes and hasattr(self._pipeline, '_engine') and self._pipeline._engine is not None:
-                                # Set engine first to ensure retriever is configured
+                                # Stage 2: Set engine / notebook switch
+                                t_switch = timing_module.time()
                                 self._pipeline.set_engine(offering_filter=selected_notebooks, force_reset=True)
+                                timings["2_notebook_switch_ms"] = int((timing_module.time() - t_switch) * 1000)
 
                                 if hasattr(self._pipeline._engine, '_retriever'):
+                                    # Stage 4: Create retriever
+                                    t_retriever = timing_module.time()
                                     retriever = self._pipeline._engine._retriever.get_retrievers(
                                         llm=Settings.llm,
                                         language="eng",
@@ -572,9 +585,16 @@ Output ONLY valid JSON, nothing else."""
                                         vector_store=self._pipeline._vector_store,
                                         notebook_id=notebook_id
                                     )
+                                    timings["4_retriever_creation_ms"] = int((timing_module.time() - t_retriever) * 1000)
+
+                                    # Stage 5: Chunk retrieval
+                                    t_retrieve = timing_module.time()
                                     query_bundle = QueryBundle(query_str=message)
                                     retrieval_results = retriever.retrieve(query_bundle)
+                                    timings["5_chunk_retrieval_ms"] = int((timing_module.time() - t_retrieve) * 1000)
 
+                                    # Stage 6: Format sources
+                                    t_format = timing_module.time()
                                     seen_sources = set()
                                     for node_with_score in retrieval_results[:6]:
                                         node = node_with_score.node
@@ -595,11 +615,13 @@ Output ONLY valid JSON, nothing else."""
                                             if page:
                                                 source_info['page'] = page
                                             pre_extracted_sources.append(source_info)
+                                    timings["6_source_formatting_ms"] = int((timing_module.time() - t_format) * 1000)
                                     logger.info(f"Pre-extracted {len(pre_extracted_sources)} sources from retriever")
                         except Exception as e:
                             logger.warning(f"Could not pre-extract sources: {e}")
 
                     # Choose query method based on selection
+                    t_query = timing_module.time()
                     if selected_notebooks:
                         # NOTEBOOK MODE: Use simple query() method for direct Q&A with notebook documents
                         # Engine already set during source extraction above
@@ -629,8 +651,10 @@ Output ONLY valid JSON, nothing else."""
                             chatbot=history,
                             query_settings=query_settings_obj
                         )
+                    timings["6b_query_execution_ms"] = int((timing_module.time() - t_query) * 1000)
 
                     # Get the full response text from RAG
+                    t_llm = timing_module.time()
                     document_context = ""
 
                     # Check if there's a response prefix from sales mode
@@ -642,6 +666,7 @@ Output ONLY valid JSON, nothing else."""
 
                     for token in rag_response.response_gen:
                         document_context += token
+                    timings["7_llm_completion_ms"] = int((timing_module.time() - t_llm) * 1000)
 
                     logger.info(f"Retrieved document context: {document_context[:200]}...")
 
@@ -717,8 +742,11 @@ Output ONLY valid JSON, nothing else."""
 
                     else:
                         # STEP 5: Return normal RAG response
+                        # Time the response streaming
+                        t_stream = timing_module.time()
                         for token in document_context:
                             yield f"data: {json.dumps({'token': token})}\n\n"
+                        timings["8_response_streaming_ms"] = int((timing_module.time() - t_stream) * 1000)
 
                         # STEP 6: Use pre-extracted sources (extracted before streaming)
                         # Note: source_nodes from rag_response is empty after streaming completes
@@ -737,8 +765,16 @@ Output ONLY valid JSON, nothing else."""
                             except Exception as save_err:
                                 logger.warning(f"Failed to store in session memory: {save_err}")
 
-                        # Send sources with the done signal
-                        yield f"data: {json.dumps({'done': True, 'sources': sources})}\n\n"
+                        # Calculate total execution time
+                        execution_time_ms = int((timing_module.time() - start_time) * 1000)
+
+                        # Send sources and metadata with the done signal
+                        metadata = {
+                            'execution_time_ms': execution_time_ms,
+                            'timings': timings,
+                            'node_count': len(pre_extracted_sources)
+                        }
+                        yield f"data: {json.dumps({'done': True, 'sources': sources, 'metadata': metadata})}\n\n"
 
                 except Exception as e:
                     logger.error(f"Error during chat: {e}")
