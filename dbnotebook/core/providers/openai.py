@@ -17,18 +17,25 @@ class OpenAILLMProvider(LLMProvider):
     OpenAI LLM provider for GPT models.
 
     Supports:
-    - gpt-4, gpt-4-turbo, gpt-4o
-    - gpt-3.5-turbo
-    - o1, o1-mini (reasoning models)
+    - GPT-4 series (gpt-4, gpt-4-turbo, gpt-4o, gpt-4.1)
+    - GPT-3.5 series
+    - O-series reasoning models (o1, o3, o4 - temperature must be 1)
     """
 
     SUPPORTED_MODELS = {
+        # GPT-4 series
         "gpt-3.5-turbo", "gpt-4", "gpt-4-turbo", "gpt-4o", "gpt-4.1",
         "gpt-4o-mini", "gpt-4-turbo-preview",
         "gpt-4-0125-preview", "gpt-4-1106-preview",
         "gpt-4o-2024-11-20", "gpt-4o-2024-08-06",
-        "o1", "o1-mini", "o1-preview"
+        # O-series reasoning models (temperature=1 only)
+        "o1", "o1-mini", "o1-preview",
+        "o3", "o3-mini", "o3-pro",
+        "o4-mini",
     }
+
+    # O-series reasoning models only support temperature=1
+    REASONING_MODELS = {"o1", "o1-mini", "o1-preview", "o3", "o3-mini", "o3-pro", "o4-mini"}
 
     def __init__(
         self,

@@ -10,7 +10,7 @@ export interface QuerySettings {
 export const DEFAULT_QUERY_SETTINGS: QuerySettings = {
   searchStyle: 50,
   resultDepth: 'balanced',
-  temperature: 20,
+  temperature: 5, // 5 = 0.1 (low = deterministic, high = creative)
 };
 
 interface QuerySettingsPanelProps {

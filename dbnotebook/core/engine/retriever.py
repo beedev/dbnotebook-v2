@@ -89,7 +89,7 @@ class TwoStageRetriever(QueryFusionRetriever):
         mode: FUSION_MODES = FUSION_MODES.SIMPLE,
         similarity_top_k: int = 20,
         num_queries: int = 4,
-        use_async: bool = True,
+        use_async: bool = False,  # Disabled to avoid nested async issues with Flask
         verbose: bool = False,
         callback_manager: Optional[CallbackManager] = None,
         objects: Optional[List[IndexNode]] = None,
@@ -397,6 +397,7 @@ class LocalRetriever:
 
         if gen_query:
             # Fusion retriever with query generation
+            # use_async=False to avoid nested async issues with Flask
             return QueryFusionRetriever(
                 retrievers=retrievers,
                 retriever_weights=weights,
@@ -405,10 +406,12 @@ class LocalRetriever:
                 similarity_top_k=self._setting.retriever.top_k_rerank,
                 num_queries=self._setting.retriever.num_queries,
                 mode=self._setting.retriever.fusion_mode,
+                use_async=False,
                 verbose=False
             )
         else:
             # Two-stage retriever with reranking
+            # use_async=False to avoid nested async issues with Flask
             return TwoStageRetriever(
                 retrievers=retrievers,
                 retriever_weights=weights,
@@ -418,6 +421,7 @@ class LocalRetriever:
                 similarity_top_k=similarity_top_k,
                 num_queries=1,
                 mode=self._setting.retriever.fusion_mode,
+                use_async=False,
                 verbose=False
             )
 

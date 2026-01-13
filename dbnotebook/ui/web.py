@@ -23,10 +23,21 @@ from ..api.routes.multi_notebook import create_multi_notebook_routes
 from ..api.routes.analytics import create_analytics_routes
 from ..api.routes.sql_chat import create_sql_chat_routes
 from ..api.routes.query import create_query_routes
+from ..api.routes.chat_v2 import create_chat_v2_routes
+from ..api.routes.admin import create_admin_routes
 from ..core.ingestion import WebContentIngestion, SynopsisManager
 from ..core.studio import StudioManager
+from ..core.constants import DEFAULT_USER_ID
 
 logger = logging.getLogger(__name__)
+
+# CORS allowed origins for development
+ALLOWED_CORS_ORIGINS = [
+    'http://localhost:3000',
+    'http://localhost:5173',
+    'http://127.0.0.1:3000',
+    'http://127.0.0.1:5173',
+]
 
 
 class FlaskChatbotUI:
@@ -271,52 +282,14 @@ class FlaskChatbotUI:
         })
 
     def _is_image_generation_request(self, message: str) -> bool:
-        """Use LLM to intelligently detect if message is requesting image generation.
+        """Check if message is requesting image generation.
 
         NOTE: Image generation is now only available in Content Studio.
         This method always returns False to disable in-chat image generation.
+        To re-enable, implement intent detection logic here.
         """
         # Image generation disabled in chat - use Studio instead
         return False
-
-        # Original code below (disabled):
-        # Quick keyword check first for efficiency
-        image_keywords = ["image", "infographic", "diagram", "visual", "picture", "illustration", "graphic", "chart", "visualization"]
-        message_lower = message.lower()
-
-        # If no image-related keywords at all, skip LLM check
-        if not any(keyword in message_lower for keyword in image_keywords):
-            return False
-
-        # Use LLM to understand intent
-        intent_prompt = f"""Analyze this user message and determine if they are requesting IMAGE GENERATION (creating a new visual/image/infographic/diagram).
-
-User message: "{message}"
-
-Respond with ONLY "YES" if they want to generate/create a new image, infographic, diagram, or visual.
-Respond with ONLY "NO" if they are asking about images, analyzing images, or want text-based information.
-
-Examples:
-- "Create an infographic about our products" -> YES
-- "Generate a diagram showing the architecture" -> YES
-- "What images do we have?" -> NO
-- "Explain the diagram in the document" -> NO
-- "Tell me about the infographic" -> NO
-
-Response:"""
-
-        try:
-            # Use the pipeline's configured LLM for intent classification
-            llm = self._pipeline._default_model
-            response = llm.complete(intent_prompt)
-
-            # Check if response contains YES
-            return "YES" in str(response).upper()
-        except Exception as e:
-            logger.error(f"Error in intent detection: {e}")
-            # Fallback to simple keyword matching
-            creation_words = ["generate", "create", "make", "draw", "design", "produce"]
-            return any(word in message_lower for word in creation_words)
 
 
     def _create_image_prompt_with_context(self, user_message: str, document_content: str) -> str:
@@ -437,11 +410,10 @@ Output ONLY valid JSON, nothing else."""
 
         @self._app.after_request
         def add_cors_headers(response):
-            # Allow React dev server (localhost:3000 and localhost:5173)
+            # Allow React dev server origins
             origin = request.headers.get('Origin', '')
-            allowed_origins = ['http://localhost:3000', 'http://localhost:5173', 'http://127.0.0.1:3000', 'http://127.0.0.1:5173']
 
-            if origin in allowed_origins:
+            if origin in ALLOWED_CORS_ORIGINS:
                 response.headers['Access-Control-Allow-Origin'] = origin
                 response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, PATCH, OPTIONS'
                 response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, Accept'
@@ -455,9 +427,8 @@ Output ONLY valid JSON, nothing else."""
             """Handle preflight OPTIONS requests."""
             response = self._app.make_default_options_response()
             origin = request.headers.get('Origin', '')
-            allowed_origins = ['http://localhost:3000', 'http://localhost:5173', 'http://127.0.0.1:3000', 'http://127.0.0.1:5173']
 
-            if origin in allowed_origins:
+            if origin in ALLOWED_CORS_ORIGINS:
                 response.headers['Access-Control-Allow-Origin'] = origin
                 response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, PATCH, OPTIONS'
                 response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, Accept'
@@ -1535,6 +1506,30 @@ Output ONLY valid JSON, nothing else."""
             logger.info("Simple Query API routes registered (/api/query)")
         except Exception as e:
             logger.warning(f"Query API routes not available: {e}")
+
+        # Register V2 Chat API routes (fast pattern with memory)
+        try:
+            create_chat_v2_routes(
+                self._app,
+                pipeline=self._pipeline,
+                db_manager=self._db_manager,
+                notebook_manager=self._notebook_manager,
+                conversation_store=self._pipeline._conversation_store
+            )
+            logger.info("V2 Chat API routes registered (/api/v2/chat)")
+        except Exception as e:
+            logger.warning(f"V2 Chat API routes not available: {e}")
+
+        # Register Admin API routes (RBAC management)
+        try:
+            create_admin_routes(
+                self._app,
+                db_manager=self._db_manager,
+                notebook_manager=self._notebook_manager
+            )
+            logger.info("Admin API routes registered (/api/admin)")
+        except Exception as e:
+            logger.warning(f"Admin API routes not available: {e}")
 
         # === Query Logging & Observability Endpoints ===
 

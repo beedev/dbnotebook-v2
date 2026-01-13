@@ -410,15 +410,15 @@ class QueryTimeSettings(BaseModel):
     # Result depth (similarity_top_k)
     similarity_top_k: int = Field(default=20, ge=5, le=100, description="Number of results to retrieve")
 
-    # LLM temperature
-    temperature: float = Field(default=0.4, ge=0.0, le=2.0, description="LLM response temperature")
+    # LLM temperature (low = deterministic, high = creative)
+    temperature: float = Field(default=0.1, ge=0.0, le=2.0, description="LLM response temperature")
 
     @classmethod
     def from_frontend(
         cls,
         search_style: int = 50,
         result_depth: str = "balanced",
-        temperature: int = 20
+        temperature: int = 5
     ) -> "QueryTimeSettings":
         """Create settings from frontend UI values.
 

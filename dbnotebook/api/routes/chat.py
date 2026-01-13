@@ -3,16 +3,21 @@
 Includes two-stage LLM document routing for intelligent retrieval:
 - Stage 1: Analyze query against document summaries to determine routing strategy
 - Stage 2: Execute retrieval based on routing decision (if needed)
+
+Fast Mode (fast_mode=true):
+- Uses stateless_query() for 4-8x faster responses (~5-10s vs ~40s)
+- Multi-user safe, thread-safe, no global state mutations
+- Recommended for production multi-user deployments
 """
 
 import logging
 import time
-from flask import Blueprint, request, jsonify
-from llama_index.core.llms import ChatMessage
+from flask import Blueprint, request, jsonify, Response
 from llama_index.core import Settings
 
 from ...core.services import DocumentRoutingService
 from ...core.interfaces import RoutingStrategy
+from ...core.constants import DEFAULT_USER_ID
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +49,9 @@ def create_chat_routes(app, pipeline, db_manager=None):
                 "message": "User query",
                 "notebook_ids": ["uuid1", "uuid2"],  # Optional list of notebook UUIDs
                 "mode": "chat|QA",
-                "stream": false
+                "stream": false,
+                "fast_mode": false,          # NEW: Use fast stateless mode (4-8x faster)
+                "user_id": "uuid"            # Required for fast_mode multi-user
             }
 
         Response JSON:
@@ -86,8 +93,76 @@ def create_chat_routes(app, pipeline, db_manager=None):
 
             mode = data.get("mode", "chat")
             stream = data.get("stream", False)
+            fast_mode = data.get("fast_mode", False)
+            user_id = data.get("user_id", DEFAULT_USER_ID)
 
-            logger.info(f"Chat request: mode={mode}, notebook_ids={notebook_ids}, stream={stream}")
+            logger.info(f"Chat request: mode={mode}, notebook_ids={notebook_ids}, stream={stream}, fast_mode={fast_mode}")
+
+            # =========================================================================
+            # FAST MODE: Use stateless_query for 4-8x faster responses
+            # Multi-user safe, thread-safe, no global state mutations
+            # =========================================================================
+            if fast_mode and notebook_ids and len(notebook_ids) == 1:
+                notebook_id = notebook_ids[0]
+
+                if stream:
+                    # Streaming fast mode
+                    import json
+
+                    def generate():
+                        try:
+                            for event in pipeline.stateless_query_streaming(
+                                message=message,
+                                notebook_id=notebook_id,
+                                user_id=user_id,
+                                include_history=True,
+                                max_history=10,
+                                max_sources=6,
+                            ):
+                                yield f"data: {json.dumps(event)}\n\n"
+                        except Exception as e:
+                            logger.error(f"Fast mode streaming error: {e}")
+                            yield f"data: {json.dumps({'type': 'error', 'error': str(e)})}\n\n"
+
+                    return Response(
+                        generate(),
+                        mimetype='text/event-stream',
+                        headers={
+                            'Cache-Control': 'no-cache',
+                            'X-Accel-Buffering': 'no',
+                        }
+                    )
+                else:
+                    # Non-streaming fast mode
+                    result = pipeline.stateless_query(
+                        message=message,
+                        notebook_id=notebook_id,
+                        user_id=user_id,
+                        include_history=True,
+                        max_history=10,
+                        max_sources=6,
+                    )
+
+                    # Convert sources to chat.py format
+                    formatted_sources = []
+                    for idx, src in enumerate(result.get("sources", []), 1):
+                        formatted_sources.append({
+                            "document_name": src.get("document", "Unknown"),
+                            "chunk_location": f"Chunk {idx}",
+                            "relevance_score": src.get("score", 0.0),
+                            "excerpt": src.get("excerpt", ""),
+                            "notebook_id": notebook_id,
+                            "source_id": ""
+                        })
+
+                    return jsonify({
+                        "success": result.get("success", True),
+                        "response": result.get("response", ""),
+                        "sources": formatted_sources,
+                        "notebook_ids": notebook_ids,
+                        "retrieval_strategy": "fast_stateless",
+                        "metadata": result.get("metadata", {})
+                    })
 
             # Configure pipeline settings
             pipeline.set_language(pipeline._language)
@@ -242,11 +317,6 @@ def create_chat_routes(app, pipeline, db_manager=None):
                     logger.warning(f"Could not extract sources: {e}")
                     # Continue without sources rather than failing the entire request
 
-            # Create chat history with user message
-            chat_history = [
-                ChatMessage(role="user", content=message)
-            ]
-
             # Get response from pipeline
             if stream:
                 # TODO: Implement streaming response
@@ -256,10 +326,8 @@ def create_chat_routes(app, pipeline, db_manager=None):
                 }), 501
             else:
                 # Non-streaming response - collect all chunks from streaming response
-                # Convert chat_history from ChatMessage objects to list[list[str]] format
-                chatbot_history = []
-                for msg in chat_history:
-                    chatbot_history.append([msg.content, ""])  # [user_msg, assistant_msg]
+                # Create chatbot history in list[list[str]] format: [user_msg, assistant_msg]
+                chatbot_history = [[message, ""]]
 
                 # Call pipeline.query() which returns StreamingAgentChatResponse
                 t7 = time.time()

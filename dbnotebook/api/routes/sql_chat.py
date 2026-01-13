@@ -19,6 +19,7 @@ import json
 
 from ...core.sql_chat import SQLChatService, DatabaseType, MaskingPolicy
 from ...core.services.document_service import DocumentService
+from ...core.constants import DEFAULT_USER_ID
 
 
 class SQLChatJSONEncoder(json.JSONEncoder):
@@ -43,17 +44,34 @@ sql_chat_bp = Blueprint('sql_chat', __name__, url_prefix='/api/sql-chat')
 # SQL Chat service instance (initialized in create_sql_chat_routes)
 _sql_chat_service: Optional[SQLChatService] = None
 
-# Default user ID (will be replaced with proper auth later)
-DEFAULT_USER_ID = "00000000-0000-0000-0000-000000000001"
-
 
 def get_current_user_id() -> str:
     """Get current user ID from request context.
 
+    Multi-user safe: Checks request body/args for user_id, falls back to default.
+    This enables multi-user support while maintaining backward compatibility.
+
+    Priority:
+    1. Request body 'user_id' or 'userId'
+    2. Request query parameter 'user_id'
+    3. Default user ID (for single-user deployments)
+
     Returns:
-        User ID string. Currently returns default user ID.
-        Will be replaced with proper auth integration.
+        User ID string
     """
+    # Check request body (for POST/PUT requests)
+    if request.method in ['POST', 'PUT', 'PATCH']:
+        data = request.get_json(silent=True) or {}
+        user_id = data.get('user_id') or data.get('userId')
+        if user_id:
+            return str(user_id)
+
+    # Check query parameters (for GET/DELETE requests)
+    user_id = request.args.get('user_id') or request.args.get('userId')
+    if user_id:
+        return str(user_id)
+
+    # Fall back to default for backward compatibility
     return DEFAULT_USER_ID
 
 
@@ -525,8 +543,8 @@ def create_session():
                 'error': error
             }), 400
 
-        # Get session info
-        session = service.get_session(session_id)
+        # Get session info (user_id passed for consistency, though user just created it)
+        session = service.get_session(session_id, user_id)
         schema_formatted = service.get_schema_formatted(connection_id) if session else None
 
         logger.info(f"SQL chat session created: {session_id}")
@@ -551,6 +569,11 @@ def get_session(session_id: str):
     """
     Get session details.
 
+    Multi-user safe: Validates user has access to the session.
+
+    Query params:
+        - user_id: Optional user ID for access validation
+
     Response JSON:
         {
             "success": true,
@@ -565,8 +588,9 @@ def get_session(session_id: str):
     """
     try:
         service = get_service()
+        user_id = get_current_user_id()  # Multi-user safe
 
-        session = service.get_session(session_id)
+        session = service.get_session(session_id, user_id)
 
         if not session:
             return jsonify({
@@ -601,6 +625,8 @@ def refresh_session_schema(session_id: str):
     Forces reload of schema from database and recreates the query engine.
     Use this when database schema has changed (columns added/removed/renamed).
 
+    Multi-user safe: Validates user has access to the session.
+
     Response JSON:
         {
             "success": true,
@@ -610,8 +636,9 @@ def refresh_session_schema(session_id: str):
     """
     try:
         service = get_service()
+        user_id = get_current_user_id()  # Multi-user safe
 
-        success, message = service.refresh_session_schema(session_id)
+        success, message = service.refresh_session_schema(session_id, user_id)
 
         if not success:
             return jsonify({
@@ -620,7 +647,7 @@ def refresh_session_schema(session_id: str):
             }), 400
 
         # Get updated formatted schema
-        session = service.get_session(session_id)
+        session = service.get_session(session_id, user_id)
         schema_formatted = service.get_schema_formatted(session.connection_id) if session else None
 
         logger.info(f"Schema refreshed for session {session_id}: {message}")
@@ -650,7 +677,8 @@ def execute_query(session_id: str):
 
     Request JSON:
         {
-            "query": "Show me the top 10 customers by revenue"
+            "query": "Show me the top 10 customers by revenue",
+            "user_id": "uuid"  // Optional for multi-user (uses default if omitted)
         }
 
     Response JSON:
@@ -677,6 +705,7 @@ def execute_query(session_id: str):
     try:
         service = get_service()
         data = request.get_json() or {}
+        user_id = get_current_user_id()  # Multi-user safe
 
         nl_query = data.get('query', '').strip()
         if not nl_query:
@@ -685,12 +714,12 @@ def execute_query(session_id: str):
                 'error': 'query is required'
             }), 400
 
-        # Execute query (async)
+        # Execute query with user validation (async)
         import asyncio
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
-            result = loop.run_until_complete(service.execute_query(session_id, nl_query))
+            result = loop.run_until_complete(service.execute_query(session_id, nl_query, user_id))
         finally:
             loop.close()
 
@@ -763,7 +792,8 @@ def execute_query_stream(session_id: str):
 
     Request JSON:
         {
-            "query": "Show me the top 10 customers by revenue"
+            "query": "Show me the top 10 customers by revenue",
+            "user_id": "uuid"  // Optional for multi-user (uses default if omitted)
         }
 
     Response:
@@ -776,6 +806,7 @@ def execute_query_stream(session_id: str):
     try:
         service = get_service()
         data = request.get_json() or {}
+        user_id = get_current_user_id()  # Multi-user safe
 
         nl_query = data.get('query', '').strip()
         if not nl_query:
@@ -794,7 +825,7 @@ def execute_query_stream(session_id: str):
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             try:
-                result = loop.run_until_complete(service.execute_query(session_id, nl_query))
+                result = loop.run_until_complete(service.execute_query(session_id, nl_query, user_id))
 
                 # Send SQL generated
                 yield f"data: {json.dumps({'type': 'sql', 'sql': result.sql_generated}, cls=SQLChatJSONEncoder)}\n\n"
@@ -860,8 +891,11 @@ def get_query_history(session_id: str):
     """
     Get query history for a session.
 
+    Multi-user safe: Validates user has access to the session.
+
     Query params:
         - limit: Max results (default 50)
+        - user_id: Optional user ID for access validation
 
     Response JSON:
         {
@@ -880,10 +914,11 @@ def get_query_history(session_id: str):
     """
     try:
         service = get_service()
+        user_id = get_current_user_id()  # Multi-user safe
 
         limit = int(request.args.get('limit', 50))
 
-        history = service.get_query_history(session_id)
+        history = service.get_query_history(session_id, user_id)
 
         # Limit results
         history = history[:limit]

@@ -27,7 +27,8 @@ import {
   Zap,
   Database,
   Brain,
-  Layers
+  Layers,
+  Key
 } from 'lucide-react';
 
 interface Notebook {
@@ -38,8 +39,8 @@ interface Notebook {
 }
 
 interface Source {
-  document: string;
-  excerpt: string;
+  filename: string;
+  snippet: string;
   score: number;
 }
 
@@ -59,6 +60,7 @@ interface Timings {
 interface QueryResponse {
   success: boolean;
   response?: string;
+  session_id?: string;
   sources?: Source[];
   metadata?: {
     execution_time_ms: number;
@@ -66,10 +68,15 @@ interface QueryResponse {
     retrieval_strategy: string;
     node_count: number;
     raptor_summaries_used?: number;
+    history_messages_used?: number;
     timings?: Timings;
   };
   error?: string;
 }
+
+// Default user ID that exists in the database
+// TODO: Replace with actual auth when implemented
+const DEFAULT_USER_ID = '00000000-0000-0000-0000-000000000001';
 
 export function QueryPage() {
   const [notebooks, setNotebooks] = useState<Notebook[]>([]);
@@ -81,17 +88,58 @@ export function QueryPage() {
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [showTimings, setShowTimings] = useState(false);
+  const [apiKey, setApiKey] = useState<string | null>(null);
+  const [isLoadingApiKey, setIsLoadingApiKey] = useState(true);
+  const [apiKeyCopied, setApiKeyCopied] = useState(false);
+  // Session tracking for conversation memory (always enabled for notebooks)
+  const [sessionId, setSessionId] = useState<string | null>(null);
+
+  // Clear session when notebook changes (new context = new conversation)
+  useEffect(() => {
+    setSessionId(null);
+    setResponse(null);
+  }, [selectedNotebook?.id]);
+
+  // Load API key on mount
+  useEffect(() => {
+    const loadApiKey = async () => {
+      setIsLoadingApiKey(true);
+      try {
+        const res = await fetch(`/api/user/api-key?user_id=${DEFAULT_USER_ID}`);
+        const data = await res.json();
+        if (data.success && data.api_key) {
+          setApiKey(data.api_key);
+        } else {
+          console.warn('Failed to load API key:', data.error);
+        }
+      } catch (err) {
+        console.error('Error loading API key:', err);
+      } finally {
+        setIsLoadingApiKey(false);
+      }
+    };
+    loadApiKey();
+  }, []);
 
   // Load notebooks on mount
   useEffect(() => {
     loadNotebooks();
-  }, []);
+  }, [apiKey]);
 
   const loadNotebooks = async () => {
+    if (!apiKey) {
+      // Wait for API key to load first
+      return;
+    }
+
     setIsLoadingNotebooks(true);
     setError(null);
     try {
-      const res = await fetch('/api/query/notebooks');
+      const res = await fetch('/api/query/notebooks', {
+        headers: {
+          'X-API-Key': apiKey,
+        },
+      });
       const data = await res.json();
       if (data.success) {
         setNotebooks(data.notebooks || []);
@@ -106,26 +154,44 @@ export function QueryPage() {
   };
 
   const handleQuery = useCallback(async () => {
-    if (!selectedNotebook || !query.trim()) return;
+    if (!selectedNotebook || !query.trim() || !apiKey) return;
 
     setIsQuerying(true);
     setError(null);
     setResponse(null);
 
     try {
+      // Generate session_id if not exists (ensures messages are saved from first query)
+      const currentSessionId = sessionId || crypto.randomUUID();
+      if (!sessionId) {
+        setSessionId(currentSessionId);
+      }
+
+      const requestBody: Record<string, unknown> = {
+        notebook_id: selectedNotebook.id,
+        query: query.trim(),
+        include_sources: true,
+        max_sources: 6,
+        max_history: 10,
+        session_id: currentSessionId,  // Always pass session_id for memory
+      };
+
       const res = await fetch('/api/query', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          notebook_id: selectedNotebook.id,
-          query: query.trim(),
-          include_sources: true,
-          max_sources: 6,
-        }),
+        headers: {
+          'Content-Type': 'application/json',
+          'X-API-Key': apiKey,
+        },
+        body: JSON.stringify(requestBody),
       });
 
       const data: QueryResponse = await res.json();
       setResponse(data);
+
+      // Update session_id if backend returns a different one
+      if (data.success && data.session_id && data.session_id !== currentSessionId) {
+        setSessionId(data.session_id);
+      }
 
       if (!data.success) {
         setError(data.error || 'Query failed');
@@ -135,7 +201,7 @@ export function QueryPage() {
     } finally {
       setIsQuerying(false);
     }
-  }, [selectedNotebook, query]);
+  }, [selectedNotebook, query, apiKey, sessionId]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -152,6 +218,14 @@ export function QueryPage() {
     }
   };
 
+  const copyApiKey = () => {
+    if (apiKey) {
+      navigator.clipboard.writeText(apiKey);
+      setApiKeyCopied(true);
+      setTimeout(() => setApiKeyCopied(false), 2000);
+    }
+  };
+
   const formatDate = (dateStr: string | null) => {
     if (!dateStr) return 'Unknown';
     return new Date(dateStr).toLocaleDateString('en-US', {
@@ -165,12 +239,53 @@ export function QueryPage() {
     <div className="query-page h-full flex flex-col bg-void">
       {/* Header */}
       <div className="p-6 border-b border-void-surface">
-        <h1 className="text-2xl font-bold text-text mb-2">
-          <span className="gradient-text">Query</span> API
-        </h1>
-        <p className="text-text-muted text-sm">
-          Test the programmatic RAG API - select a notebook and ask questions
-        </p>
+        <div className="flex items-start justify-between">
+          <div>
+            <h1 className="text-2xl font-bold text-text mb-2">
+              <span className="gradient-text">Query</span> API
+            </h1>
+            <p className="text-text-muted text-sm">
+              Test the programmatic RAG API - select a notebook and ask questions
+            </p>
+          </div>
+
+          <div className="flex items-center gap-3">
+            {/* Memory Status Indicator */}
+            <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-glow/10 border border-glow/30">
+              <Brain className="w-4 h-4 text-glow" />
+              <span className="text-sm text-glow font-medium">Memory</span>
+              <span className="w-2 h-2 rounded-full bg-glow" />
+            </div>
+
+            {/* API Key Display */}
+            <div className="flex items-center gap-2 bg-void-surface rounded-lg px-3 py-2 border border-void-lighter">
+              <Key className="w-4 h-4 text-glow" />
+              <span className="text-xs text-text-muted">API Key:</span>
+              {isLoadingApiKey ? (
+                <Loader2 className="w-4 h-4 text-text-muted animate-spin" />
+              ) : apiKey ? (
+                <>
+                  <code className="text-xs font-mono text-text bg-void px-2 py-0.5 rounded">
+                    {apiKey.slice(0, 12)}...{apiKey.slice(-4)}
+                  </code>
+                  <button
+                    onClick={copyApiKey}
+                    className="p-1 rounded hover:bg-void-lighter transition-colors"
+                    title="Copy API key"
+                  >
+                    {apiKeyCopied ? (
+                      <Check className="w-3.5 h-3.5 text-green-400" />
+                    ) : (
+                      <Copy className="w-3.5 h-3.5 text-text-muted" />
+                    )}
+                  </button>
+                </>
+              ) : (
+                <span className="text-xs text-red-400">Not configured</span>
+              )}
+            </div>
+          </div>
+        </div>
       </div>
 
       <div className="flex-1 flex overflow-hidden">
@@ -448,6 +563,17 @@ export function QueryPage() {
                           {response.metadata.raptor_summaries_used} RAPTOR summaries
                         </span>
                       )}
+                      {response.metadata.history_messages_used !== undefined && response.metadata.history_messages_used > 0 && (
+                        <span className="px-2 py-1 bg-glow/20 rounded text-glow">
+                          <Brain className="w-3 h-3 inline mr-1" />
+                          {response.metadata.history_messages_used} history messages
+                        </span>
+                      )}
+                      {response.session_id && (
+                        <span className="px-2 py-1 bg-void-surface rounded text-text-dim font-mono text-xs">
+                          Session: {response.session_id.slice(0, 8)}...
+                        </span>
+                      )}
                     </div>
 
                     {/* Timing Breakdown */}
@@ -556,14 +682,14 @@ export function QueryPage() {
                         <div key={idx} className="p-3">
                           <div className="flex items-center justify-between mb-1">
                             <span className="text-sm font-medium text-text">
-                              {source.document}
+                              {source.filename}
                             </span>
                             <span className="text-xs px-2 py-0.5 bg-nebula/20 text-nebula-bright rounded">
                               {(source.score * 100).toFixed(1)}% match
                             </span>
                           </div>
                           <p className="text-sm text-text-muted line-clamp-2">
-                            {source.excerpt}
+                            {source.snippet}
                           </p>
                         </div>
                       ))}

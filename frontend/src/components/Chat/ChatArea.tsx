@@ -4,11 +4,10 @@ import { InputBox } from './InputBox';
 import { ContentStudio } from './ContentStudio';
 import { ChatHeader, type ViewMode } from './ChatHeader';
 import { QuerySettingsPanel, DEFAULT_QUERY_SETTINGS, type QuerySettings } from './QuerySettingsPanel';
-import { useChat } from '../../hooks/useChat';
+import { useChatV2 } from '../../hooks/useChatV2';
 import { useDocument } from '../../contexts';
 import { useQueryAnalysis } from '../../hooks';
 import { QueryRefinement, InsightPanel, SourceSuggestion, type Insight } from '../Agentic';
-import type { QuerySettings as ApiQuerySettings } from '../../types';
 
 interface ChatAreaProps {
   notebookId?: string;
@@ -18,16 +17,7 @@ interface ChatAreaProps {
   onFileUpload?: (file: File) => void;
 }
 
-// Convert UI query settings to API format
-function toApiQuerySettings(settings: QuerySettings): ApiQuerySettings {
-  return {
-    search_style: settings.searchStyle,
-    result_depth: settings.resultDepth,
-    temperature: settings.temperature,
-  };
-}
-
-export function ChatArea({ notebookId, notebookName, selectedModel, onCopy, onFileUpload }: ChatAreaProps) {
+export function ChatArea({ notebookId, notebookName, selectedModel: _selectedModel, onCopy, onFileUpload }: ChatAreaProps) {
   const [viewMode, setViewMode] = useState<ViewMode>('chat');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -64,7 +54,9 @@ export function ChatArea({ notebookId, notebookName, selectedModel, onCopy, onFi
     sendMessage: originalSendMessage,
     stopStreaming,
     clearMessages,
-  } = useChat(notebookId, selectedModel);
+    sessionId: _sessionId,
+    userId: _userId,
+  } = useChatV2(notebookId);
 
   // Wrapper to analyze query before sending (agentic enhancement)
   const sendMessage = useCallback(async (message: string) => {
@@ -82,25 +74,25 @@ export function ChatArea({ notebookId, notebookName, selectedModel, onCopy, onFi
       }
     }
 
-    // Send the message with query settings (routing happens on backend)
-    originalSendMessage(message, toApiQuerySettings(querySettings));
-  }, [documents.length, notebookId, analyzeQuery, originalSendMessage, querySettings]);
+    // Send the message (routing happens on backend)
+    originalSendMessage(message);
+  }, [documents.length, notebookId, analyzeQuery, originalSendMessage]);
 
   // Handle selecting a refined query
   const handleSelectRefinement = useCallback((refinedQuery: string) => {
     setShowQueryRefinement(false);
-    originalSendMessage(refinedQuery, toApiQuerySettings(querySettings));
+    originalSendMessage(refinedQuery);
     setPendingQuery('');
     setRefinementSuggestions([]);
-  }, [originalSendMessage, querySettings]);
+  }, [originalSendMessage]);
 
   // Handle keeping original query
   const handleKeepOriginal = useCallback(() => {
     setShowQueryRefinement(false);
-    originalSendMessage(pendingQuery, toApiQuerySettings(querySettings));
+    originalSendMessage(pendingQuery);
     setPendingQuery('');
     setRefinementSuggestions([]);
-  }, [originalSendMessage, pendingQuery, querySettings]);
+  }, [originalSendMessage, pendingQuery]);
 
   // Wrapper for file upload to show InsightPanel (agentic - does NOT affect routing)
   const handleFileUploadWithInsights = useCallback(async (file: File) => {

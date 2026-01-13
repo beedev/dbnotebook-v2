@@ -1,6 +1,25 @@
 import { createContext, useContext, useState, useCallback, type ReactNode } from 'react';
 import type { Message, ModelProvider } from '../types';
 
+// Generate a UUID for session/user tracking
+function generateUUID(): string {
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0;
+    const v = c === 'x' ? r : (r & 0x3) | 0x8;
+    return v.toString(16);
+  });
+}
+
+// Get or create user ID (stored in localStorage for persistence)
+function getOrCreateUserId(): string {
+  const stored = localStorage.getItem('dbnotebook_user_id');
+  if (stored) return stored;
+
+  const newId = generateUUID();
+  localStorage.setItem('dbnotebook_user_id', newId);
+  return newId;
+}
+
 interface ChatContextType {
   // State
   messages: Message[];
@@ -9,6 +28,9 @@ interface ChatContextType {
   selectedModel: string;
   selectedProvider: ModelProvider;
   error: string | null;
+  // Multi-user support
+  sessionId: string | null;
+  userId: string;
 
   // Actions
   addMessage: (message: Message) => void;
@@ -20,6 +42,9 @@ interface ChatContextType {
   setModel: (model: string, provider: ModelProvider) => void;
   removeMessage: (id: string) => void;
   clearError: () => void;
+  // Multi-user actions
+  setSessionId: (sessionId: string) => void;
+  resetSession: () => void;
 }
 
 const ChatContext = createContext<ChatContextType | undefined>(undefined);
@@ -31,6 +56,9 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const [selectedModel, setSelectedModel] = useState<string>('llama3.1:latest');
   const [selectedProvider, setSelectedProvider] = useState<ModelProvider>('ollama');
   const [error, setError] = useState<string | null>(null);
+  // Multi-user support
+  const [sessionId, setSessionIdState] = useState<string | null>(null);
+  const [userId] = useState<string>(getOrCreateUserId);
 
   // Add a new message to the conversation
   const addMessage = useCallback((message: Message) => {
@@ -96,6 +124,18 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     setError(null);
   }, []);
 
+  // Set session ID (for conversation continuity)
+  const setSessionId = useCallback((newSessionId: string) => {
+    setSessionIdState(newSessionId);
+  }, []);
+
+  // Reset session (generates new session ID)
+  const resetSession = useCallback(() => {
+    setSessionIdState(generateUUID());
+    setMessagesState([]);
+    setError(null);
+  }, []);
+
   const value: ChatContextType = {
     messages,
     isStreaming,
@@ -103,6 +143,8 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     selectedModel,
     selectedProvider,
     error,
+    sessionId,
+    userId,
     addMessage,
     updateMessage,
     clearMessages,
@@ -112,6 +154,8 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     setModel,
     removeMessage,
     clearError,
+    setSessionId,
+    resetSession,
   };
 
   return (

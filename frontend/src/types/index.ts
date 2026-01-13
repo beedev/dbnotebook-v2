@@ -108,6 +108,40 @@ export interface ChatRequest {
   query_settings?: QuerySettings;
 }
 
+// V2 Chat API types (multi-user with memory)
+export interface ChatV2Request {
+  notebook_id: string;
+  query: string;
+  user_id: string;
+  session_id?: string;
+  include_history?: boolean;
+  max_history?: number;
+  include_sources?: boolean;
+  max_sources?: number;
+}
+
+export interface ChatV2Response {
+  success: boolean;
+  response: string;
+  session_id: string;
+  sources: SourceCitation[];
+  metadata: {
+    execution_time_ms: number;
+    model: string;
+    retrieval_strategy: string;
+    node_count: number;
+    raptor_summaries_used: number;
+    history_turns_used: number;
+    timings: Record<string, number>;
+  };
+}
+
+export interface ConversationHistoryItem {
+  role: 'user' | 'assistant';
+  content: string;
+  timestamp?: string;
+}
+
 export interface ChatResponse {
   response: string;
   sources?: DocumentSource[];

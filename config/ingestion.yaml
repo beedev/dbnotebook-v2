@@ -82,7 +82,7 @@ llm:
   repeat_last_n: 64           # Repeat last n tokens for penalty
   repeat_penalty: 1.1         # Repeat penalty factor
   request_timeout: 300        # Request timeout in seconds
-  temperature: 0.1            # Default temperature (precise)
+  temperature: 0.1            # Default temperature (low = deterministic, high = creative)
 
 # -----------------------------------------------------------------------------
 # STORAGE

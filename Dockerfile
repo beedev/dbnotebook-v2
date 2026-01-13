@@ -40,7 +40,7 @@ RUN python -c "import nltk; nltk.download('punkt_tab', download_dir='/app/venv/l
 FROM python:3.11-slim
 
 # OCI labels for GitHub Container Registry
-LABEL org.opencontainers.image.source="https://github.com/beedev/dbnotebook"
+LABEL org.opencontainers.image.source="https://github.com/beedev/dbnotebook-v2"
 LABEL org.opencontainers.image.description="Multimodal RAG Sales Enablement System"
 LABEL org.opencontainers.image.licenses="Apache-2.0"
 LABEL org.opencontainers.image.version="1.1.0"
@@ -67,6 +67,7 @@ COPY dbnotebook/ dbnotebook/
 COPY --from=frontend-builder /app/frontend/dist frontend/dist/
 COPY alembic/ alembic/
 COPY alembic.ini .
+COPY gunicorn.conf.py .
 COPY docker-entrypoint.sh .
 RUN chmod +x docker-entrypoint.sh
 

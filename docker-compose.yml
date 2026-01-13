@@ -4,7 +4,7 @@ services:
     container_name: dbnotebook
     build: .
     ports:
-      - "7860:7860"
+      - "7007:7860"
     env_file:
       - .env
     environment:
@@ -18,8 +18,10 @@ services:
       - OLLAMA_HOST=host.docker.internal
       # SQL Chat dev mode - skip read-only check for testing
       - SQL_CHAT_SKIP_READONLY_CHECK=true
-      # API Key for authentication (optional - enables X-API-Key header requirement)
-      - API_KEY=dbnotebook-secure-api-key-2026
+      # API Key for /api/query endpoint (programmatic access)
+      - API_KEY=${API_KEY:-}
+      # RBAC - role-based access control (disabled by default)
+      - RBAC_STRICT_MODE=${RBAC_STRICT_MODE:-false}
     depends_on:
       postgres:
         condition: service_healthy

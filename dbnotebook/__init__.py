@@ -1,13 +1,32 @@
 # Patch llama_index to support newer models before any imports
-# OpenAI models patch
+# OpenAI models patch - O-series and GPT-4.1 models
 try:
     from llama_index.llms.openai import utils as openai_utils
-    # Add gpt-4.1 (and other newer models) that llama_index doesn't know about
-    _new_openai_models = {'gpt-4.1': 128000, 'gpt-4.1-mini': 128000}
+
+    # O-series reasoning models (200K context)
+    _o_models = {
+        'o3': 200000, 'o3-2025-04-16': 200000,
+        'o3-mini': 200000, 'o3-mini-2025-01-31': 200000,
+        'o3-pro': 200000, 'o3-pro-2025-06-10': 200000,
+        'o4-mini': 200000, 'o4-mini-2025-04-16': 200000,
+    }
+
+    # GPT-4.1 models (128K context)
+    _gpt4_models = {'gpt-4.1': 128000, 'gpt-4.1-mini': 128000}
+
+    # Combine all new models
+    _new_openai_models = {**_o_models, **_gpt4_models}
+
     for model, ctx in _new_openai_models.items():
-        openai_utils.GPT4_MODELS[model] = ctx
-        openai_utils.ALL_AVAILABLE_MODELS[model] = ctx
-        openai_utils.CHAT_MODELS[model] = ctx  # Mark as chat model
+        if hasattr(openai_utils, 'GPT4_MODELS'):
+            openai_utils.GPT4_MODELS[model] = ctx
+        if hasattr(openai_utils, 'ALL_AVAILABLE_MODELS'):
+            openai_utils.ALL_AVAILABLE_MODELS[model] = ctx
+        if hasattr(openai_utils, 'CHAT_MODELS'):
+            openai_utils.CHAT_MODELS[model] = ctx
+        # O-series models are reasoning models
+        if model.startswith('o') and hasattr(openai_utils, 'O1_MODELS'):
+            openai_utils.O1_MODELS.add(model)
 except (ImportError, AttributeError):
     pass
 

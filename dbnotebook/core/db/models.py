@@ -13,6 +13,12 @@ This module defines the database models for the NotebookLM-style document chatbo
 - SQLQueryHistory: History of executed SQL queries
 - SQLFewShotExample: Few-shot examples from Gretel dataset
 - SQLQueryTelemetry: Telemetry data for SQL query observability
+
+RBAC (Role-Based Access Control):
+- Role: Role definitions (admin, user, viewer) with permissions
+- UserRole: Maps users to roles (many-to-many)
+- NotebookAccess: Grants users access to specific notebooks
+- SQLConnectionAccess: Grants users access to specific SQL connections
 """
 
 from sqlalchemy import Column, String, Integer, Text, TIMESTAMP, ForeignKey, BigInteger, Index, TypeDecorator, Boolean
@@ -69,6 +75,7 @@ class User(Base):
     user_id = Column(UUID(), primary_key=True, default=uuid.uuid4)
     username = Column(String(255), unique=True, nullable=False)
     email = Column(String(255), unique=True)
+    api_key = Column(String(255), nullable=True)  # Per-user API key for programmatic access
     created_at = Column(TIMESTAMP, default=datetime.utcnow, nullable=False)
     last_active = Column(TIMESTAMP, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
@@ -154,11 +161,13 @@ class Conversation(Base):
     __table_args__ = (
         Index('idx_notebook_conversations', 'notebook_id', 'timestamp'),
         Index('idx_user_conversations', 'user_id', 'timestamp'),
+        Index('idx_session_conversations', 'session_id', 'timestamp'),
     )
 
     conversation_id = Column(UUID(), primary_key=True, default=uuid.uuid4)
     notebook_id = Column(UUID(), ForeignKey("notebooks.notebook_id", ondelete="CASCADE"), nullable=False)
     user_id = Column(UUID(), ForeignKey("users.user_id", ondelete="CASCADE"), nullable=False)
+    session_id = Column(UUID(), nullable=True)  # Groups messages into conversations (NULL = UI legacy)
     role = Column(String(20), nullable=False)  # 'user' or 'assistant'
     content = Column(Text, nullable=False)
     timestamp = Column(TIMESTAMP, default=datetime.utcnow, nullable=False)
@@ -402,3 +411,113 @@ class SQLQueryTelemetry(Base):
 
     def __repr__(self):
         return f"<SQLQueryTelemetry(id={self.id}, intent='{self.intent}', success={self.success})>"
+
+
+# =============================================================================
+# RBAC (Role-Based Access Control) Models
+# =============================================================================
+
+class Role(Base):
+    """Role definitions for RBAC.
+
+    Built-in roles:
+    - admin: Full access to all features and user management
+    - user: Standard access to own notebooks and assigned resources
+    - viewer: Read-only access to assigned notebooks
+    """
+    __tablename__ = "roles"
+
+    role_id = Column(UUID(), primary_key=True, default=uuid.uuid4)
+    name = Column(String(50), unique=True, nullable=False)  # admin, user, viewer
+    description = Column(String(255), nullable=True)
+    permissions = Column(JSONB, nullable=False, default=list)  # List of permission strings
+    created_at = Column(TIMESTAMP, default=datetime.utcnow, nullable=False)
+
+    # Relationships
+    user_roles = relationship("UserRole", back_populates="role", cascade="all, delete-orphan")
+
+    def __repr__(self):
+        return f"<Role(role_id={self.role_id}, name='{self.name}')>"
+
+
+class UserRole(Base):
+    """Maps users to roles (many-to-many)."""
+    __tablename__ = "user_roles"
+    __table_args__ = (
+        Index("idx_user_roles_user", "user_id"),
+        Index("idx_user_roles_role", "role_id"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(UUID(), ForeignKey("users.user_id", ondelete="CASCADE"), nullable=False)
+    role_id = Column(UUID(), ForeignKey("roles.role_id", ondelete="CASCADE"), nullable=False)
+    assigned_by = Column(UUID(), ForeignKey("users.user_id", ondelete="SET NULL"), nullable=True)
+    assigned_at = Column(TIMESTAMP, default=datetime.utcnow, nullable=False)
+
+    # Relationships
+    user = relationship("User", foreign_keys=[user_id], backref="roles")
+    role = relationship("Role", back_populates="user_roles")
+    assigned_by_user = relationship("User", foreign_keys=[assigned_by])
+
+    def __repr__(self):
+        return f"<UserRole(user_id={self.user_id}, role_id={self.role_id})>"
+
+
+class NotebookAccess(Base):
+    """Grants users access to specific notebooks.
+
+    Access levels:
+    - owner: Full control including delete and share
+    - editor: Can edit documents and chat
+    - viewer: Read-only access, can view documents and chat history
+    """
+    __tablename__ = "notebook_access"
+    __table_args__ = (
+        Index("idx_notebook_access_notebook", "notebook_id"),
+        Index("idx_notebook_access_user", "user_id"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    notebook_id = Column(UUID(), ForeignKey("notebooks.notebook_id", ondelete="CASCADE"), nullable=False)
+    user_id = Column(UUID(), ForeignKey("users.user_id", ondelete="CASCADE"), nullable=False)
+    access_level = Column(String(20), nullable=False, default="viewer")  # owner, editor, viewer
+    granted_by = Column(UUID(), ForeignKey("users.user_id", ondelete="SET NULL"), nullable=True)
+    granted_at = Column(TIMESTAMP, default=datetime.utcnow, nullable=False)
+
+    # Relationships
+    notebook = relationship("Notebook", backref="access_grants")
+    user = relationship("User", foreign_keys=[user_id], backref="notebook_access")
+    granted_by_user = relationship("User", foreign_keys=[granted_by])
+
+    def __repr__(self):
+        return f"<NotebookAccess(notebook_id={self.notebook_id}, user_id={self.user_id}, level='{self.access_level}')>"
+
+
+class SQLConnectionAccess(Base):
+    """Grants users access to specific SQL connections.
+
+    Access levels:
+    - owner: Full control including delete and share
+    - user: Can query the database
+    - viewer: Read-only access to query history
+    """
+    __tablename__ = "sql_connection_access"
+    __table_args__ = (
+        Index("idx_sql_access_connection", "connection_id"),
+        Index("idx_sql_access_user", "user_id"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    connection_id = Column(UUID(), ForeignKey("database_connections.id", ondelete="CASCADE"), nullable=False)
+    user_id = Column(UUID(), ForeignKey("users.user_id", ondelete="CASCADE"), nullable=False)
+    access_level = Column(String(20), nullable=False, default="user")  # owner, user, viewer
+    granted_by = Column(UUID(), ForeignKey("users.user_id", ondelete="SET NULL"), nullable=True)
+    granted_at = Column(TIMESTAMP, default=datetime.utcnow, nullable=False)
+
+    # Relationships
+    connection = relationship("DatabaseConnection", backref="access_grants")
+    user = relationship("User", foreign_keys=[user_id], backref="sql_connection_access")
+    granted_by_user = relationship("User", foreign_keys=[granted_by])
+
+    def __repr__(self):
+        return f"<SQLConnectionAccess(connection_id={self.connection_id}, user_id={self.user_id}, level='{self.access_level}')>"

@@ -33,16 +33,35 @@ providers:
       # GPT-4 series
       - name: "gpt-4.1"
         display_name: "GPT-4.1"
+        context_window: 128000
       - name: "gpt-4o"
         display_name: "GPT-4o"
+        context_window: 128000
       - name: "gpt-4o-mini"
         display_name: "GPT-4o Mini"
+        context_window: 128000
       - name: "gpt-4-turbo"
         display_name: "GPT-4 Turbo"
+        context_window: 128000
       - name: "gpt-4"
         display_name: "GPT-4"
+        context_window: 8192
       - name: "gpt-3.5-turbo"
         display_name: "GPT-3.5 Turbo"
+        context_window: 16385
+      # O-series reasoning models (200K context) - require temperature=1.0
+      - name: "o3"
+        display_name: "O3"
+        context_window: 200000
+      - name: "o3-mini"
+        display_name: "O3 Mini"
+        context_window: 200000
+      - name: "o3-pro"
+        display_name: "O3 Pro"
+        context_window: 200000
+      - name: "o4-mini"
+        display_name: "O4 Mini"
+        context_window: 200000
 
   google:
     enabled: true

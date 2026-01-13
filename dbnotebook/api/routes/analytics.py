@@ -17,6 +17,7 @@ from flask import Blueprint, request, jsonify, send_file
 from werkzeug.utils import secure_filename
 
 from ...core.analytics import AnalyticsService, DashboardConfigGenerator
+from ...core.constants import DEFAULT_USER_ID
 
 logger = logging.getLogger(__name__)
 
@@ -28,9 +29,6 @@ PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
 
 # Allowed Excel extensions
 ALLOWED_EXTENSIONS = {'.xlsx', '.xls', '.csv'}
-
-# Default user ID (will be replaced with proper auth later)
-DEFAULT_USER_ID = "00000000-0000-0000-0000-000000000001"
 
 # Analytics service instance (initialized in create_analytics_routes)
 _analytics_service: Optional[AnalyticsService] = None

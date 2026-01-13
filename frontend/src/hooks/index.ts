@@ -1,4 +1,5 @@
 export { useChat } from './useChat';
+export { useChatV2 } from './useChatV2';
 export { useNotebooks } from './useNotebooks';
 export { useModels } from './useModels';
 export { useToast } from './useToast';

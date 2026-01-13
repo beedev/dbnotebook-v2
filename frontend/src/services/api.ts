@@ -742,3 +742,169 @@ export async function getConversationHistory(
   }
   return response.json();
 }
+
+// ============================================
+// V2 Chat API (Multi-user with memory)
+// ============================================
+
+import type { ChatV2Request, ChatV2Response, ConversationHistoryItem } from '../types';
+
+export interface V2ChatCallbacks {
+  onContent: (content: string) => void;
+  onSources: (sources: SourceCitation[]) => void;
+  onComplete: (sessionId: string, metadata?: ChatMetadata) => void;
+  onError: (error: string) => void;
+}
+
+/**
+ * V2 Chat API with streaming response and conversation memory.
+ * Multi-user safe with session tracking.
+ */
+export async function sendChatV2Message(
+  request: ChatV2Request,
+  callbacks: V2ChatCallbacks
+): Promise<void> {
+  const response = await fetch('/api/v2/chat/stream', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Accept: 'text/event-stream',
+    },
+    body: JSON.stringify(request),
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    callbacks.onError(errorData.error || `HTTP ${response.status}`);
+    return;
+  }
+
+  const reader = response.body?.getReader();
+  if (!reader) {
+    callbacks.onError('No response body');
+    return;
+  }
+
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+
+      for (const line of lines) {
+        if (line.startsWith('data: ')) {
+          const data = line.slice(6);
+          try {
+            const parsed = JSON.parse(data);
+
+            if (parsed.type === 'content') {
+              callbacks.onContent(parsed.content);
+            } else if (parsed.type === 'sources') {
+              callbacks.onSources(parsed.sources);
+            } else if (parsed.type === 'done') {
+              callbacks.onComplete(parsed.session_id, parsed.metadata);
+              return;
+            } else if (parsed.type === 'error') {
+              callbacks.onError(parsed.error);
+              return;
+            }
+          } catch {
+            // Plain text content
+            callbacks.onContent(data);
+          }
+        }
+      }
+    }
+  } catch (error) {
+    callbacks.onError(error instanceof Error ? error.message : 'Stream error');
+  }
+}
+
+/**
+ * V2 Chat API synchronous (non-streaming) version.
+ */
+export async function sendChatV2MessageSync(
+  request: ChatV2Request
+): Promise<ChatV2Response> {
+  const response = await fetch('/api/v2/chat', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(request),
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw {
+      error: errorData.error || 'Chat failed',
+      message: errorData.message || `HTTP ${response.status}`,
+      status: response.status,
+    };
+  }
+
+  return response.json();
+}
+
+/**
+ * Get V2 chat conversation history.
+ */
+export async function getChatV2History(
+  notebookId: string,
+  userId: string,
+  limit: number = 50
+): Promise<{ success: boolean; history: ConversationHistoryItem[]; count: number }> {
+  const params = new URLSearchParams({
+    notebook_id: notebookId,
+    user_id: userId,
+    limit: limit.toString(),
+  });
+
+  const response = await fetch(`/api/v2/chat/history?${params}`);
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw {
+      error: errorData.error || 'Failed to fetch history',
+      message: errorData.message || `HTTP ${response.status}`,
+      status: response.status,
+    };
+  }
+
+  return response.json();
+}
+
+/**
+ * Clear V2 chat conversation history.
+ */
+export async function clearChatV2History(
+  notebookId: string,
+  userId: string
+): Promise<{ success: boolean; cleared: number }> {
+  const response = await fetch('/api/v2/chat/history', {
+    method: 'DELETE',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      notebook_id: notebookId,
+      user_id: userId,
+    }),
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw {
+      error: errorData.error || 'Failed to clear history',
+      message: errorData.message || `HTTP ${response.status}`,
+      status: response.status,
+    };
+  }
+
+  return response.json();
+}

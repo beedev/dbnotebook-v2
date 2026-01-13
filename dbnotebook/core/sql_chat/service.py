@@ -84,8 +84,8 @@ class SQLChatService(BaseService):
         # Store pipeline for dynamic LLM access
         self._pipeline = pipeline
 
-        # Get LLM and embedding model (will be refreshed before each query)
-        self._llm = llm or pipeline.get_llm()
+        # Get embedding model (stable across requests)
+        # NOTE: LLM is now retrieved per-request for multi-user safety
         self._embed_model = embed_model or pipeline.get_embed_model()
 
         # Initialize components (pass db_manager for persistent storage)
@@ -98,7 +98,8 @@ class SQLChatService(BaseService):
         self._intent_classifier = IntentClassifier()
         self._confidence_scorer = ConfidenceScorer()
         self._telemetry = TelemetryLogger(db_manager)
-        self._response_generator = ResponseGenerator(self._llm)
+        # Response generator uses per-request LLM via _get_current_llm()
+        self._response_generator = None  # Created per-request
 
         # Initialize few-shot retriever (will be None if not set up)
         try:
@@ -107,9 +108,9 @@ class SQLChatService(BaseService):
             self._few_shot_retriever = None
             logger.warning("Few-shot retriever not available")
 
-        # Query engine (initialized per connection)
+        # Query engine (initialized per connection, uses per-request LLM)
         self._query_engine = TextToSQLEngine(
-            llm=self._llm,
+            llm=None,  # Will use per-request LLM
             embed_model=self._embed_model,
             validator=self._validator,
             few_shot_retriever=self._few_shot_retriever
@@ -119,7 +120,8 @@ class SQLChatService(BaseService):
         self._dictionary_generator = DictionaryGenerator()
         self._schema_linker = SchemaLinker(self._embed_model)
         self._result_validator = ResultValidator()
-        self._query_decomposer = QueryDecomposer(self._llm)
+        # Query decomposer uses per-request LLM
+        self._query_decomposer = None  # Created per-request
         self._query_learner = QueryLearner(db_manager, notebook_manager)
 
         # Session storage
@@ -134,21 +136,35 @@ class SQLChatService(BaseService):
 
         logger.info("SQLChatService initialized with enhanced components")
 
-    def _refresh_llm(self) -> None:
-        """Refresh LLM from pipeline to pick up model changes from UI."""
-        current_llm = self._pipeline.get_llm()
-        if current_llm != self._llm:
-            self._llm = current_llm
-            # Update components that use LLM
-            self._response_generator = ResponseGenerator(self._llm)
-            self._query_engine = TextToSQLEngine(
-                llm=self._llm,
-                embed_model=self._embed_model,
-                validator=self._validator,
-                few_shot_retriever=self._few_shot_retriever
-            )
-            self._query_decomposer = QueryDecomposer(self._llm)
-            logger.info(f"SQL Chat LLM refreshed to: {getattr(self._llm, 'model', 'unknown')}")
+    def _get_current_llm(self) -> LLM:
+        """Get fresh LLM for the current request.
+
+        Multi-user safe: Returns LLM from Settings (thread-local) or pipeline.
+        No shared state - each request gets its own LLM reference.
+
+        Returns:
+            LLM instance for this request
+        """
+        from llama_index.core import Settings
+        # Prefer Settings.llm (thread-safe) if available
+        if Settings.llm is not None:
+            return Settings.llm
+        # Fallback to pipeline LLM
+        return self._pipeline.get_llm()
+
+    def _get_response_generator(self, llm: LLM) -> ResponseGenerator:
+        """Get response generator with given LLM.
+
+        Per-request creation ensures multi-user safety.
+        """
+        return ResponseGenerator(llm)
+
+    def _get_query_decomposer(self, llm: LLM) -> QueryDecomposer:
+        """Get query decomposer with given LLM.
+
+        Per-request creation ensures multi-user safety.
+        """
+        return QueryDecomposer(llm)
 
     # ========== Connection Management ==========
 
@@ -376,30 +392,65 @@ class SQLChatService(BaseService):
         logger.info(f"Created SQL chat session {session_id} for connection {connection_id}")
         return session_id, None
 
-    def get_session(self, session_id: str) -> Optional[SQLChatSession]:
-        """Get session by ID.
+    def get_session(self, session_id: str, user_id: Optional[str] = None) -> Optional[SQLChatSession]:
+        """Get session by ID with optional user validation.
+
+        Multi-user safe: If user_id is provided, validates that the session
+        belongs to that user. Returns None if access is denied.
 
         Args:
             session_id: Session ID
+            user_id: Optional user ID for access validation
 
         Returns:
-            SQLChatSession or None
+            SQLChatSession or None (if not found or access denied)
         """
-        return self._sessions.get(session_id)
+        session = self._sessions.get(session_id)
+        if session is None:
+            return None
 
-    def refresh_session_schema(self, session_id: str) -> Tuple[bool, str]:
+        # Multi-user access control
+        if user_id is not None and session.user_id != user_id:
+            logger.warning(f"User {user_id} attempted to access session {session_id} owned by {session.user_id}")
+            return None
+
+        return session
+
+    def validate_session_access(self, session_id: str, user_id: str) -> bool:
+        """Validate that a user has access to a session.
+
+        Args:
+            session_id: Session ID to check
+            user_id: User ID requesting access
+
+        Returns:
+            True if access is allowed, False otherwise
+        """
+        session = self._sessions.get(session_id)
+        if session is None:
+            return False
+        return session.user_id == user_id
+
+    def refresh_session_schema(
+        self,
+        session_id: str,
+        user_id: Optional[str] = None
+    ) -> Tuple[bool, str]:
         """Refresh schema for an existing session.
 
         Forces reload of database schema and recreates query engine.
         Use this when database schema has changed.
 
+        Multi-user safe: If user_id is provided, validates session access.
+
         Args:
             session_id: Session ID
+            user_id: Optional user ID for access validation
 
         Returns:
             Tuple of (success, message)
         """
-        session = self._sessions.get(session_id)
+        session = self.get_session(session_id, user_id)
         if not session:
             return False, "Session not found"
 
@@ -429,9 +480,12 @@ class SQLChatService(BaseService):
     async def execute_query(
         self,
         session_id: str,
-        nl_query: str
+        nl_query: str,
+        user_id: Optional[str] = None
     ) -> QueryResult:
         """Execute a natural language query.
+
+        Multi-user safe: If user_id is provided, validates session access.
 
         Full pipeline:
         1. Validate user input
@@ -446,17 +500,19 @@ class SQLChatService(BaseService):
         Args:
             session_id: Session ID
             nl_query: Natural language query
+            user_id: Optional user ID for access validation
 
         Returns:
             QueryResult
         """
-        # Refresh LLM to pick up any model changes from UI
-        self._refresh_llm()
+        # Get per-request LLM (multi-user safe)
+        request_llm = self._get_current_llm()
 
         start_time = time.time()
         timings = {}  # Track per-stage timing
 
-        session = self._sessions.get(session_id)
+        # Multi-user safe: validate session access if user_id provided
+        session = self.get_session(session_id, user_id)
         if not session:
             return QueryResult(
                 success=False,
@@ -621,7 +677,7 @@ class SQLChatService(BaseService):
             # Step 6: Execute with semantic inspection (pass schema for error correction)
             t8 = time.time()
             session.status = "executing"
-            inspector = SemanticInspector(self._llm)
+            inspector = SemanticInspector(request_llm)
 
             def execute_fn(sql_to_run):
                 return self._executor.execute_readonly(engine, sql_to_run)
@@ -678,7 +734,8 @@ class SQLChatService(BaseService):
             t11 = time.time()
             if result.success:
                 column_names = [c.name for c in result.columns]
-                result.explanation = self._response_generator.generate(
+                response_gen = self._get_response_generator(request_llm)
+                result.explanation = response_gen.generate(
                     user_query=nl_query,
                     sql=result.sql_generated,
                     data=result.data,
@@ -753,6 +810,9 @@ class SQLChatService(BaseService):
 
         logger.info(f"Refining previous SQL: {refinement}")
 
+        # Get per-request LLM (multi-user safe)
+        request_llm = self._get_current_llm()
+
         # Generate refined SQL
         refined_sql = self._query_engine.refine_sql(
             session.connection_id,
@@ -781,10 +841,11 @@ class SQLChatService(BaseService):
         if conn and conn.masking_policy and result.success:
             result.data = self._data_masker.apply(result.data, conn.masking_policy)
 
-        # Generate natural language explanation
+        # Generate natural language explanation (per-request LLM)
         if result.success:
             column_names = [c.name for c in result.columns]
-            result.explanation = self._response_generator.generate(
+            response_gen = self._get_response_generator(request_llm)
+            result.explanation = response_gen.generate(
                 user_query=refinement,
                 sql=result.sql_generated,
                 data=result.data,
@@ -798,16 +859,23 @@ class SQLChatService(BaseService):
 
         return result
 
-    def get_query_history(self, session_id: str) -> List[QueryResult]:
+    def get_query_history(
+        self,
+        session_id: str,
+        user_id: Optional[str] = None
+    ) -> List[QueryResult]:
         """Get query history for session.
+
+        Multi-user safe: If user_id is provided, validates session access.
 
         Args:
             session_id: Session ID
+            user_id: Optional user ID for access validation
 
         Returns:
-            List of QueryResult
+            List of QueryResult (empty list if session not found or access denied)
         """
-        session = self._sessions.get(session_id)
+        session = self.get_session(session_id, user_id)
         return session.query_history if session else []
 
     # ========== Utilities ==========
