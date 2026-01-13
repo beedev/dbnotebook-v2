@@ -57,7 +57,8 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(['user_id'], ['users.user_id'], ondelete='CASCADE'),
         sa.ForeignKeyConstraint(['role_id'], ['roles.role_id'], ondelete='CASCADE'),
         sa.ForeignKeyConstraint(['assigned_by'], ['users.user_id'], ondelete='SET NULL'),
-        sa.PrimaryKeyConstraint('id')
+        sa.PrimaryKeyConstraint('id'),
+        sa.UniqueConstraint('user_id', 'role_id', name='uq_user_role')
     )
     op.create_index('idx_user_roles_user', 'user_roles', ['user_id'])
     op.create_index('idx_user_roles_role', 'user_roles', ['role_id'])
@@ -96,15 +97,30 @@ def upgrade() -> None:
     op.create_index('idx_sql_access_connection', 'sql_connection_access', ['connection_id'])
     op.create_index('idx_sql_access_user', 'sql_connection_access', ['user_id'])
 
-    # Insert default roles
+    # Insert default roles (idempotent with ON CONFLICT)
     op.execute("""
         INSERT INTO roles (role_id, name, description, permissions) VALUES
         (gen_random_uuid(), 'admin', 'Full access to all features and user management',
-         '["manage_users", "manage_roles", "manage_notebooks", "manage_connections", "view_all", "edit_all", "delete_all"]'::jsonb),
+         '["manage_users", "manage_roles", "manage_notebooks", "manage_connections", "view_all", "edit_all", "delete_all"]'::jsonb)
+        ON CONFLICT (name) DO UPDATE SET
+            description = EXCLUDED.description,
+            permissions = EXCLUDED.permissions
+    """)
+    op.execute("""
+        INSERT INTO roles (role_id, name, description, permissions) VALUES
         (gen_random_uuid(), 'user', 'Standard access to own notebooks and assigned resources',
-         '["create_notebook", "create_connection", "view_assigned", "edit_assigned"]'::jsonb),
+         '["create_notebook", "create_connection", "view_assigned", "edit_assigned"]'::jsonb)
+        ON CONFLICT (name) DO UPDATE SET
+            description = EXCLUDED.description,
+            permissions = EXCLUDED.permissions
+    """)
+    op.execute("""
+        INSERT INTO roles (role_id, name, description, permissions) VALUES
         (gen_random_uuid(), 'viewer', 'Read-only access to assigned notebooks',
          '["view_assigned"]'::jsonb)
+        ON CONFLICT (name) DO UPDATE SET
+            description = EXCLUDED.description,
+            permissions = EXCLUDED.permissions
     """)
 
 

@@ -19,8 +19,11 @@ down_revision: Union[str, Sequence[str], None] = '9d7c2dc6ed6f'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
-# Default user ID used throughout the application
+# Default user constants
 DEFAULT_USER_ID = '00000000-0000-0000-0000-000000000001'
+DEFAULT_USERNAME = 'admin'
+DEFAULT_EMAIL = 'admin@dbnotebook.local'
+DEFAULT_API_KEY = 'dbn_00000000000000000000000000000001'
 
 
 def upgrade() -> None:
@@ -31,20 +34,21 @@ def upgrade() -> None:
     # Create index for fast API key lookups
     op.create_index('idx_users_api_key', 'users', ['api_key'], unique=True)
 
-    # Create default user if not exists (with generated API key)
-    # Uses gen_random_uuid() for API key generation (PostgreSQL 13+)
+    # Create default admin user if not exists (with fixed API key for consistency)
     op.execute(f"""
         INSERT INTO users (user_id, username, email, api_key, created_at, last_active)
         VALUES (
             '{DEFAULT_USER_ID}'::uuid,
-            'default',
-            'default@dbnotebook.local',
-            'dbn_' || replace(gen_random_uuid()::text, '-', ''),
+            '{DEFAULT_USERNAME}',
+            '{DEFAULT_EMAIL}',
+            '{DEFAULT_API_KEY}',
             NOW(),
             NOW()
         )
         ON CONFLICT (user_id) DO UPDATE SET
-            api_key = COALESCE(users.api_key, 'dbn_' || replace(gen_random_uuid()::text, '-', ''))
+            username = '{DEFAULT_USERNAME}',
+            email = '{DEFAULT_EMAIL}',
+            api_key = COALESCE(users.api_key, '{DEFAULT_API_KEY}')
     """)
 
 

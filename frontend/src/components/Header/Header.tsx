@@ -7,8 +7,12 @@
  * - Deep space terminal theme styling
  */
 
-import { MessageSquare, BarChart3, Database, Cpu, Sparkles, Bot, Cloud, Zap, Terminal } from 'lucide-react';
+import { useState, useRef, useEffect } from 'react';
+import { createPortal } from 'react-dom';
+import { useNavigate } from 'react-router-dom';
+import { MessageSquare, BarChart3, Database, Cpu, Sparkles, Bot, Cloud, Zap, Terminal, User, Settings, LogOut, ChevronDown } from 'lucide-react';
 import { useApp, type AppView } from '../../contexts/AppContext';
+import { useAuth } from '../../contexts/AuthContext';
 import type { ModelProvider } from '../../types';
 
 const providerIcons: Record<ModelProvider, React.ReactNode> = {
@@ -72,6 +76,13 @@ const navTabs: NavTab[] = [
 ];
 
 export function Header() {
+  const navigate = useNavigate();
+  const { user, isAdmin, logout } = useAuth();
+  const [showUserMenu, setShowUserMenu] = useState(false);
+  const [menuPosition, setMenuPosition] = useState({ top: 0, right: 0 });
+  const menuRef = useRef<HTMLDivElement>(null);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+
   const {
     currentView,
     setCurrentView,
@@ -82,15 +93,48 @@ export function Header() {
     selectModel,
   } = useApp();
 
+  // Close menu when clicking outside
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (
+        menuRef.current &&
+        !menuRef.current.contains(event.target as Node) &&
+        buttonRef.current &&
+        !buttonRef.current.contains(event.target as Node)
+      ) {
+        setShowUserMenu(false);
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  // Update menu position when opened
+  const handleToggleMenu = () => {
+    if (!showUserMenu && buttonRef.current) {
+      const rect = buttonRef.current.getBoundingClientRect();
+      setMenuPosition({
+        top: rect.bottom + 4,
+        right: window.innerWidth - rect.right,
+      });
+    }
+    setShowUserMenu(!showUserMenu);
+  };
+
   const handleModelChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const [provider, model] = e.target.value.split('::');
     selectModel(model, provider as ModelProvider);
   };
 
+  const handleLogout = async () => {
+    await logout();
+    navigate('/login');
+  };
+
   const currentModelValue = `${selectedProvider}::${selectedModel}`;
 
   return (
-    <header className="h-14 flex items-center justify-between px-4 bg-void-light border-b border-void-surface shrink-0">
+    <header className="h-14 flex items-center justify-between px-4 bg-void-light border-b border-void-surface shrink-0 overflow-visible">
       {/* Logo and Title */}
       <div className="flex items-center gap-3">
         <div className="flex items-center gap-2">
@@ -127,8 +171,9 @@ export function Header() {
         })}
       </nav>
 
-      {/* Model Selector */}
-      <div className="flex items-center gap-2">
+      {/* Model Selector & User Menu */}
+      <div className="flex items-center gap-4">
+        {/* Model Selector */}
         <div className="relative">
           <select
             value={currentModelValue}
@@ -173,6 +218,60 @@ export function Header() {
             </span>
           </div>
         </div>
+
+        {/* User Menu */}
+        {user && (
+          <div className="relative">
+            <button
+              ref={buttonRef}
+              onClick={handleToggleMenu}
+              className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-void-surface border border-void-lighter hover:border-text-dim transition-colors"
+            >
+              <User className="w-4 h-4 text-text-muted" />
+              <span className="text-sm text-text hidden sm:inline">{user.username}</span>
+              <ChevronDown className={`w-4 h-4 text-text-muted transition-transform ${showUserMenu ? 'rotate-180' : ''}`} />
+            </button>
+
+            {/* Portal dropdown to escape stacking context */}
+            {showUserMenu && createPortal(
+              <div
+                ref={menuRef}
+                className="fixed w-48 bg-gray-800 border border-gray-600 rounded-lg shadow-2xl py-1"
+                style={{
+                  top: menuPosition.top,
+                  right: menuPosition.right,
+                  zIndex: 99999,
+                }}
+              >
+                <button
+                  onClick={() => { navigate('/profile'); setShowUserMenu(false); }}
+                  className="w-full flex items-center gap-2 px-4 py-2 text-sm text-gray-100 hover:bg-gray-700 transition-colors text-left"
+                >
+                  <User className="w-4 h-4" />
+                  My Profile
+                </button>
+                {isAdmin && (
+                  <button
+                    onClick={() => { navigate('/admin'); setShowUserMenu(false); }}
+                    className="w-full flex items-center gap-2 px-4 py-2 text-sm text-gray-100 hover:bg-gray-700 transition-colors text-left"
+                  >
+                    <Settings className="w-4 h-4" />
+                    Admin Dashboard
+                  </button>
+                )}
+                <hr className="my-1 border-gray-600" />
+                <button
+                  onClick={handleLogout}
+                  className="w-full flex items-center gap-2 px-4 py-2 text-sm text-red-400 hover:bg-gray-700 transition-colors text-left"
+                >
+                  <LogOut className="w-4 h-4" />
+                  Logout
+                </button>
+              </div>,
+              document.body
+            )}
+          </div>
+        )}
       </div>
     </header>
   );

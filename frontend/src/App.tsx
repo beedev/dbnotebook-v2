@@ -1,14 +1,19 @@
 import { useEffect } from 'react';
+import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import { MainLayout } from './components/Layout';
 import { Header } from './components/Header';
 import { Sidebar } from './components/Sidebar';
 import { ChatArea } from './components/Chat';
 import { ToastContainer } from './components/ui';
+import { ProtectedRoute } from './components/ProtectedRoute';
 import { AppProviders, useNotebook, useDocument, SQLChatProvider, useApp } from './contexts';
 import { useNotebooks } from './hooks/useNotebooks';
 import { useModels } from './hooks/useModels';
 import { useToast } from './hooks/useToast';
 import { AnalyticsPage, QueryPage } from './pages';
+import { Login } from './pages/Login';
+import { Admin } from './pages/Admin';
+import { Profile } from './pages/Profile';
 import { SQLChatPage } from './components/SQLChat';
 
 function AppContent() {
@@ -189,13 +194,50 @@ function AppContent() {
   );
 }
 
+function AppRoutes() {
+  return (
+    <Routes>
+      {/* Public route */}
+      <Route path="/login" element={<Login />} />
+
+      {/* Protected routes */}
+      <Route
+        path="/"
+        element={
+          <ProtectedRoute>
+            <SQLChatProvider>
+              <AppContent />
+            </SQLChatProvider>
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/admin"
+        element={
+          <ProtectedRoute requireAdmin>
+            <Admin />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/profile"
+        element={
+          <ProtectedRoute>
+            <Profile />
+          </ProtectedRoute>
+        }
+      />
+    </Routes>
+  );
+}
+
 function App() {
   return (
-    <AppProviders>
-      <SQLChatProvider>
-        <AppContent />
-      </SQLChatProvider>
-    </AppProviders>
+    <BrowserRouter>
+      <AppProviders>
+        <AppRoutes />
+      </AppProviders>
+    </BrowserRouter>
   );
 }
 

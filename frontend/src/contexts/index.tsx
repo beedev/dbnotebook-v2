@@ -22,6 +22,7 @@ import { NotebookProvider } from './NotebookContext';
 import { ChatProvider } from './ChatContext';
 import { DocumentProvider } from './DocumentContext';
 import { AppProvider } from './AppContext';
+import { AuthProvider } from './AuthContext';
 
 /* eslint-disable react-refresh/only-export-components */
 
@@ -50,6 +51,9 @@ export { SQLChatProvider, useSQLChat } from './SQLChatContext';
 export { AppProvider, useApp } from './AppContext';
 export type { AppView } from './AppContext';
 
+// Auth Context
+export { AuthProvider, useAuth } from './AuthContext';
+
 /* eslint-enable react-refresh/only-export-components */
 
 /**
@@ -69,15 +73,17 @@ interface AppProvidersProps {
 export function AppProviders({ children }: AppProvidersProps) {
   return (
     <ThemeProvider>
-      <AppProvider>
-        <NotebookProvider>
-          <ChatProvider>
-            <DocumentProvider>
-              {children}
-            </DocumentProvider>
-          </ChatProvider>
-        </NotebookProvider>
-      </AppProvider>
+      <AuthProvider>
+        <AppProvider>
+          <NotebookProvider>
+            <ChatProvider>
+              <DocumentProvider>
+                {children}
+              </DocumentProvider>
+            </ChatProvider>
+          </NotebookProvider>
+        </AppProvider>
+      </AuthProvider>
     </ThemeProvider>
   );
 }

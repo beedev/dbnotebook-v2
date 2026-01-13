@@ -22,6 +22,8 @@ services:
       - API_KEY=${API_KEY:-}
       # RBAC - role-based access control (disabled by default)
       - RBAC_STRICT_MODE=${RBAC_STRICT_MODE:-false}
+      # Flask session secret key (required for consistent sessions across workers)
+      - FLASK_SECRET_KEY=${FLASK_SECRET_KEY:-dbnotebook-session-secret-key-2026}
     depends_on:
       postgres:
         condition: service_healthy

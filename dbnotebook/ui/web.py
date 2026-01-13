@@ -25,6 +25,7 @@ from ..api.routes.sql_chat import create_sql_chat_routes
 from ..api.routes.query import create_query_routes
 from ..api.routes.chat_v2 import create_chat_v2_routes
 from ..api.routes.admin import create_admin_routes
+from ..api.routes.auth import create_auth_routes
 from ..core.ingestion import WebContentIngestion, SynopsisManager
 from ..core.studio import StudioManager
 from ..core.constants import DEFAULT_USER_ID
@@ -94,6 +95,14 @@ class FlaskChatbotUI:
             static_folder=str(frontend_dist / "assets") if frontend_dist.exists() else None,
             static_url_path="/assets"
         )
+
+        # Configure session secret key for authentication
+        self._app.secret_key = os.getenv("FLASK_SECRET_KEY", os.urandom(24).hex())
+
+        # Store db_manager in app extensions for access from decorators (RBAC)
+        if not hasattr(self._app, 'extensions'):
+            self._app.extensions = {}
+        self._app.extensions['db_manager'] = self._db_manager
 
         # Add CORS support for React dev server
         self._setup_cors()
@@ -1520,6 +1529,16 @@ Output ONLY valid JSON, nothing else."""
         except Exception as e:
             logger.warning(f"V2 Chat API routes not available: {e}")
 
+        # Register Auth API routes (login, logout, password, API key)
+        try:
+            create_auth_routes(
+                self._app,
+                db_manager=self._db_manager
+            )
+            logger.info("Auth API routes registered (/api/auth)")
+        except Exception as e:
+            logger.warning(f"Auth API routes not available: {e}")
+
         # Register Admin API routes (RBAC management)
         try:
             create_admin_routes(
@@ -1528,6 +1547,10 @@ Output ONLY valid JSON, nothing else."""
                 notebook_manager=self._notebook_manager
             )
             logger.info("Admin API routes registered (/api/admin)")
+
+            # Register RBAC session cleanup
+            from ..core.auth.rbac import cleanup_rbac_session
+            self._app.teardown_appcontext(cleanup_rbac_session)
         except Exception as e:
             logger.warning(f"Admin API routes not available: {e}")
 

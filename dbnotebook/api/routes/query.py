@@ -6,8 +6,11 @@ Provides a unified API for programmatic access:
 - GET /api/user/api-key - Get current user's API key
 
 Conversation Memory:
-- Omit session_id → stateless query (new session_id returned for optional continuation)
-- Pass session_id → conversational mode (loads history, enriches context)
+- Omit session_id → stateless query (no history saved, no session_id returned)
+- Pass session_id → conversational mode (loads history, saves Q&A, returns session_id)
+
+Important: Client must generate and send session_id (UUID format) from the FIRST request
+if conversation memory is desired. The server does not generate session IDs.
 
 Designed for:
 - API integrations
@@ -119,31 +122,37 @@ def create_query_routes(app, pipeline, db_manager, notebook_manager):
         Thread-safe for concurrent requests. Uses default LLM model configured at startup.
 
         **Conversation Memory:**
-        - Omit `session_id` → stateless query (new session_id returned for optional continuation)
-        - Pass `session_id` → conversational mode (loads history, enriches context)
+        - Omit `session_id` → stateless query (no history saved, no session_id returned)
+        - Pass `session_id` → conversational mode (loads history, saves Q&A, returns session_id)
+
+        **Important:** Client must generate and send session_id (UUID) from the FIRST request
+        if conversation memory is desired. The server does not generate session IDs.
 
         Request JSON:
             {
                 "notebook_id": "uuid",           # Required
                 "query": "string",               # Required
-                "session_id": "uuid",            # Optional - pass to continue conversation
+                "session_id": "uuid",            # Optional - client-generated UUID for memory
                 "max_history": 5,                # Optional, default: 5, max: 20 (only if session_id)
                 "include_sources": true,         # Optional, default: true
                 "max_sources": 6                 # Optional, default: 6, max: 20
             }
 
-        Response JSON:
+        Response JSON (stateless - no session_id sent):
             {
                 "success": true,
                 "response": "LLM response text",
-                "session_id": "uuid",            # Use this for follow-up queries
                 "sources": [...],
-                "metadata": {
-                    "execution_time_ms": 850,
-                    "model": "llama3.1:latest",
-                    "retrieval_strategy": "hybrid",
-                    "history_messages_used": 0   # >0 if session_id was provided
-                }
+                "metadata": { "stateless": true, "history_messages_used": 0 }
+            }
+
+        Response JSON (with memory - session_id sent):
+            {
+                "success": true,
+                "response": "LLM response text",
+                "session_id": "uuid",            # Same as sent, confirms memory enabled
+                "sources": [...],
+                "metadata": { "stateless": false, "history_messages_used": 3 }
             }
         """
         import uuid as uuid_lib
@@ -172,8 +181,10 @@ def create_query_routes(app, pipeline, db_manager, notebook_manager):
                 }), 400
 
             # Session management - optional conversation memory
+            # Client MUST send session_id to enable memory (consistency: no session_id = stateless)
             session_id_input = data.get("session_id")
-            use_memory = session_id_input is not None  # Only use memory if session_id provided
+            use_memory = session_id_input is not None
+            session_id = None
 
             if session_id_input:
                 try:
@@ -181,11 +192,8 @@ def create_query_routes(app, pipeline, db_manager, notebook_manager):
                 except ValueError:
                     return jsonify({
                         "success": False,
-                        "error": "Invalid session_id format"
+                        "error": "Invalid session_id format. Must be a valid UUID."
                     }), 400
-            else:
-                # Generate new session_id (returned for optional continuation)
-                session_id = uuid_lib.uuid4()
 
             # Get user_id for RBAC check
             user_id = (
@@ -427,21 +435,28 @@ User question: {query}"""
 
             logger.info(f"API query completed in {execution_time_ms}ms, session={session_id}, history_used={len(history_messages)}")
 
-            return jsonify({
+            # Build response - only include session_id if memory is enabled
+            response_data = {
                 "success": True,
                 "response": response_text,
-                "session_id": str(session_id),  # Always return for optional continuation
                 "sources": sources,
                 "metadata": {
                     "execution_time_ms": execution_time_ms,
                     "model": pipeline._default_model.model if pipeline._default_model else "unknown",
                     "retrieval_strategy": retrieval_strategy,
                     "node_count": len(nodes),
+                    "stateless": not use_memory,
                     "history_messages_used": len(history_messages),
                     "raptor_summaries_used": len(raptor_summaries) if raptor_summaries else 0,
                     "timings": timings
                 }
-            })
+            }
+
+            # Only return session_id if client sent one (memory enabled)
+            if use_memory and session_id:
+                response_data["session_id"] = str(session_id)
+
+            return jsonify(response_data)
 
         except Exception as e:
             logger.error(f"Error in query endpoint: {e}")

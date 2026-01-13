@@ -75,6 +75,7 @@ class User(Base):
     user_id = Column(UUID(), primary_key=True, default=uuid.uuid4)
     username = Column(String(255), unique=True, nullable=False)
     email = Column(String(255), unique=True)
+    password_hash = Column(String(255), nullable=True)  # bcrypt hashed password
     api_key = Column(String(255), nullable=True)  # Per-user API key for programmatic access
     created_at = Column(TIMESTAMP, default=datetime.utcnow, nullable=False)
     last_active = Column(TIMESTAMP, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)

@@ -30,7 +30,7 @@ from functools import wraps
 from typing import List, Optional, Set
 from uuid import UUID
 
-from flask import request, jsonify, g
+from flask import request, jsonify, g, current_app
 from sqlalchemy.orm import Session
 
 from dbnotebook.core.db.models import (
@@ -511,10 +511,26 @@ class RBACService:
 
 def get_rbac_service():
     """Get RBAC service from Flask g object or create new one."""
-    if not hasattr(g, 'rbac_service'):
-        from dbnotebook.core.db import get_session
-        g.rbac_service = RBACService(get_session())
+    if not hasattr(g, 'rbac_service') or g.rbac_service is None:
+        db_manager = current_app.extensions.get('db_manager')
+        if not db_manager:
+            raise RuntimeError("Database manager not available in app extensions")
+        # Create a new session for this request context
+        session = db_manager.SessionLocal()
+        g.rbac_service = RBACService(session)
+        g.rbac_session = session  # Store for cleanup in teardown
     return g.rbac_service
+
+
+def cleanup_rbac_session(exception=None):
+    """Clean up RBAC session after request."""
+    session = g.pop('rbac_session', None)
+    if session:
+        try:
+            session.close()
+        except Exception:
+            pass
+    g.pop('rbac_service', None)
 
 
 def require_permission(permission: Permission):
@@ -679,15 +695,36 @@ def _get_current_user_id() -> Optional[str]:
     """Get current user ID from request context.
 
     Checks in order:
-    1. X-User-ID header
-    2. Request body user_id/userId
-    3. Query parameter user_id
-    4. Default user ID (for backward compatibility)
+    1. Flask session (from login)
+    2. X-API-Key header (API key authentication)
+    3. X-User-ID header (explicit user override)
+    4. Request body user_id/userId
+    5. Query parameter user_id
+    6. Default user ID (ONLY for backward compatibility with non-auth endpoints)
 
     Returns:
         User ID string or None
     """
-    # Check header
+    from flask import session
+
+    # Check Flask session (from login)
+    user_id = session.get('user_id')
+    if user_id:
+        return str(user_id)
+
+    # Check API key authentication
+    api_key = request.headers.get('X-API-Key')
+    if api_key:
+        # Look up user by API key
+        db_manager = current_app.extensions.get('db_manager')
+        if db_manager:
+            from dbnotebook.core.db.models import User
+            with db_manager.get_session() as db_session:
+                user = db_session.query(User).filter(User.api_key == api_key).first()
+                if user:
+                    return str(user.user_id)
+
+    # Check X-User-ID header (explicit override, useful for testing)
     user_id = request.headers.get('X-User-ID')
     if user_id:
         return user_id
@@ -704,8 +741,10 @@ def _get_current_user_id() -> Optional[str]:
     if user_id:
         return user_id
 
-    # Default user ID for backward compatibility
-    return "00000000-0000-0000-0000-000000000001"
+    # No user identified - return None (will trigger 401)
+    # NOTE: For backwards compatibility with non-auth endpoints, this could return DEFAULT_USER_ID
+    # but for security, we now require explicit authentication
+    return None
 
 
 # ========== Inline Access Check Helpers ==========
