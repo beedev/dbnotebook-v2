@@ -25,7 +25,7 @@ def _get_rag_config() -> dict:
         "enabled": get_config_value("sql_chat", "few_shot", "rag_integration", "enabled", default=True),
         "use_reranker": get_config_value("sql_chat", "few_shot", "rag_integration", "use_reranker", default=True),
         "rerank_model": get_config_value("sql_chat", "few_shot", "rag_integration", "rerank_model",
-                                         default="mixedbread-ai/mxbai-rerank-large-v1"),
+                                         default="mixedbread-ai/mxbai-rerank-base-v1"),
         "rerank_top_k": get_config_value("sql_chat", "few_shot", "rag_integration", "rerank_top_k", default=15),
         "bm25_weight": get_config_value("sql_chat", "few_shot", "rag_integration", "weights", "bm25", default=0.3),
         "vector_weight": get_config_value("sql_chat", "few_shot", "rag_integration", "weights", "vector", default=0.7),
@@ -62,16 +62,15 @@ class FewShotRetriever:
         self._rag_config = _get_rag_config()
         self._reranker = None
 
-        # Initialize reranker if enabled
-        # Note: FewShotRetriever needs its own instance because it mutates top_n per-query
+        # Initialize reranker if enabled - uses shared thread-safe reranker
         if self._rag_config["enabled"] and self._rag_config["use_reranker"]:
             try:
-                from llama_index.core.postprocessor import SentenceTransformerRerank
-                self._reranker = SentenceTransformerRerank(
-                    top_n=self.DEFAULT_TOP_K,
+                from dbnotebook.core.providers.reranker_provider import get_shared_reranker
+                self._reranker = get_shared_reranker(
                     model=self._rag_config["rerank_model"],
+                    top_n=self.DEFAULT_TOP_K,
                 )
-                logger.info(f"Few-shot reranker initialized: {self._rag_config['rerank_model']}")
+                logger.info(f"Few-shot using shared reranker: {self._rag_config['rerank_model']}")
             except Exception as e:
                 logger.warning(f"Failed to initialize reranker: {e}. Using hybrid search without reranking.")
                 self._reranker = None

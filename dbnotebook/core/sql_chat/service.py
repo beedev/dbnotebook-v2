@@ -611,8 +611,8 @@ class SQLChatService(BaseService):
                     nl_query, session.schema, session.connection_id
                 )
                 focused_schema = self._schema_linker.filter_schema(session.schema, relevant_tables)
-                relevant_table_names = [t[0] for t in relevant_tables]  # Extract table names
-                logger.debug(f"Schema linking: {len(relevant_tables)} tables selected")
+                relevant_table_names = relevant_tables  # link_tables returns List[str]
+                logger.info(f"Schema linking: {len(relevant_tables)} tables selected: {relevant_tables}")
             elif session.schema:
                 relevant_table_names = [t.name for t in session.schema.tables]
             timings["4_schema_linking_ms"] = int((time.time() - t4) * 1000)
@@ -629,11 +629,12 @@ class SQLChatService(BaseService):
                 logger.info("Dictionary context retrieved for SQL generation")
 
             # Step 4: Generate SQL with dictionary context
+            # Use focused_schema (RAG-filtered tables) instead of full schema
             t6 = time.time()
             sql, success, intent = self._query_engine.generate_with_correction(
                 session.connection_id,
                 nl_query,
-                session.schema,
+                focused_schema,  # Only relevant tables from schema linking
                 dictionary_context=dictionary_context
             )
             timings["6_sql_generation_ms"] = int((time.time() - t6) * 1000)

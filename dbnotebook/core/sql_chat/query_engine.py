@@ -160,20 +160,42 @@ class TextToSQLEngine:
         Args:
             connection_id: Connection ID
             nl_query: Natural language query
-            schema: Optional schema for few-shot domain inference
+            schema: Optional filtered schema (from RAG/schema linking)
             include_few_shot: Whether to include few-shot examples
             dictionary_context: Optional dictionary context from RAG (sample values, descriptions)
 
         Returns:
             Tuple of (sql_query, natural_response, intent)
         """
-        query_engine = self._query_engines.get(connection_id)
-        if not query_engine:
-            raise ValueError(f"No query engine for connection {connection_id}")
+        base_sql_database = self._sql_databases.get(connection_id)
+        if not base_sql_database:
+            raise ValueError(f"No SQL database for connection {connection_id}")
 
         # Classify intent
         intent = self._intent_classifier.classify(nl_query)
         logger.debug(f"Intent: {intent.intent.value} (confidence: {intent.confidence})")
+
+        # Create filtered query engine if schema is reduced (RAG-based table selection)
+        query_engine = self._query_engines.get(connection_id)
+        if schema:
+            filtered_table_names = [t.name for t in schema.tables]
+            all_table_names = base_sql_database.get_usable_table_names()
+
+            if len(filtered_table_names) < len(all_table_names):
+                # Create filtered SQLDatabase with only relevant tables
+                logger.info(f"Using filtered schema: {len(filtered_table_names)}/{len(all_table_names)} tables")
+                filtered_sql_database = SQLDatabase(
+                    engine=base_sql_database.engine,
+                    include_tables=filtered_table_names
+                )
+                # Create temp query engine with filtered tables
+                query_engine = NLSQLTableQueryEngine(
+                    sql_database=filtered_sql_database,
+                    llm=self._llm,
+                )
+
+        if not query_engine:
+            raise ValueError(f"No query engine for connection {connection_id}")
 
         # Build enhanced prompt with dictionary context
         enhanced_query = self._build_enhanced_query(
@@ -249,8 +271,17 @@ class TextToSQLEngine:
                 schema_text = " ".join([t.name for t in schema.tables])
                 domain = self._few_shot_retriever.infer_domain(schema_text)
 
+            # Adaptive few-shot count based on schema size to manage context
+            table_count = len(schema.tables) if schema else 0
+            if table_count > 10:
+                few_shot_count = 2  # Reduced for larger schemas
+            elif table_count > 5:
+                few_shot_count = 3
+            else:
+                few_shot_count = 5  # Default
+
             examples = self._few_shot_retriever.get_examples(
-                nl_query, top_k=5, domain_hint=domain
+                nl_query, top_k=few_shot_count, domain_hint=domain
             )
             if examples:
                 few_shot_prompt = self._few_shot_retriever.format_for_prompt(examples)

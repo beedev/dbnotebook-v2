@@ -102,17 +102,12 @@ class SchemaLinker:
         # Sort by similarity descending
         similarities.sort(key=lambda x: x[1], reverse=True)
 
-        # Select top-k tables above threshold
-        selected = []
-        for table_name, score in similarities[:k]:
-            if score >= self._similarity_threshold:
-                selected.append(table_name)
-            elif len(selected) == 0:
-                # Always include at least one table
-                selected.append(table_name)
+        # Always select top-k tables (threshold is for additional expansion, not filtering)
+        # This ensures we always have enough context for SQL generation
+        selected = [table_name for table_name, score in similarities[:k]]
 
-        logger.debug(f"Schema linking: {len(selected)} tables selected from {len(schema.tables)}")
-        logger.debug(f"Top tables: {[(t, f'{s:.3f}') for t, s in similarities[:5]]}")
+        logger.info(f"Schema linking: {len(selected)} tables selected from {len(schema.tables)}")
+        logger.info(f"Top tables: {[(t, f'{s:.3f}') for t, s in similarities[:k]]}")
 
         # Expand with FK-related tables
         if expand_with_fk:
