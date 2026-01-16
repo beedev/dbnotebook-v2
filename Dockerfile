@@ -67,7 +67,6 @@ COPY dbnotebook/ dbnotebook/
 COPY --from=frontend-builder /app/frontend/dist frontend/dist/
 COPY alembic/ alembic/
 COPY alembic.ini .
-COPY gunicorn.conf.py .
 COPY docker-entrypoint.sh .
 RUN chmod +x docker-entrypoint.sh
 

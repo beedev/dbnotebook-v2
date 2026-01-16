@@ -35,15 +35,20 @@ summarization:
   summary_max_tokens: 500     # Max tokens for generated summary
   max_chunks_per_summary: 10  # Max chunks to include in one summary
 
-  # LLM prompts
+  # LLM prompts - CRITICAL: These prompts must preserve numerical values and tabular data
   cluster_summary_prompt: |
     You are an expert summarizer. Below are related text chunks from a document that have been grouped together by semantic similarity.
 
     Create a comprehensive summary that:
     1. Captures the main themes and key points across all chunks
-    2. Preserves important details, facts, and figures
-    3. Maintains logical flow and coherence
-    4. Is self-contained and understandable without the original chunks
+    2. **CRITICAL: Preserve ALL numerical values exactly as written** (amounts like 150, 300, 500, percentages, limits, thresholds, dates, IDs)
+    3. **CRITICAL: When you encounter tables or eligibility matrices, list the specific values for each category/row**
+       - Format: "[Category/Level]: [field1]=value1, [field2]=value2, ..."
+       - Example: "L1-L3 employees: local_conveyance=150, per_diem=500, private_arrangement=200"
+    4. Maintains logical flow and coherence
+    5. Is self-contained and understandable without the original chunks
+
+    IMPORTANT: Do NOT summarize numbers as "varies" or "depends on level" - always include the actual specific values.
 
     CHUNKS TO SUMMARIZE:
     {chunks}
@@ -56,8 +61,13 @@ summarization:
     Create a high-level executive summary that:
     1. Provides an overview of the entire document's content
     2. Highlights the most important themes and conclusions
-    3. Notes any key relationships between different sections
-    4. Is suitable for answering "summarize this document" queries
+    3. **CRITICAL: Preserve ALL specific numerical values from the summaries below** (amounts, percentages, limits, thresholds)
+    4. **CRITICAL: If the summaries contain tabular data or eligibility information with specific values, include them**
+       - List specific values rather than generalizing
+       - Example: "Travel allowances by level: L1-L3 (local_conveyance=150), L4-L7 (local_conveyance=250), L8-L10 (local_conveyance=300)"
+    5. Notes any key relationships between different sections
+
+    IMPORTANT: Numerical precision is required. Do NOT replace specific values with general statements.
 
     SECTION SUMMARIES:
     {summaries}

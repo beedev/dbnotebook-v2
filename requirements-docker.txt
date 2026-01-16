@@ -43,8 +43,6 @@ filelock==3.20.1
 filetype==1.2.0
 firecrawl-py==1.17.0
 Flask==3.1.2
-gunicorn>=22.0.0
-gevent>=24.2.1
 flatbuffers==25.12.19
 frozenlist==1.8.0
 fsspec>=2023.5.0,<=2024.6.1
@@ -88,6 +86,7 @@ llama-index-llms-openai>=0.6.0
 llama-index-llms-anthropic>=0.10.0
 llama-index-llms-gemini>=0.6.0
 llama-index-llms-ollama>=0.9.0
+llama-index-llms-groq>=0.3.0
 # Embeddings
 llama-index-embeddings-huggingface>=0.6.0
 llama-index-embeddings-openai>=0.5.0

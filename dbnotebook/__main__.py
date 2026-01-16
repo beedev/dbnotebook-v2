@@ -4,6 +4,23 @@ import os
 import sys
 from pathlib import Path
 
+# Set threading env vars BEFORE importing libraries that use them
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
+# Allow nested event loops (fixes LlamaIndex asyncio + threading conflicts)
+import nest_asyncio
+nest_asyncio.apply()
+
+# Limit PyTorch to single thread per operation (prevents segfaults in multi-threaded Flask)
+import torch
+torch.set_num_threads(1)
+torch.set_num_interop_threads(1)
+
+# Limit ONNX Runtime threads (prevents segfaults when reranker called concurrently)
+import onnxruntime as ort
+ort.set_default_logger_severity(3)  # Reduce logging
+
 import llama_index.core
 
 from .ui import FlaskChatbotUI

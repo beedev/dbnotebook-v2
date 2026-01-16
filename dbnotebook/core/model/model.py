@@ -1,4 +1,5 @@
 import logging
+import os
 from typing import Optional
 
 import requests
@@ -21,7 +22,7 @@ class LocalRAGModel:
 
     OPENAI_MODELS = {
         # GPT-3.5 and GPT-4 models
-        "gpt-3.5-turbo", "gpt-4", "gpt-4-turbo", "gpt-4o", "gpt-4.1",
+        "gpt-3.5-turbo", "gpt-4", "gpt-4-turbo", "gpt-4o", "gpt-4.1", "gpt-4.1-mini", "gpt-4.1-nano",
         "gpt-4o-mini", "gpt-4-turbo-preview",
         "gpt-4-0125-preview", "gpt-4-1106-preview",  # GPT-4 Turbo versions
         "gpt-4o-2024-11-20", "gpt-4o-2024-08-06",     # GPT-4o versions
@@ -40,6 +41,23 @@ class LocalRAGModel:
     GEMINI_MODELS = {
         "gemini-3-pro-preview", "gemini-2.5-pro", "gemini-2.5-flash",
         "gemini-2.0-flash-exp", "gemini-1.5-pro", "gemini-1.5-flash"
+    }
+    GROQ_MODELS = {
+        # Llama 4 series
+        "meta-llama/llama-4-scout-17b-16e-instruct",
+        "meta-llama/llama-4-maverick-17b-128e-instruct",
+        # Llama 3.x series
+        "llama-3.3-70b-versatile",
+        "llama-3.3-70b-specdec",
+        "llama-3.1-8b-instant",
+        "llama-3.2-1b-preview",
+        "llama-3.2-3b-preview",
+        # Mixtral
+        "mixtral-8x7b-32768",
+        # Gemma
+        "gemma2-9b-it",
+        # Qwen
+        "qwen-qwq-32b",
     }
 
     @staticmethod
@@ -71,6 +89,8 @@ class LocalRAGModel:
             provider = "claude"
         elif model_name in LocalRAGModel.GEMINI_MODELS:
             provider = "gemini"
+        elif model_name in LocalRAGModel.GROQ_MODELS:
+            provider = "groq"
         else:
             provider = "ollama"
 
@@ -106,6 +126,13 @@ class LocalRAGModel:
                 api_key=setting.gemini.api_key,
                 temperature=setting.gemini.temperature,
                 max_tokens=setting.gemini.max_output_tokens
+            )
+        elif provider == "groq":
+            from llama_index.llms.groq import Groq
+            model = Groq(
+                model=model_name,
+                api_key=os.getenv("GROQ_API_KEY"),
+                temperature=setting.ollama.temperature,  # Reuse temperature setting
             )
         else:
             # Create Ollama model

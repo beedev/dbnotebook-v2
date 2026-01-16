@@ -30,6 +30,7 @@ import {
   Layers,
   Key
 } from 'lucide-react';
+import { useApp } from '../contexts/AppContext';
 
 interface Notebook {
   id: string;
@@ -78,6 +79,7 @@ interface QueryResponse {
 // TODO: Replace with actual auth when implemented
 const DEFAULT_USER_ID = '00000000-0000-0000-0000-000000000001';
 
+
 export function QueryPage() {
   const [notebooks, setNotebooks] = useState<Notebook[]>([]);
   const [selectedNotebook, setSelectedNotebook] = useState<Notebook | null>(null);
@@ -91,8 +93,13 @@ export function QueryPage() {
   const [apiKey, setApiKey] = useState<string | null>(null);
   const [isLoadingApiKey, setIsLoadingApiKey] = useState(true);
   const [apiKeyCopied, setApiKeyCopied] = useState(false);
-  // Session tracking for conversation memory (always enabled for notebooks)
+  // Memory toggle: when enabled, session_id is sent for ephemeral in-memory history
+  const [memoryEnabled, setMemoryEnabled] = useState(false);
+  // Session tracking for conversation memory (only used when memoryEnabled)
   const [sessionId, setSessionId] = useState<string | null>(null);
+
+  // Use global model selection from app context (header selector)
+  const { selectedModel, selectedProvider } = useApp();
 
   // Clear session when notebook changes (new context = new conversation)
   useEffect(() => {
@@ -161,10 +168,13 @@ export function QueryPage() {
     setResponse(null);
 
     try {
-      // Generate session_id if not exists (ensures messages are saved from first query)
-      const currentSessionId = sessionId || crypto.randomUUID();
-      if (!sessionId) {
-        setSessionId(currentSessionId);
+      // Only generate/send session_id when memory is enabled
+      let currentSessionId: string | undefined = undefined;
+      if (memoryEnabled) {
+        currentSessionId = sessionId || crypto.randomUUID();
+        if (!sessionId) {
+          setSessionId(currentSessionId);
+        }
       }
 
       const requestBody: Record<string, unknown> = {
@@ -172,8 +182,12 @@ export function QueryPage() {
         query: query.trim(),
         include_sources: true,
         max_sources: 6,
-        max_history: 10,
-        session_id: currentSessionId,  // Always pass session_id for memory
+        max_history: memoryEnabled ? 10 : 0,
+        // Only include session_id if memory is enabled
+        ...(memoryEnabled && currentSessionId ? { session_id: currentSessionId } : {}),
+        // Include selected model and provider
+        model: selectedModel || undefined,
+        provider: selectedProvider || undefined,
       };
 
       const res = await fetch('/api/query', {
@@ -188,8 +202,8 @@ export function QueryPage() {
       const data: QueryResponse = await res.json();
       setResponse(data);
 
-      // Update session_id if backend returns a different one
-      if (data.success && data.session_id && data.session_id !== currentSessionId) {
+      // Update session_id if backend returns one and memory is enabled
+      if (memoryEnabled && data.success && data.session_id && data.session_id !== currentSessionId) {
         setSessionId(data.session_id);
       }
 
@@ -201,7 +215,7 @@ export function QueryPage() {
     } finally {
       setIsQuerying(false);
     }
-  }, [selectedNotebook, query, apiKey, sessionId]);
+  }, [selectedNotebook, query, apiKey, sessionId, memoryEnabled, selectedModel, selectedProvider]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -250,12 +264,26 @@ export function QueryPage() {
           </div>
 
           <div className="flex items-center gap-3">
-            {/* Memory Status Indicator */}
-            <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-glow/10 border border-glow/30">
-              <Brain className="w-4 h-4 text-glow" />
-              <span className="text-sm text-glow font-medium">Memory</span>
-              <span className="w-2 h-2 rounded-full bg-glow" />
-            </div>
+            {/* Memory Toggle - Controls ephemeral session memory */}
+            <button
+              onClick={() => {
+                setMemoryEnabled(!memoryEnabled);
+                if (memoryEnabled) {
+                  // Clear session when disabling memory
+                  setSessionId(null);
+                }
+              }}
+              className={`flex items-center gap-2 px-3 py-2 rounded-lg border transition-colors
+                ${memoryEnabled
+                  ? 'bg-glow/10 border-glow/30 text-glow'
+                  : 'bg-void-surface border-void-lighter text-text-muted hover:border-glow/30'
+                }`}
+              title={memoryEnabled ? 'Memory enabled - click to disable' : 'Memory disabled - click to enable session memory'}
+            >
+              <Brain className="w-4 h-4" />
+              <span className="text-sm font-medium">Memory</span>
+              {memoryEnabled && <span className="w-2 h-2 rounded-full bg-glow" />}
+            </button>
 
             {/* API Key Display */}
             <div className="flex items-center gap-2 bg-void-surface rounded-lg px-3 py-2 border border-void-lighter">

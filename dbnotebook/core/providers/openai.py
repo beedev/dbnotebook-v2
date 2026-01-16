@@ -17,14 +17,14 @@ class OpenAILLMProvider(LLMProvider):
     OpenAI LLM provider for GPT models.
 
     Supports:
-    - GPT-4 series (gpt-4, gpt-4-turbo, gpt-4o, gpt-4.1)
+    - GPT-4 series (gpt-4, gpt-4-turbo, gpt-4o, gpt-4.1, gpt-4.1-nano)
     - GPT-3.5 series
     - O-series reasoning models (o1, o3, o4 - temperature must be 1)
     """
 
     SUPPORTED_MODELS = {
         # GPT-4 series
-        "gpt-3.5-turbo", "gpt-4", "gpt-4-turbo", "gpt-4o", "gpt-4.1",
+        "gpt-3.5-turbo", "gpt-4", "gpt-4-turbo", "gpt-4o", "gpt-4.1", "gpt-4.1-mini", "gpt-4.1-nano",
         "gpt-4o-mini", "gpt-4-turbo-preview",
         "gpt-4-0125-preview", "gpt-4-1106-preview",
         "gpt-4o-2024-11-20", "gpt-4o-2024-08-06",
@@ -47,7 +47,7 @@ class OpenAILLMProvider(LLMProvider):
     ):
         self._setting = setting or get_settings()
 
-        self._model = model or os.getenv("LLM_MODEL", "gpt-4-turbo")
+        self._model = model or os.getenv("LLM_MODEL", "gpt-4.1")
         self._api_key = api_key or os.getenv("OPENAI_API_KEY")
         self._temperature = temperature
         self._max_tokens = max_tokens
@@ -97,6 +97,9 @@ class OpenAILLMProvider(LLMProvider):
             "gpt-4-turbo": 128000,
             "gpt-4o": 128000,
             "gpt-4o-mini": 128000,
+            "gpt-4.1": 128000,
+            "gpt-4.1-mini": 128000,
+            "gpt-4.1-nano": 128000,
             "o1": 128000,
             "o1-mini": 128000,
         }
@@ -118,6 +121,9 @@ class OpenAILLMProvider(LLMProvider):
             "gpt-4-turbo": {"input": 0.01, "output": 0.03},
             "gpt-4o": {"input": 0.005, "output": 0.015},
             "gpt-4o-mini": {"input": 0.00015, "output": 0.0006},
+            "gpt-4.1": {"input": 0.005, "output": 0.015},
+            "gpt-4.1-mini": {"input": 0.00015, "output": 0.0006},
+            "gpt-4.1-nano": {"input": 0.00015, "output": 0.0006},
             "o1": {"input": 0.015, "output": 0.06},
             "o1-mini": {"input": 0.003, "output": 0.012},
         }

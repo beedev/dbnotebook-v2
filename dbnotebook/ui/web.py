@@ -26,6 +26,7 @@ from ..api.routes.query import create_query_routes
 from ..api.routes.chat_v2 import create_chat_v2_routes
 from ..api.routes.admin import create_admin_routes
 from ..api.routes.auth import create_auth_routes
+from ..api.routes.settings import create_settings_routes
 from ..core.ingestion import WebContentIngestion, SynopsisManager
 from ..core.studio import StudioManager
 from ..core.constants import DEFAULT_USER_ID
@@ -1256,7 +1257,8 @@ Output ONLY valid JSON, nothing else."""
                     "ollama": "Ollama",
                     "openai": "OpenAI",
                     "anthropic": "Anthropic",
-                    "google": "Google"
+                    "google": "Google",
+                    "groq": "Groq"
                 }
 
                 # Process each provider from config
@@ -1553,6 +1555,13 @@ Output ONLY valid JSON, nothing else."""
             self._app.teardown_appcontext(cleanup_rbac_session)
         except Exception as e:
             logger.warning(f"Admin API routes not available: {e}")
+
+        # Register Settings API routes (runtime configuration)
+        try:
+            create_settings_routes(self._app)
+            logger.info("Settings API routes registered (/api/settings)")
+        except Exception as e:
+            logger.warning(f"Settings API routes not available: {e}")
 
         # === Query Logging & Observability Endpoints ===
 

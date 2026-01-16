@@ -12,7 +12,7 @@ try:
     }
 
     # GPT-4.1 models (128K context)
-    _gpt4_models = {'gpt-4.1': 128000, 'gpt-4.1-mini': 128000}
+    _gpt4_models = {'gpt-4.1': 128000, 'gpt-4.1-mini': 128000, 'gpt-4.1-nano': 128000}
 
     # Combine all new models
     _new_openai_models = {**_o_models, **_gpt4_models}

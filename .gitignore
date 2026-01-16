@@ -171,3 +171,26 @@ outputs/
 
 # Pre-downloaded HuggingFace models for Docker builds (~2.7GB)
 models/
+
+# Test results and load test data
+test_results/
+*_test_results.json
+load_test*.json
+stress_test*.json
+raptor_load_test*.json
+
+# Uploads (user data)
+uploads/
+
+# Playwright MCP screenshots
+.playwright-mcp/
+
+# Local development
+dev.sh
+start-local.sh
+GAP
+local_dev.py
+
+# Claude settings (local)
+.claude/settings.local.json
+test_gpt5.py

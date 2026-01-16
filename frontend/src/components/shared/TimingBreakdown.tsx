@@ -44,6 +44,8 @@ interface TimingBreakdownProps {
   defaultExpanded?: boolean;
   /** Optional: Custom title */
   title?: string;
+  /** Optional: Model name used for this response */
+  model?: string;
 }
 
 // Preset stage configurations for different endpoints
@@ -72,6 +74,29 @@ export const RAG_CHAT_STAGES: TimingStage[] = [
   { key: '8_response_streaming_ms', label: 'Response Streaming', icon: Clock, color: 'bg-orange-500' },
 ];
 
+// V2 Chat API stages (stateless fast pattern with conversation memory)
+export const V2_CHAT_STAGES: TimingStage[] = [
+  { key: '1_notebook_lookup_ms', label: 'Notebook Lookup', icon: Database, color: 'bg-blue-500' },
+  { key: '2_load_history_ms', label: 'Load History', icon: Clock, color: 'bg-purple-500' },
+  { key: '3_node_cache_ms', label: 'Node Cache', icon: Database, color: 'bg-blue-400' },
+  { key: '4_fast_retrieval_ms', label: 'Fast Retrieval', icon: Search, color: 'bg-green-500' },
+  { key: '5_raptor_summaries_ms', label: 'RAPTOR Summaries', icon: Layers, color: 'bg-purple-400' },
+  { key: '6_context_building_ms', label: 'Context Building', icon: FileText, color: 'bg-orange-500' },
+  { key: '7_llm_completion_ms', label: 'LLM Completion', icon: Brain, color: 'bg-red-500' },
+  { key: '8_save_history_ms', label: 'Save History', icon: Database, color: 'bg-blue-300' },
+];
+
+// V2 Chat streaming stages
+export const V2_CHAT_STREAM_STAGES: TimingStage[] = [
+  { key: '1_load_history_ms', label: 'Load History', icon: Clock, color: 'bg-purple-500' },
+  { key: '2_node_cache_ms', label: 'Node Cache', icon: Database, color: 'bg-blue-400' },
+  { key: '3_retrieval_ms', label: 'Retrieval', icon: Search, color: 'bg-green-500' },
+  { key: '4_raptor_ms', label: 'RAPTOR', icon: Layers, color: 'bg-purple-400' },
+  { key: '5_context_ms', label: 'Context Building', icon: FileText, color: 'bg-orange-500' },
+  { key: '6_llm_stream_ms', label: 'LLM Streaming', icon: Brain, color: 'bg-red-500' },
+  { key: '7_save_history_ms', label: 'Save History', icon: Database, color: 'bg-blue-300' },
+];
+
 export const SQL_CHAT_STAGES: TimingStage[] = [
   { key: '1_input_validation_ms', label: 'Input Validation', icon: Shield, color: 'bg-blue-500' },
   { key: '2_intent_classification_ms', label: 'Intent Classification', icon: Brain, color: 'bg-purple-500' },
@@ -91,7 +116,8 @@ export function TimingBreakdown({
   timings,
   stages,
   defaultExpanded = false,
-  title = 'Performance Timings'
+  title = 'Performance Timings',
+  model
 }: TimingBreakdownProps) {
   const [isExpanded, setIsExpanded] = useState(defaultExpanded);
 
@@ -116,7 +142,12 @@ export function TimingBreakdown({
           <Timer className="w-4 h-4 text-glow" />
           {title}
         </span>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-3">
+          {model && (
+            <span className="text-xs px-2 py-0.5 rounded bg-glow/20 text-glow font-medium">
+              {model}
+            </span>
+          )}
           <span className="text-xs text-text-muted">
             {(totalTimeMs / 1000).toFixed(2)}s total
           </span>

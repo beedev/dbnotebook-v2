@@ -39,9 +39,14 @@ from llama_index.core.schema import QueryBundle
 
 from dbnotebook.core.auth import check_notebook_access, AccessLevel
 from dbnotebook.core.constants import DEFAULT_USER_ID
-from dbnotebook.core.db.models import User, Conversation
+from dbnotebook.core.db.models import User
 
 logger = logging.getLogger(__name__)
+
+# In-memory session store for Query API (ephemeral, lost on restart)
+# Key: session_id (str), Value: list of {"role": str, "content": str}
+# This keeps Query API memory isolated from RAG Chat (which uses DB)
+_query_sessions: dict[str, list[dict[str, str]]] = {}
 
 # Fallback API key from environment (for backward compatibility)
 ENV_API_KEY = os.getenv("API_KEY")
@@ -135,7 +140,12 @@ def create_query_routes(app, pipeline, db_manager, notebook_manager):
                 "session_id": "uuid",            # Optional - client-generated UUID for memory
                 "max_history": 5,                # Optional, default: 5, max: 20 (only if session_id)
                 "include_sources": true,         # Optional, default: true
-                "max_sources": 6                 # Optional, default: 6, max: 20
+                "max_sources": 6,                # Optional, default: 6, max: 20
+                "model": "gpt-4.1",              # Optional - LLM model override
+                "reranker_enabled": true,        # Optional - enable/disable reranking
+                "reranker_model": "...",         # Optional - reranker model override
+                "top_k": 6,                      # Optional - retrieval top_k override
+                "skip_raptor": true              # Optional, default: true - set false to include RAPTOR summaries
             }
 
         Response JSON (stateless - no session_id sent):
@@ -156,10 +166,10 @@ def create_query_routes(app, pipeline, db_manager, notebook_manager):
             }
         """
         import uuid as uuid_lib
-        from datetime import datetime
 
         start_time = time.time()
         timings = {}  # Track timing for each stage
+        original_reranker_config = None  # Track for cleanup in finally block
 
         try:
             data = request.json or {}
@@ -216,11 +226,36 @@ def create_query_routes(app, pipeline, db_manager, notebook_manager):
                 }), 403
 
             # Optional parameters
+            model_name = data.get("model")
             include_sources = data.get("include_sources", True)
             max_sources = min(data.get("max_sources", 6), 20)  # Cap at 20
             max_history = min(data.get("max_history", 5), 20) if use_memory else 0
 
-            logger.info(f"API query: notebook_id={notebook_id}, session_id={session_id}, use_memory={use_memory}")
+            # Reranker config overrides (per-request, for benchmarking)
+            reranker_enabled = data.get("reranker_enabled")  # None means use global setting
+            reranker_model = data.get("reranker_model")  # None means use global setting
+            top_k = data.get("top_k")  # None means use default
+            skip_raptor = data.get("skip_raptor", True)  # Default True: RAPTOR summaries can dilute precision for specific queries
+
+            # Get LLM instance for this specific request
+            from dbnotebook.core.model.model import LocalRAGModel
+            llm = LocalRAGModel.set(model_name) if model_name else Settings.llm
+
+            # Apply per-request reranker config if specified
+            original_reranker_config = None
+            if reranker_enabled is not None or reranker_model:
+                from dbnotebook.core.providers.reranker_provider import (
+                    get_reranker_config, set_reranker_config
+                )
+                original_reranker_config = get_reranker_config()
+                set_reranker_config(
+                    model=reranker_model or original_reranker_config.get("model"),
+                    enabled=reranker_enabled if reranker_enabled is not None else original_reranker_config.get("enabled", True),
+                    top_n=top_k or original_reranker_config.get("top_n")
+                )
+                logger.info(f"Per-request reranker config: enabled={reranker_enabled}, model={reranker_model}, top_k={top_k}")
+
+            logger.info(f"API query: notebook_id={notebook_id}, session_id={session_id}, use_memory={use_memory}, model={model_name or 'default'}")
 
             # Step 1: Verify notebook exists
             t1 = time.time()
@@ -233,25 +268,17 @@ def create_query_routes(app, pipeline, db_manager, notebook_manager):
                     "error": f"Notebook not found: {notebook_id}"
                 }), 404
 
-            # Step 1.5: Load conversation history (only if session_id was provided)
+            # Step 1.5: Load conversation history from in-memory store (ephemeral)
+            # Query API uses in-memory sessions to avoid contaminating RAG Chat (DB-based)
             history_messages = []
-            if use_memory:
+            if use_memory and session_id:
                 t1b = time.time()
-                with db_manager.get_session() as db_session:
-                    history = db_session.query(Conversation).filter(
-                        Conversation.session_id == session_id,
-                        Conversation.notebook_id == notebook_id
-                    ).order_by(Conversation.timestamp.desc()).limit(max_history * 2).all()
-
-                    # Reverse to get chronological order
-                    history = list(reversed(history))
-                    for msg in history:
-                        history_messages.append({
-                            "role": msg.role,
-                            "content": msg.content
-                        })
+                session_key = str(session_id)
+                if session_key in _query_sessions:
+                    # Get last N message pairs (max_history * 2 for user+assistant pairs)
+                    history_messages = _query_sessions[session_key][-(max_history * 2):]
                 timings["1b_load_history_ms"] = int((time.time() - t1b) * 1000)
-                logger.debug(f"Loaded {len(history_messages)} history messages for session {session_id}")
+                logger.debug(f"Loaded {len(history_messages)} history messages from in-memory session {session_id}")
 
             # MULTI-USER SAFE: No global state mutations
             # - Uses thread-safe _get_cached_nodes
@@ -278,16 +305,17 @@ def create_query_routes(app, pipeline, db_manager, notebook_manager):
                             "error": "Pipeline not initialized. Please try again."
                         }), 503
 
-                    # Step 3: Create RAPTOR-aware retriever (same as UI /chat)
-                    # This enables hierarchical retrieval + reranking for cross-document understanding
+                    # Step 3: Create hybrid retriever (same as UI /chat)
+                    # Uses BM25 + Vector + Rerank for precise chunk retrieval
+                    # RAPTOR summaries are added separately in Step 6.5 as supplemental context
                     t3 = time.time()
-                    retriever = pipeline._engine._retriever.get_combined_raptor_retriever(
-                        llm=Settings.llm,
+                    retriever = pipeline._engine._retriever.get_retrievers(
+                        llm=llm,
                         language="eng",
                         nodes=nodes,
+                        offering_filter=[notebook_id],
                         vector_store=pipeline._vector_store,
-                        notebook_id=notebook_id,
-                        source_ids=None,  # Will check all sources in notebook
+                        notebook_id=notebook_id
                     )
                     timings["3_create_retriever_ms"] = int((time.time() - t3) * 1000)
 
@@ -313,14 +341,17 @@ def create_query_routes(app, pipeline, db_manager, notebook_manager):
                     retrieval_strategy = retriever.__class__.__name__.replace("Retriever", "").lower()
 
                 except Exception as e:
+                    import traceback
                     logger.warning(f"Source retrieval failed: {e}")
+                    logger.warning(f"Full traceback:\n{traceback.format_exc()}")
                     # Continue without sources
 
             # Step 6.5: RAPTOR cluster summaries (bounded, O(log n))
             # Adds high-level context without breaking existing flow
+            # Can be skipped for precision queries that need exact numerical values
             t6 = time.time()
             raptor_summaries = []
-            if pipeline._vector_store and hasattr(pipeline._vector_store, 'get_top_raptor_summaries'):
+            if not skip_raptor and pipeline._vector_store and hasattr(pipeline._vector_store, 'get_top_raptor_summaries'):
                 try:
                     # Get query embedding for similarity search
                     t6a = time.time()
@@ -400,35 +431,19 @@ def create_query_routes(app, pipeline, db_manager, notebook_manager):
 
 User question: {query}"""
 
-            response = Settings.llm.complete(prompt)
+            response = llm.complete(prompt)
             response_text = response.text
             timings["8_llm_completion_ms"] = int((time.time() - t8) * 1000)
 
-            # Step 9: Save conversation to database (only if use_memory)
-            if use_memory:
+            # Step 9: Save conversation to in-memory session store (ephemeral)
+            # Query API does NOT persist to DB - keeps RAG Chat history isolated
+            if use_memory and session_id:
                 t9 = time.time()
-                with db_manager.get_session() as db_session:
-                    # Save user message
-                    user_msg = Conversation(
-                        notebook_id=notebook_id,
-                        user_id=user_id,
-                        session_id=session_id,
-                        role="user",
-                        content=query,
-                        timestamp=datetime.utcnow()
-                    )
-                    db_session.add(user_msg)
-
-                    # Save assistant message
-                    assistant_msg = Conversation(
-                        notebook_id=notebook_id,
-                        user_id=user_id,
-                        session_id=session_id,
-                        role="assistant",
-                        content=response_text,
-                        timestamp=datetime.utcnow()
-                    )
-                    db_session.add(assistant_msg)
+                session_key = str(session_id)
+                if session_key not in _query_sessions:
+                    _query_sessions[session_key] = []
+                _query_sessions[session_key].append({"role": "user", "content": query})
+                _query_sessions[session_key].append({"role": "assistant", "content": response_text})
                 timings["9_save_history_ms"] = int((time.time() - t9) * 1000)
 
             execution_time_ms = int((time.time() - start_time) * 1000)
@@ -436,18 +451,26 @@ User question: {query}"""
             logger.info(f"API query completed in {execution_time_ms}ms, session={session_id}, history_used={len(history_messages)}")
 
             # Build response - only include session_id if memory is enabled
+            # Get current reranker config for response metadata
+            from dbnotebook.core.providers.reranker_provider import get_reranker_config
+            current_reranker_config = get_reranker_config()
+
             response_data = {
                 "success": True,
                 "response": response_text,
                 "sources": sources,
                 "metadata": {
                     "execution_time_ms": execution_time_ms,
-                    "model": pipeline._default_model.model if pipeline._default_model else "unknown",
+                    "model": llm.model if hasattr(llm, 'model') else (pipeline._default_model.model if pipeline._default_model else "unknown"),
                     "retrieval_strategy": retrieval_strategy,
                     "node_count": len(nodes),
                     "stateless": not use_memory,
                     "history_messages_used": len(history_messages),
                     "raptor_summaries_used": len(raptor_summaries) if raptor_summaries else 0,
+                    "skip_raptor": skip_raptor,
+                    "reranker_enabled": current_reranker_config.get("enabled", True),
+                    "reranker_model": current_reranker_config.get("model"),
+                    "top_k": current_reranker_config.get("top_n"),
                     "timings": timings
                 }
             }
@@ -466,6 +489,16 @@ User question: {query}"""
                 "success": False,
                 "error": str(e)
             }), 500
+        finally:
+            # Restore original reranker config if it was overridden
+            if original_reranker_config is not None:
+                from dbnotebook.core.providers.reranker_provider import set_reranker_config
+                set_reranker_config(
+                    model=original_reranker_config.get("model"),
+                    enabled=original_reranker_config.get("enabled", True),
+                    top_n=original_reranker_config.get("top_n")
+                )
+                logger.debug("Restored original reranker config")
 
     @app.route("/api/query/notebooks", methods=["GET"])
     @require_api_key

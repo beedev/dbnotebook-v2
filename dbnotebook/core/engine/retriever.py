@@ -1,4 +1,5 @@
 import logging
+import os
 import re
 import time
 from enum import Enum
@@ -101,11 +102,17 @@ class TwoStageRetriever(QueryFusionRetriever):
             use_async, verbose, callback_manager, objects, object_map, retriever_weights
         )
         self._setting = setting or get_settings()
-        self._rerank_model = get_shared_reranker(
-            model=self._setting.retriever.rerank_llm,
-            top_n=self._setting.retriever.top_k_rerank
-        )
-        logger.debug(f"TwoStageRetriever using shared rerank model: {self._setting.retriever.rerank_llm}")
+        # Allow disabling reranker for testing (set DISABLE_RERANKER=true)
+        self._disable_reranker = os.getenv("DISABLE_RERANKER", "").lower() == "true"
+        if self._disable_reranker:
+            self._rerank_model = None
+            logger.warning("Reranker DISABLED via DISABLE_RERANKER env var")
+        else:
+            self._rerank_model = get_shared_reranker(
+                model=self._setting.retriever.rerank_llm,
+                top_n=self._setting.retriever.top_k_rerank
+            )
+            logger.debug(f"TwoStageRetriever using shared rerank model: {self._setting.retriever.rerank_llm}")
 
     def _retrieve(self, query_bundle: QueryBundle) -> List[NodeWithScore]:
         queries: List[QueryBundle] = [query_bundle]
@@ -118,6 +125,8 @@ class TwoStageRetriever(QueryFusionRetriever):
             results = self._run_sync_queries(queries)
 
         results = self._simple_fusion(results)
+        if self._disable_reranker:
+            return results[:self._setting.retriever.top_k_rerank]
         return self._rerank_model.postprocess_nodes(results, query_bundle)
 
     async def _aretrieve(self, query_bundle: QueryBundle) -> List[NodeWithScore]:
@@ -127,6 +136,8 @@ class TwoStageRetriever(QueryFusionRetriever):
 
         results = await self._run_async_queries(queries)
         results = self._simple_fusion(results)
+        if self._disable_reranker:
+            return results[:self._setting.retriever.top_k_rerank]
         return self._rerank_model.postprocess_nodes(results, query_bundle)
 
 
@@ -484,11 +495,11 @@ class LocalRetriever:
         Returns:
             Configured retriever instance
         """
-        # Check retriever cache first
-        cache_key = f"{notebook_id}:{len(nodes)}"
+        # Check retriever cache first (only if notebook_id is valid)
+        cache_key = f"{notebook_id}:{len(nodes)}" if notebook_id else None
         current_time = time.time()
 
-        if cache_key in self._retriever_cache:
+        if cache_key and cache_key in self._retriever_cache:
             retriever, timestamp = self._retriever_cache[cache_key]
             if current_time - timestamp < self._retriever_cache_ttl:
                 logger.debug(f"Retriever cache hit for {cache_key}")
@@ -583,10 +594,13 @@ class LocalRetriever:
             logger.debug(f"Using simple retriever for {node_count} nodes")
             retriever = self._get_normal_retriever(vector_index, llm, language)
 
-        # Cache the retriever
+        # Cache the retriever (only if notebook_id is valid)
         build_time_ms = int((time.time() - start_time) * 1000)
-        self._retriever_cache[cache_key] = (retriever, current_time)
-        logger.info(f"Cached retriever for {cache_key} (built in {build_time_ms}ms)")
+        if cache_key:
+            self._retriever_cache[cache_key] = (retriever, current_time)
+            logger.info(f"Cached retriever for {cache_key} (built in {build_time_ms}ms)")
+        else:
+            logger.debug(f"Skipping retriever cache (no notebook_id) - built in {build_time_ms}ms")
 
         return retriever
 

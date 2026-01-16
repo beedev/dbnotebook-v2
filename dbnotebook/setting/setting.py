@@ -46,7 +46,8 @@ class OllamaSettings(BaseModel):
     """Ollama LLM settings (loaded from config/ingestion.yaml llm section)."""
 
     llm: str = Field(
-        default="gpt-4.1", description="LLM model"
+        default_factory=lambda: os.getenv("LLM_MODEL", "gpt-4.1"),
+        description="LLM model"
     )
     keep_alive: str = Field(
         default_factory=lambda: _get(get_llm_settings(), "keep_alive", "1h"),

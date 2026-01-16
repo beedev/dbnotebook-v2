@@ -12,6 +12,7 @@ from .analytics import create_analytics_routes
 from .sql_chat import create_sql_chat_routes
 from .query import create_query_routes
 from .admin import create_admin_routes
+from .settings import create_settings_routes
 
 __all__ = [
     'create_chat_routes',
@@ -26,4 +27,5 @@ __all__ = [
     'create_sql_chat_routes',
     'create_query_routes',
     'create_admin_routes',
+    'create_settings_routes',
 ]

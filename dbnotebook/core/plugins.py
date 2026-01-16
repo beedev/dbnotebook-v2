@@ -23,6 +23,7 @@ from .providers import (
     OllamaLLMProvider,
     OpenAILLMProvider,
     AnthropicLLMProvider,
+    GroqLLMProvider,
     HuggingFaceEmbeddingProvider,
     GeminiImageProvider,
     GeminiVisionProvider,
@@ -54,6 +55,7 @@ def register_default_plugins() -> None:
     PluginRegistry.register_llm_provider("ollama", OllamaLLMProvider)
     PluginRegistry.register_llm_provider("openai", OpenAILLMProvider)
     PluginRegistry.register_llm_provider("anthropic", AnthropicLLMProvider)
+    PluginRegistry.register_llm_provider("groq", GroqLLMProvider)
 
     # Register embedding providers
     PluginRegistry.register_embedding_provider("huggingface", HuggingFaceEmbeddingProvider)

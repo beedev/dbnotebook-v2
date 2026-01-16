@@ -3,6 +3,7 @@
 from .ollama import OllamaLLMProvider
 from .openai import OpenAILLMProvider
 from .anthropic import AnthropicLLMProvider
+from .groq import GroqLLMProvider
 from .huggingface import HuggingFaceEmbeddingProvider
 from .gemini_image import GeminiImageProvider
 from .gemini_vision import GeminiVisionProvider
@@ -14,6 +15,7 @@ __all__ = [
     "OllamaLLMProvider",
     "OpenAILLMProvider",
     "AnthropicLLMProvider",
+    "GroqLLMProvider",
     "HuggingFaceEmbeddingProvider",
     "GeminiImageProvider",
     "GeminiVisionProvider",

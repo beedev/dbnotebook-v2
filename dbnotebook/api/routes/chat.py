@@ -95,8 +95,9 @@ def create_chat_routes(app, pipeline, db_manager=None):
             stream = data.get("stream", False)
             fast_mode = data.get("fast_mode", False)
             user_id = data.get("user_id", DEFAULT_USER_ID)
+            model = data.get("model")  # Optional: override LLM model
 
-            logger.info(f"Chat request: mode={mode}, notebook_ids={notebook_ids}, stream={stream}, fast_mode={fast_mode}")
+            logger.info(f"Chat request: mode={mode}, notebook_ids={notebook_ids}, stream={stream}, fast_mode={fast_mode}, model={model}")
 
             # =========================================================================
             # FAST MODE: Use stateless_query for 4-8x faster responses
@@ -104,6 +105,12 @@ def create_chat_routes(app, pipeline, db_manager=None):
             # =========================================================================
             if fast_mode and notebook_ids and len(notebook_ids) == 1:
                 notebook_id = notebook_ids[0]
+
+                # Apply model override if provided (affects Settings.llm used by stateless_query)
+                if model:
+                    pipeline.set_model_name(model)
+                    pipeline.set_model()
+                    logger.info(f"Fast mode: Model override applied: {model}")
 
                 if stream:
                     # Streaming fast mode
@@ -166,6 +173,11 @@ def create_chat_routes(app, pipeline, db_manager=None):
 
             # Configure pipeline settings
             pipeline.set_language(pipeline._language)
+
+            # Apply model override if provided in request
+            if model:
+                pipeline.set_model_name(model)
+                logger.info(f"Model override applied: {model}")
             pipeline.set_model()
 
             # =========================================================================

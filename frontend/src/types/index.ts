@@ -118,6 +118,8 @@ export interface ChatV2Request {
   max_history?: number;
   include_sources?: boolean;
   max_sources?: number;
+  model?: string;
+  provider?: string;
 }
 
 export interface ChatV2Response {

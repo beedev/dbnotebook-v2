@@ -45,7 +45,8 @@ function generateMessageId(): string {
   return `msg_${Date.now()}_${++messageId}`;
 }
 
-export function useChatV2(notebookId?: string) {
+export function useChatV2(notebookId?: string, options?: { model?: string; provider?: string }) {
+  const { model, provider } = options || {};
   const [state, setState] = useState<ChatV2State>({
     messages: [],
     isLoading: false,
@@ -219,6 +220,9 @@ export function useChatV2(notebookId?: string) {
             max_history: 10,
             include_sources: true,
             max_sources: 6,
+            // Pass selected model and provider from UI
+            model: model,
+            provider: provider,
           },
           {
             onContent: (token) => {
@@ -256,6 +260,8 @@ export function useChatV2(notebookId?: string) {
     [
       notebookId,
       state.userId,
+      model,
+      provider,
       addUserMessage,
       addAssistantMessage,
       updateStreamingMessage,

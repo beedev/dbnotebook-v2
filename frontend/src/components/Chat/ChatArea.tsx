@@ -17,7 +17,7 @@ interface ChatAreaProps {
   onFileUpload?: (file: File) => void;
 }
 
-export function ChatArea({ notebookId, notebookName, selectedModel: _selectedModel, onCopy, onFileUpload }: ChatAreaProps) {
+export function ChatArea({ notebookId, notebookName, selectedModel, onCopy, onFileUpload }: ChatAreaProps) {
   const [viewMode, setViewMode] = useState<ViewMode>('chat');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -56,7 +56,7 @@ export function ChatArea({ notebookId, notebookName, selectedModel: _selectedMod
     clearMessages,
     sessionId: _sessionId,
     userId: _userId,
-  } = useChatV2(notebookId);
+  } = useChatV2(notebookId, { model: selectedModel });
 
   // Wrapper to analyze query before sending (agentic enhancement)
   const sendMessage = useCallback(async (message: string) => {

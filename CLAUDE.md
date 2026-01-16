@@ -8,11 +8,22 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Development Commands
 
-**IMPORTANT**: When user says "start the app" or "start", ALWAYS use `docker compose up --build`. Never use `./start.sh` or manual Python execution.
+**LOCAL DEVELOPMENT (PREFERRED)**: Use `./dev.sh` with local PostgreSQL on port 5432.
 
 ```bash
-# Start application (ALWAYS use Docker)
-docker compose up --build     # Primary method - builds and starts all services
+# Local development (PREFERRED method)
+./dev.sh                      # Start Flask backend locally (uses venv, localhost:5432)
+./start-local.sh backend      # Alternative: start backend with migrations
+./start-local.sh frontend     # Start frontend dev server
+
+# Local PostgreSQL setup
+# - PostgreSQL running on localhost:5432
+# - Database: dbnotebook_dev
+# - User/Password: dbnotebook/dbnotebook
+# - .env uses host.docker.internal but dev.sh replaces with localhost
+
+# Docker deployment (for production-like testing)
+docker compose up --build     # Builds and starts all services
 docker compose up -d          # Run in background
 docker compose logs -f        # Follow logs
 

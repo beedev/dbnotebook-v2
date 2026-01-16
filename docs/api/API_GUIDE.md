@@ -15,7 +15,7 @@ Default admin API key: `dbn_00000000000000000000000000000001`
 ### 2. List Available Notebooks
 
 ```bash
-curl http://localhost:7007/api/query/notebooks \
+curl http://localhost:7860/api/query/notebooks \
   -H "X-API-Key: YOUR_API_KEY"
 ```
 
@@ -37,7 +37,7 @@ Response:
 ### 3. Execute a Stateless Query
 
 ```bash
-curl -X POST http://localhost:7007/api/query \
+curl -X POST http://localhost:7860/api/query \
   -H "Content-Type: application/json" \
   -H "X-API-Key: YOUR_API_KEY" \
   -d '{
@@ -88,7 +88,7 @@ The API supports multi-turn conversations with memory. **The client controls whe
 
 ```bash
 # No session_id = stateless, no history saved
-curl -X POST http://localhost:7007/api/query \
+curl -X POST http://localhost:7860/api/query \
   -H "Content-Type: application/json" \
   -H "X-API-Key: YOUR_API_KEY" \
   -d '{
@@ -114,7 +114,7 @@ Response (no `session_id` in response):
 SESSION_ID=$(uuidgen)  # or use any UUID generator
 
 # First query WITH session_id = history IS saved
-curl -X POST http://localhost:7007/api/query \
+curl -X POST http://localhost:7860/api/query \
   -H "Content-Type: application/json" \
   -H "X-API-Key: YOUR_API_KEY" \
   -d "{
@@ -124,7 +124,7 @@ curl -X POST http://localhost:7007/api/query \
   }"
 
 # Follow-up query with same session_id = has conversation context
-curl -X POST http://localhost:7007/api/query \
+curl -X POST http://localhost:7860/api/query \
   -H "Content-Type: application/json" \
   -H "X-API-Key: YOUR_API_KEY" \
   -d "{
@@ -164,8 +164,7 @@ Examples:
 
 | Environment | URL |
 |-------------|-----|
-| Docker (default) | `http://localhost:7007` |
-| Local dev | `http://localhost:7860` |
+| Docker (default) | `http://localhost:7860` |
 | Production | Your deployed URL |
 
 ### Authentication
@@ -173,7 +172,7 @@ Examples:
 All requests require an `X-API-Key` header with a valid user API key.
 
 ```bash
-curl -X POST http://localhost:7007/api/query \
+curl -X POST http://localhost:7860/api/query \
   -H "Content-Type: application/json" \
   -H "X-API-Key: YOUR_API_KEY" \
   -d '{"notebook_id": "...", "query": "..."}'
@@ -206,6 +205,11 @@ Execute a RAG query against documents in a notebook.
 | `max_history` | integer | No | `5` | Max history messages (1-20, only with session_id) |
 | `include_sources` | boolean | No | `true` | Include source documents |
 | `max_sources` | integer | No | `6` | Max sources (1-20) |
+| `model` | string | No | - | LLM model override (e.g., `gpt-4.1-mini`, `llama3.1:latest`) |
+| `reranker_enabled` | boolean | No | `true` | Enable/disable reranking |
+| `reranker_model` | string | No | - | Reranker model override |
+| `top_k` | integer | No | `6` | Retrieval top-k override |
+| `skip_raptor` | boolean | No | `true` | Skip RAPTOR summaries (set `false` for broader context) |
 
 #### Response Fields
 
@@ -215,11 +219,21 @@ Execute a RAG query against documents in a notebook.
 | `response` | string | Generated AI response |
 | `session_id` | string | Only present if session_id was sent (confirms memory enabled) |
 | `sources` | array | Source documents with scores |
-| `metadata.execution_time_ms` | integer | Execution time in milliseconds |
+| `metadata.execution_time_ms` | integer | Total execution time in milliseconds |
 | `metadata.model` | string | LLM model used |
 | `metadata.stateless` | boolean | `true` if no session_id, `false` if memory enabled |
 | `metadata.history_messages_used` | integer | Number of prior messages used (0 if stateless) |
 | `metadata.node_count` | integer | Document chunks in notebook |
+| `metadata.timings` | object | Detailed timing breakdown (see below) |
+
+#### Timing Breakdown (metadata.timings)
+
+| Field | Description |
+|-------|-------------|
+| `1_notebook_lookup_ms` | Time to look up notebook |
+| `2_node_cache_ms` | Time to retrieve cached nodes |
+| `4_chunk_retrieval_ms` | Time for vector/BM25 retrieval |
+| `8_llm_completion_ms` | Time for LLM response generation |
 
 #### Status Codes
 
@@ -292,7 +306,7 @@ Get the API key for a user.
 ```python
 import requests
 
-BASE_URL = "http://localhost:7007"
+BASE_URL = "http://localhost:7860"
 API_KEY = "dbn_00000000000000000000000000000001"  # Your API key
 HEADERS = {"X-API-Key": API_KEY, "Content-Type": "application/json"}
 
@@ -324,7 +338,7 @@ print(f"Stateless: {result['metadata']['stateless']}")  # True
 import requests
 import uuid
 
-BASE_URL = "http://localhost:7007"
+BASE_URL = "http://localhost:7860"
 API_KEY = "dbn_00000000000000000000000000000001"
 HEADERS = {"X-API-Key": API_KEY, "Content-Type": "application/json"}
 
@@ -369,7 +383,7 @@ import requests
 import uuid
 
 class DBNotebookClient:
-    def __init__(self, base_url="http://localhost:7007", api_key=None):
+    def __init__(self, base_url="http://localhost:7860", api_key=None):
         self.base_url = base_url
         self.headers = {
             "X-API-Key": api_key or "dbn_00000000000000000000000000000001",
@@ -425,7 +439,7 @@ client.reset_conversation()
 const axios = require('axios');
 const { v4: uuidv4 } = require('uuid');
 
-const BASE_URL = 'http://localhost:7007';
+const BASE_URL = 'http://localhost:7860';
 const API_KEY = 'dbn_00000000000000000000000000000001';
 
 class DBNotebookClient {
@@ -468,27 +482,72 @@ const result3 = await client.query('notebook-id', 'Elaborate please', true); // 
 
 ```bash
 # List notebooks
-curl http://localhost:7007/api/query/notebooks \
+curl http://localhost:7860/api/query/notebooks \
   -H "X-API-Key: YOUR_API_KEY"
 
 # Stateless query (no session_id)
-curl -X POST http://localhost:7007/api/query \
+curl -X POST http://localhost:7860/api/query \
   -H "Content-Type: application/json" \
   -H "X-API-Key: YOUR_API_KEY" \
   -d '{"notebook_id": "YOUR_NOTEBOOK_ID", "query": "Your question here"}'
 
 # Conversational query (with session_id)
 SESSION_ID=$(uuidgen)
-curl -X POST http://localhost:7007/api/query \
+curl -X POST http://localhost:7860/api/query \
   -H "Content-Type: application/json" \
   -H "X-API-Key: YOUR_API_KEY" \
   -d "{\"notebook_id\": \"YOUR_NOTEBOOK_ID\", \"query\": \"First question\", \"session_id\": \"$SESSION_ID\"}"
 
 # Follow-up (same session_id)
-curl -X POST http://localhost:7007/api/query \
+curl -X POST http://localhost:7860/api/query \
   -H "Content-Type: application/json" \
   -H "X-API-Key: YOUR_API_KEY" \
   -d "{\"notebook_id\": \"YOUR_NOTEBOOK_ID\", \"query\": \"Follow-up question\", \"session_id\": \"$SESSION_ID\"}"
+```
+
+---
+
+## Supported Models
+
+The `model` parameter accepts model names from multiple providers. The provider is auto-detected from the model name.
+
+### OpenAI Models
+
+```json
+{"model": "gpt-4.1-mini"}
+{"model": "gpt-4.1"}
+{"model": "gpt-4o"}
+{"model": "gpt-4o-mini"}
+```
+
+### Groq Models (Fast Inference)
+
+```json
+{"model": "meta-llama/llama-4-maverick-17b-128e-instruct"}
+{"model": "llama-3.3-70b-versatile"}
+```
+
+**Note:** Groq has rate limits (300K tokens/minute). For high-concurrency workloads, use staggered requests or OpenAI models.
+
+### Ollama Models (Local)
+
+```json
+{"model": "llama3.1:latest"}
+{"model": "mistral:latest"}
+```
+
+### Anthropic Models
+
+```json
+{"model": "claude-sonnet-4-20250514"}
+{"model": "claude-3-5-haiku-latest"}
+```
+
+### Google Gemini Models
+
+```json
+{"model": "gemini-2.0-flash"}
+{"model": "gemini-1.5-pro"}
 ```
 
 ---
@@ -571,7 +630,7 @@ export DBNOTEBOOK_API_KEY="your-api-key"
 
 ```python
 import os
-API_BASE = os.getenv("DBNOTEBOOK_API_URL", "http://localhost:7007")
+API_BASE = os.getenv("DBNOTEBOOK_API_URL", "http://localhost:7860")
 API_KEY = os.getenv("DBNOTEBOOK_API_KEY")
 ```
 
@@ -583,7 +642,7 @@ API_KEY = os.getenv("DBNOTEBOOK_API_KEY")
 
 ```bash
 # Verify your API key is correct
-curl http://localhost:7007/api/query/notebooks \
+curl http://localhost:7860/api/query/notebooks \
   -H "X-API-Key: YOUR_API_KEY"
 ```
 

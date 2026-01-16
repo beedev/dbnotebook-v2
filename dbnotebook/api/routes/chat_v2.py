@@ -69,7 +69,7 @@ def create_chat_v2_routes(app, pipeline, db_manager, notebook_manager, conversat
                 "sources": [...],
                 "metadata": {
                     "execution_time_ms": 850,
-                    "model": "gpt-4.1",
+                    "model": "gpt-4.1-nano",
                     "history_turns_used": 5,
                     "timings": {...}
                 }
@@ -105,13 +105,19 @@ def create_chat_v2_routes(app, pipeline, db_manager, notebook_manager, conversat
                 }), 400
 
             # Optional parameters
+            model_name = data.get("model")
             session_id = data.get("session_id") or generate_session_id()
             include_history = data.get("include_history", True)
             max_history = min(data.get("max_history", 10), 50)
             include_sources = data.get("include_sources", True)
             max_sources = min(data.get("max_sources", 6), 20)
 
-            logger.info(f"V2 chat: notebook_id={notebook_id}, user_id={user_id}, session_id={session_id}")
+            # Get LLM instance for this specific request
+            from dbnotebook.core.model.model import LocalRAGModel
+            local_llm = LocalRAGModel.set(model_name) if model_name else Settings.llm
+
+            used_model = local_llm.model if hasattr(local_llm, 'model') else "unknown"
+            logger.info(f"V2 chat: notebook_id={notebook_id}, user_id={user_id}, session_id={session_id}, model={used_model} (requested={model_name})")
 
             # Step 1: Verify notebook exists
             t1 = time.time()
@@ -160,7 +166,7 @@ def create_chat_v2_routes(app, pipeline, db_manager, notebook_manager, conversat
                         notebook_id=notebook_id,
                         vector_store=pipeline._vector_store,
                         retriever_factory=pipeline._engine._retriever,
-                        llm=Settings.llm,
+                        llm=local_llm,
                         top_k=max_sources,
                     )
                     timings["4_fast_retrieval_ms"] = int((time.time() - t4) * 1000)
@@ -197,7 +203,7 @@ def create_chat_v2_routes(app, pipeline, db_manager, notebook_manager, conversat
             response_text = execute_query(
                 query=query,
                 context=context,
-                llm=Settings.llm,
+                llm=local_llm,
             )
             timings["7_llm_completion_ms"] = int((time.time() - t7) * 1000)
 
@@ -231,7 +237,7 @@ def create_chat_v2_routes(app, pipeline, db_manager, notebook_manager, conversat
                 "sources": sources,
                 "metadata": {
                     "execution_time_ms": execution_time_ms,
-                    "model": pipeline._default_model.model if pipeline._default_model else "unknown",
+                    "model": local_llm.model if hasattr(local_llm, 'model') else (pipeline._default_model.model if pipeline._default_model else "unknown"),
                     "retrieval_strategy": retrieval_strategy,
                     "node_count": len(nodes),
                     "raptor_summaries_used": len(raptor_summaries) if raptor_summaries else 0,
@@ -271,10 +277,18 @@ def create_chat_v2_routes(app, pipeline, db_manager, notebook_manager, conversat
                 }), 400
 
             # Optional parameters
+            model_name = data.get("model")
             session_id = data.get("session_id") or generate_session_id()
             include_history = data.get("include_history", True)
             max_history = min(data.get("max_history", 10), 50)
             max_sources = min(data.get("max_sources", 6), 20)
+
+            # Get LLM instance for this specific request
+            from dbnotebook.core.model.model import LocalRAGModel
+            local_llm = LocalRAGModel.set(model_name) if model_name else Settings.llm
+
+            used_model = local_llm.model if hasattr(local_llm, 'model') else "unknown"
+            logger.info(f"V2 chat stream: notebook_id={notebook_id}, model={used_model} (requested={model_name})")
 
             # Verify notebook
             notebook = notebook_manager.get_notebook(notebook_id)
@@ -318,7 +332,7 @@ def create_chat_v2_routes(app, pipeline, db_manager, notebook_manager, conversat
                             notebook_id=notebook_id,
                             vector_store=pipeline._vector_store,
                             retriever_factory=pipeline._engine._retriever,
-                            llm=Settings.llm,
+                            llm=local_llm,
                             top_k=max_sources,
                         )
                         timings["3_retrieval_ms"] = int((time_module.time() - t3) * 1000)
@@ -349,7 +363,7 @@ def create_chat_v2_routes(app, pipeline, db_manager, notebook_manager, conversat
 
                     # Stream response
                     t6 = time_module.time()
-                    for chunk in execute_query_streaming(query, context, Settings.llm):
+                    for chunk in execute_query_streaming(query, context, local_llm):
                         response_text += chunk
                         yield f"data: {json.dumps({'type': 'content', 'content': chunk})}\n\n"
                     timings["6_llm_stream_ms"] = int((time_module.time() - t6) * 1000)
@@ -371,7 +385,7 @@ def create_chat_v2_routes(app, pipeline, db_manager, notebook_manager, conversat
                     # Build metadata
                     metadata = {
                         "execution_time_ms": execution_time_ms,
-                        "model": pipeline._default_model.model if pipeline._default_model else "unknown",
+                        "model": local_llm.model if hasattr(local_llm, 'model') else (pipeline._default_model.model if pipeline._default_model else "unknown"),
                         "node_count": len(nodes) if nodes else 0,
                         "raptor_summaries_used": len(raptor_summaries) if raptor_summaries else 0,
                         "history_turns_used": len(conversation_history) // 2,
