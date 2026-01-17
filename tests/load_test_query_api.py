@@ -14,19 +14,20 @@ import aiohttp
 import time
 import statistics
 import json
+import argparse
 from dataclasses import dataclass, field
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 import sys
 
-# Configuration
-BASE_URL = "http://localhost:7860"  # Docker container
+# Configuration (defaults, can be overridden via CLI)
+BASE_URL = "http://localhost:7860"
 API_KEY = "dbn_00000000000000000000000000000001"
 NOTEBOOK_ID = "18ee0c23-a2ce-4eb2-a56c-62a12dee964a"
 
-# Model configuration
-MODEL = "meta-llama/llama-4-maverick-17b-128e-instruct"
-PROVIDER = "groq"
+# Model configuration (defaults, can be overridden via CLI)
+MODEL = "gpt-4.1-mini"
+PROVIDER = "openai"
 
 # Test queries (varied complexity)
 TEST_QUERIES = [
@@ -41,13 +42,13 @@ TEST_QUERIES = [
 ]
 
 # Concurrency levels to test
-CONCURRENCY_LEVELS = [100]  # 100 concurrent users
-REQUESTS_PER_LEVEL = 100  # 100 requests total
+CONCURRENCY_LEVELS = [150]  # 100 concurrent users
+REQUESTS_PER_LEVEL = 150  # 100 requests total
 
 # Staggered load test settings
 STAGGERED_MODE = True
 BATCH_SIZE = 10  # Users per batch
-BATCH_INTERVAL = 10  # Seconds between batches
+BATCH_INTERVAL = 5  # Seconds between batches
 
 
 @dataclass
@@ -58,6 +59,8 @@ class RequestResult:
     status_code: int
     error: Optional[str] = None
     timings: Optional[Dict[str, int]] = None
+    source_count: int = 0
+    response_chars: int = 0
 
 
 @dataclass
@@ -72,6 +75,8 @@ class ConcurrencyResult:
     start_time: float = 0
     end_time: float = 0
     timing_breakdown: Dict[str, List[int]] = field(default_factory=dict)
+    source_counts: List[int] = field(default_factory=list)
+    response_chars: List[int] = field(default_factory=list)
 
     @property
     def success_rate(self) -> float:
@@ -144,11 +149,15 @@ async def make_query_request(
                 data = await response.json()
 
                 if response.status == 200 and data.get("success"):
+                    sources = data.get("sources", [])
+                    response_text = data.get("response", "")
                     return RequestResult(
                         success=True,
                         latency_ms=latency_ms,
                         status_code=response.status,
-                        timings=data.get("metadata", {}).get("timings")
+                        timings=data.get("metadata", {}).get("timings"),
+                        source_count=len(sources) if sources else 0,
+                        response_chars=len(response_text) if response_text else 0
                     )
                 else:
                     return RequestResult(
@@ -310,6 +319,8 @@ async def run_staggered_test(total_requests: int, batch_size: int, batch_interva
             result.latencies.append(r.latency_ms)
             if r.success:
                 result.successful_requests += 1
+                result.source_counts.append(r.source_count)
+                result.response_chars.append(r.response_chars)
                 if r.timings:
                     for key, value in r.timings.items():
                         if key not in result.timing_breakdown:
@@ -332,6 +343,14 @@ async def run_staggered_test(total_requests: int, batch_size: int, batch_interva
     print(f"  Latency (p50): {result.p50_latency:.0f}ms")
     print(f"  Latency (p95): {result.p95_latency:.0f}ms")
     print(f"  Latency (p99): {result.p99_latency:.0f}ms")
+
+    # Source and response metrics
+    if result.source_counts:
+        avg_sources = statistics.mean(result.source_counts)
+        print(f"  Sources (avg): {avg_sources:.1f}")
+    if result.response_chars:
+        avg_chars = statistics.mean(result.response_chars)
+        print(f"  Response (avg chars): {avg_chars:.0f}")
 
     if result.errors:
         unique_errors = list(set(result.errors))[:3]
@@ -662,6 +681,8 @@ async def main():
             "config": {
                 "base_url": BASE_URL,
                 "notebook_id": NOTEBOOK_ID,
+                "model": MODEL,
+                "provider": PROVIDER,
                 "concurrency_levels": CONCURRENCY_LEVELS,
                 "requests_per_level": REQUESTS_PER_LEVEL,
             },
@@ -682,6 +703,8 @@ async def main():
                         "p99": r.p99_latency,
                     },
                     "timing_breakdown": {k: statistics.mean(v) for k, v in r.timing_breakdown.items()} if r.timing_breakdown else {},
+                    "avg_source_count": statistics.mean(r.source_counts) if r.source_counts else 0,
+                    "avg_response_chars": statistics.mean(r.response_chars) if r.response_chars else 0,
                 }
                 for r in results
             ]
@@ -690,5 +713,40 @@ async def main():
     print(f"\nResults saved to: {output_file}")
 
 
+def parse_args():
+    """Parse command line arguments."""
+    parser = argparse.ArgumentParser(description="DBNotebook Query API Load Test")
+    parser.add_argument("--base-url", default="http://localhost:7860",
+                        help="Base URL for API (default: http://localhost:7860)")
+    parser.add_argument("--model", default="gpt-4.1-mini",
+                        help="Model name (default: gpt-4.1-mini)")
+    parser.add_argument("--provider", default="openai",
+                        help="Provider name (default: openai)")
+    parser.add_argument("--users", type=int, default=150,
+                        help="Total number of requests (default: 150)")
+    parser.add_argument("--batch-size", type=int, default=10,
+                        help="Users per batch in staggered mode (default: 10)")
+    parser.add_argument("--batch-interval", type=int, default=5,
+                        help="Seconds between batches (default: 5)")
+    parser.add_argument("--notebook-id", default="18ee0c23-a2ce-4eb2-a56c-62a12dee964a",
+                        help="Notebook ID to query")
+    parser.add_argument("--no-stagger", action="store_true",
+                        help="Disable staggered mode, use burst mode instead")
+    return parser.parse_args()
+
+
 if __name__ == "__main__":
+    args = parse_args()
+
+    # Update globals from CLI args
+    BASE_URL = args.base_url
+    MODEL = args.model
+    PROVIDER = args.provider
+    REQUESTS_PER_LEVEL = args.users
+    BATCH_SIZE = args.batch_size
+    BATCH_INTERVAL = args.batch_interval
+    NOTEBOOK_ID = args.notebook_id
+    STAGGERED_MODE = not args.no_stagger
+    CONCURRENCY_LEVELS = [args.users]
+
     asyncio.run(main())

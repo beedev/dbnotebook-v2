@@ -76,6 +76,16 @@ class TextToSQLEngine:
         self._query_engines: Dict[str, any] = {}
         self._sql_databases: Dict[str, SQLDatabase] = {}
 
+    def set_llm(self, llm: LLM) -> None:
+        """Set the LLM for SQL generation.
+
+        Called per-request to support multi-user scenarios and dedicated SQL LLMs.
+
+        Args:
+            llm: LLM instance to use for SQL generation
+        """
+        self._llm = llm
+
     def create_query_engine(
         self,
         connection_id: str,

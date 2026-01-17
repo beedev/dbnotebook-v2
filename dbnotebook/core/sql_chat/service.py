@@ -134,23 +134,39 @@ class SQLChatService(BaseService):
         # Dictionary generation threads (session_id -> Thread)
         self._dictionary_threads: Dict[str, threading.Thread] = {}
 
+        # Dedicated GPT-4.1 LLM for SQL generation (lazy initialization)
+        self._sql_llm: Optional[LLM] = None
+
         logger.info("SQLChatService initialized with enhanced components")
 
     def _get_current_llm(self) -> LLM:
-        """Get fresh LLM for the current request.
+        """Get GPT-4.1 LLM for SQL generation.
 
-        Multi-user safe: Returns LLM from Settings (thread-local) or pipeline.
-        No shared state - each request gets its own LLM reference.
+        SQL Chat uses GPT-4.1 specifically for accurate SQL generation,
+        regardless of the main pipeline LLM configuration. This ensures
+        consistent SQL quality with the 1M token context window.
 
         Returns:
-            LLM instance for this request
+            GPT-4.1 LLM instance
         """
-        from llama_index.core import Settings
-        # Prefer Settings.llm (thread-safe) if available
-        if Settings.llm is not None:
-            return Settings.llm
-        # Fallback to pipeline LLM
-        return self._pipeline.get_llm()
+        if self._sql_llm is None:
+            import os
+            from llama_index.llms.openai import OpenAI
+
+            api_key = os.getenv("OPENAI_API_KEY")
+            if not api_key:
+                logger.warning("OPENAI_API_KEY not set, falling back to pipeline LLM")
+                return self._pipeline.get_llm()
+
+            self._sql_llm = OpenAI(
+                model="gpt-4.1",
+                api_key=api_key,
+                temperature=0.0,  # Deterministic for SQL generation
+                context_window=1000000,  # GPT-4.1 supports 1M context
+            )
+            logger.info("SQL Chat using dedicated GPT-4.1 LLM (context_window: 1,000,000)")
+
+        return self._sql_llm
 
     def _get_response_generator(self, llm: LLM) -> ResponseGenerator:
         """Get response generator with given LLM.
@@ -630,7 +646,9 @@ class SQLChatService(BaseService):
 
             # Step 4: Generate SQL with dictionary context
             # Use focused_schema (RAG-filtered tables) instead of full schema
+            # Set the dedicated GPT-4.1 LLM for SQL generation
             t6 = time.time()
+            self._query_engine.set_llm(self._get_current_llm())
             sql, success, intent = self._query_engine.generate_with_correction(
                 session.connection_id,
                 nl_query,
@@ -811,8 +829,9 @@ class SQLChatService(BaseService):
 
         logger.info(f"Refining previous SQL: {refinement}")
 
-        # Get per-request LLM (multi-user safe)
+        # Get per-request LLM (multi-user safe) and set on query engine
         request_llm = self._get_current_llm()
+        self._query_engine.set_llm(request_llm)
 
         # Generate refined SQL
         refined_sql = self._query_engine.refine_sql(

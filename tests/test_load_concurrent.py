@@ -14,6 +14,7 @@ Run with: pytest tests/test_load_concurrent.py -v -s
 Or standalone: python tests/test_load_concurrent.py
 """
 
+import argparse
 import asyncio
 import json
 import logging
@@ -30,16 +31,23 @@ import requests
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Configuration
-BASE_URL = "http://localhost:7860"
+# Default Configuration
+BASE_URL = "http://localhost:7007"
+API_KEY = "dbn_00000000000000000000000000000001"
 DEFAULT_USER_ID = "00000000-0000-0000-0000-000000000001"
 
-# Load test parameters
+# Default Load test parameters
 CONCURRENT_USERS = 100
-REQUESTS_PER_USER = 3
+REQUESTS_PER_USER = 5
+BATCH_SIZE = 10
+BATCH_INTERVAL = 10  # seconds between batches
 TIMEOUT_SECONDS = 120
 TARGET_ERROR_RATE = 0.05  # 5%
 TARGET_P95_LATENCY_MS = 30000  # 30 seconds
+
+# Model configuration (set via CLI)
+MODEL = None
+PROVIDER = None
 
 
 @dataclass
@@ -82,11 +90,19 @@ class LoadTester:
         self,
         base_url: str = BASE_URL,
         concurrent_users: int = CONCURRENT_USERS,
-        requests_per_user: int = REQUESTS_PER_USER
+        requests_per_user: int = REQUESTS_PER_USER,
+        batch_size: int = BATCH_SIZE,
+        batch_interval: int = BATCH_INTERVAL,
+        model: str = None,
+        provider: str = None
     ):
         self.base_url = base_url
         self.concurrent_users = concurrent_users
         self.requests_per_user = requests_per_user
+        self.batch_size = batch_size
+        self.batch_interval = batch_interval
+        self.model = model
+        self.provider = provider
         self.results: List[RequestResult] = []
         self._lock = threading.Lock()
 
@@ -103,15 +119,22 @@ class LoadTester:
 
         start_time = time.time()
         try:
+            request_body = {
+                "notebook_id": notebook_id,
+                "query": query,
+                "include_sources": True,
+                "max_sources": 3
+            }
+            # Add model/provider if specified
+            if self.model:
+                request_body["model"] = self.model
+            if self.provider:
+                request_body["provider"] = self.provider
+
             response = requests.post(
                 f"{self.base_url}{endpoint}",
-                json={
-                    "notebook_id": notebook_id,
-                    "query": query,
-                    "include_sources": True,
-                    "max_sources": 3
-                },
-                headers={"X-User-ID": user_id},
+                json=request_body,
+                headers={"X-User-ID": user_id, "X-API-Key": API_KEY},
                 timeout=TIMEOUT_SECONDS
             )
 
@@ -214,18 +237,25 @@ class LoadTester:
     def run_load_test(
         self,
         notebook_id: str,
-        queries: List[str]
+        queries: List[str],
+        staggered: bool = True
     ) -> Tuple[LoadTestMetrics, List[RequestResult]]:
         """Run load test with concurrent users.
 
         Args:
             notebook_id: Notebook to query
             queries: List of test queries (will be cycled)
+            staggered: If True, start users in batches with delays
 
         Returns:
             Tuple of (metrics, all_results)
         """
-        logger.info(f"Starting load test: {self.concurrent_users} users, {self.requests_per_user} requests each")
+        model_info = f" using {self.provider}/{self.model}" if self.model else ""
+        if staggered:
+            logger.info(f"Starting STAGGERED load test: {self.concurrent_users} users, {self.requests_per_user} requests each{model_info}")
+            logger.info(f"Batch size: {self.batch_size} users, interval: {self.batch_interval}s")
+        else:
+            logger.info(f"Starting BURST load test: {self.concurrent_users} users, {self.requests_per_user} requests each{model_info}")
 
         all_results = []
         start_time = time.time()
@@ -234,16 +264,39 @@ class LoadTester:
         with ThreadPoolExecutor(max_workers=self.concurrent_users) as executor:
             futures = []
 
-            for user_num in range(self.concurrent_users):
-                # Cycle through queries
-                user_queries = queries[user_num % len(queries):] + queries[:user_num % len(queries)]
-                future = executor.submit(
-                    self._user_session,
-                    user_num,
-                    notebook_id,
-                    user_queries
-                )
-                futures.append(future)
+            if staggered:
+                # Staggered mode: submit users in batches
+                num_batches = (self.concurrent_users + self.batch_size - 1) // self.batch_size
+                for batch_num in range(num_batches):
+                    batch_start = batch_num * self.batch_size
+                    batch_end = min(batch_start + self.batch_size, self.concurrent_users)
+
+                    logger.info(f"Starting batch {batch_num + 1}/{num_batches}: users {batch_start + 1}-{batch_end}")
+
+                    for user_num in range(batch_start, batch_end):
+                        user_queries = queries[user_num % len(queries):] + queries[:user_num % len(queries)]
+                        future = executor.submit(
+                            self._user_session,
+                            user_num,
+                            notebook_id,
+                            user_queries
+                        )
+                        futures.append(future)
+
+                    # Wait between batches (except after last batch)
+                    if batch_num < num_batches - 1:
+                        time.sleep(self.batch_interval)
+            else:
+                # Burst mode: submit all users at once
+                for user_num in range(self.concurrent_users):
+                    user_queries = queries[user_num % len(queries):] + queries[:user_num % len(queries)]
+                    future = executor.submit(
+                        self._user_session,
+                        user_num,
+                        notebook_id,
+                        user_queries
+                    )
+                    futures.append(future)
 
             # Collect results as they complete
             completed = 0
@@ -275,7 +328,7 @@ class TestLoadConcurrent:
     @pytest.fixture
     def notebook_id(self):
         """Get first available notebook for testing."""
-        response = requests.get(f"{BASE_URL}/api/query/notebooks")
+        response = requests.get(f"{BASE_URL}/api/query/notebooks", headers={"X-API-Key": API_KEY})
         if response.status_code == 200:
             notebooks = response.json().get("notebooks", [])
             if notebooks:
@@ -371,7 +424,11 @@ class TestLoadConcurrent:
 def save_load_report(
     metrics: LoadTestMetrics,
     results: List[RequestResult],
-    output_dir: str = "test_results"
+    output_dir: str = "test_results",
+    model: str = None,
+    provider: str = None,
+    concurrent_users: int = None,
+    requests_per_user: int = None
 ) -> Tuple[str, str]:
     """Save load test report to JSON and text files."""
     import os
@@ -380,13 +437,19 @@ def save_load_report(
     os.makedirs(output_dir, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
+    # Use provided values or defaults
+    users = concurrent_users or CONCURRENT_USERS
+    reqs = requests_per_user or REQUESTS_PER_USER
+
     # JSON report
     json_path = os.path.join(output_dir, f"load_test_report_{timestamp}.json")
     report_data = {
         "timestamp": datetime.now().isoformat(),
         "configuration": {
-            "concurrent_users": CONCURRENT_USERS,
-            "requests_per_user": REQUESTS_PER_USER,
+            "concurrent_users": users,
+            "requests_per_user": reqs,
+            "model": model,
+            "provider": provider,
             "target_error_rate": TARGET_ERROR_RATE,
             "target_p95_latency_ms": TARGET_P95_LATENCY_MS
         },
@@ -428,8 +491,10 @@ def save_load_report(
 
         f.write("CONFIGURATION\n")
         f.write("-" * 70 + "\n")
-        f.write(f"Concurrent Users:    {CONCURRENT_USERS}\n")
-        f.write(f"Requests per User:   {REQUESTS_PER_USER}\n")
+        f.write(f"Concurrent Users:    {users}\n")
+        f.write(f"Requests per User:   {reqs}\n")
+        f.write(f"Provider:            {provider or 'default'}\n")
+        f.write(f"Model:               {model or 'default'}\n")
         f.write(f"Target Error Rate:   {TARGET_ERROR_RATE:.2%}\n")
         f.write(f"Target P95 Latency:  {TARGET_P95_LATENCY_MS}ms\n")
 
@@ -478,12 +543,56 @@ def save_load_report(
     return json_path, txt_path
 
 
+def parse_args():
+    """Parse command line arguments."""
+    parser = argparse.ArgumentParser(description="DBNotebook Concurrent Load Test")
+    parser.add_argument("--base-url", default="http://localhost:7007",
+                        help="Base URL for API (default: http://localhost:7007)")
+    parser.add_argument("--model", default=None,
+                        help="Model name (e.g., gpt-4o-mini, meta-llama/llama-4-maverick-17b-128e-instruct)")
+    parser.add_argument("--provider", default=None,
+                        help="Provider name (e.g., openai, groq)")
+    parser.add_argument("--users", type=int, default=100,
+                        help="Total number of concurrent users (default: 100)")
+    parser.add_argument("--requests", type=int, default=5,
+                        help="Requests per user (default: 5)")
+    parser.add_argument("--batch-size", type=int, default=10,
+                        help="Users per batch in staggered mode (default: 10)")
+    parser.add_argument("--batch-interval", type=int, default=10,
+                        help="Seconds between batches (default: 10)")
+    parser.add_argument("--notebook-id", default=None,
+                        help="Notebook ID to query (default: first available)")
+    parser.add_argument("--burst", action="store_true",
+                        help="Use burst mode instead of staggered")
+    return parser.parse_args()
+
+
 def run_standalone_test():
     """Run load test standalone (without pytest)."""
+    args = parse_args()
+
+    base_url = args.base_url
+    model = args.model
+    provider = args.provider
+
+    print(f"\n{'='*60}")
+    print("LOAD TEST CONFIGURATION")
+    print(f"{'='*60}")
+    print(f"Base URL:        {base_url}")
+    print(f"Provider:        {provider or 'default'}")
+    print(f"Model:           {model or 'default'}")
+    print(f"Users:           {args.users}")
+    print(f"Requests/User:   {args.requests}")
+    print(f"Mode:            {'BURST' if args.burst else 'STAGGERED'}")
+    if not args.burst:
+        print(f"Batch Size:      {args.batch_size}")
+        print(f"Batch Interval:  {args.batch_interval}s")
+    print(f"{'='*60}\n")
+
     # Get notebook
-    response = requests.get(f"{BASE_URL}/api/query/notebooks")
+    response = requests.get(f"{base_url}/api/query/notebooks", headers={"X-API-Key": API_KEY})
     if response.status_code != 200:
-        print("Failed to get notebooks")
+        print(f"Failed to get notebooks: {response.text}")
         return
 
     notebooks = response.json().get("notebooks", [])
@@ -491,8 +600,14 @@ def run_standalone_test():
         print("No notebooks available")
         return
 
-    notebook_id = notebooks[0]["id"]
-    print(f"Testing notebook: {notebooks[0]['name']}")
+    if args.notebook_id:
+        notebook_id = args.notebook_id
+        notebook_name = next((n["name"] for n in notebooks if n["id"] == args.notebook_id), "Unknown")
+    else:
+        notebook_id = notebooks[0]["id"]
+        notebook_name = notebooks[0]["name"]
+
+    print(f"Testing notebook: {notebook_name} ({notebook_id})")
 
     queries = [
         "What are the main topics?",
@@ -504,10 +619,15 @@ def run_standalone_test():
 
     # Run load test
     tester = LoadTester(
-        concurrent_users=CONCURRENT_USERS,
-        requests_per_user=REQUESTS_PER_USER
+        base_url=base_url,
+        concurrent_users=args.users,
+        requests_per_user=args.requests,
+        batch_size=args.batch_size,
+        batch_interval=args.batch_interval,
+        model=model,
+        provider=provider
     )
-    metrics, results = tester.run_load_test(notebook_id, queries)
+    metrics, results = tester.run_load_test(notebook_id, queries, staggered=not args.burst)
 
     # Print results
     test_instance = TestLoadConcurrent()
@@ -526,7 +646,8 @@ def run_standalone_test():
         print("\nPASSED: All targets met!")
 
     # Save reports
-    save_load_report(metrics, results)
+    save_load_report(metrics, results, model=model, provider=provider,
+                     concurrent_users=args.users, requests_per_user=args.requests)
 
     return metrics
 

@@ -37,6 +37,30 @@ class OpenAILLMProvider(LLMProvider):
     # O-series reasoning models only support temperature=1
     REASONING_MODELS = {"o1", "o1-mini", "o1-preview", "o3", "o3-mini", "o3-pro", "o4-mini"}
 
+    # Context window sizes for each model (used by LlamaIndex for token management)
+    CONTEXT_WINDOWS = {
+        "gpt-3.5-turbo": 16384,
+        "gpt-4": 8192,
+        "gpt-4-turbo": 128000,
+        "gpt-4-turbo-preview": 128000,
+        "gpt-4-0125-preview": 128000,
+        "gpt-4-1106-preview": 128000,
+        "gpt-4o": 128000,
+        "gpt-4o-mini": 128000,
+        "gpt-4o-2024-11-20": 128000,
+        "gpt-4o-2024-08-06": 128000,
+        "gpt-4.1": 1000000,       # GPT-4.1 supports 1M context
+        "gpt-4.1-mini": 1000000,
+        "gpt-4.1-nano": 1000000,
+        "o1": 200000,
+        "o1-mini": 128000,
+        "o1-preview": 128000,
+        "o3": 200000,
+        "o3-mini": 200000,
+        "o3-pro": 200000,
+        "o4-mini": 200000,
+    }
+
     def __init__(
         self,
         model: Optional[str] = None,
@@ -60,10 +84,14 @@ class OpenAILLMProvider(LLMProvider):
 
     def _initialize(self) -> None:
         """Initialize the OpenAI client."""
+        # Get context window for this model (critical for LlamaIndex token management)
+        context_window = self.CONTEXT_WINDOWS.get(self._model, 128000)
+
         kwargs = {
             "model": self._model,
             "api_key": self._api_key,
             "temperature": self._temperature,
+            "context_window": context_window,
         }
 
         if self._max_tokens:
@@ -71,7 +99,7 @@ class OpenAILLMProvider(LLMProvider):
 
         self._llm = OpenAI(**kwargs)
 
-        logger.debug(f"Initialized OpenAI provider with model: {self._model}")
+        logger.info(f"Initialized OpenAI: {self._model} (context_window: {context_window:,})")
 
     def complete(self, prompt: str, **kwargs) -> str:
         """Generate completion for prompt."""
@@ -91,23 +119,10 @@ class OpenAILLMProvider(LLMProvider):
 
     def get_model_info(self) -> Dict[str, Any]:
         """Return model information."""
-        context_windows = {
-            "gpt-3.5-turbo": 16384,
-            "gpt-4": 8192,
-            "gpt-4-turbo": 128000,
-            "gpt-4o": 128000,
-            "gpt-4o-mini": 128000,
-            "gpt-4.1": 128000,
-            "gpt-4.1-mini": 128000,
-            "gpt-4.1-nano": 128000,
-            "o1": 128000,
-            "o1-mini": 128000,
-        }
-
         return {
             "name": self._model,
             "provider": "openai",
-            "context_window": context_windows.get(self._model, 8192),
+            "context_window": self.CONTEXT_WINDOWS.get(self._model, 128000),
             "temperature": self._temperature,
             "capabilities": ["completion", "streaming", "chat", "function_calling"],
             "pricing": self._get_pricing()
