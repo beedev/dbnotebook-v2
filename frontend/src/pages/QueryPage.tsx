@@ -31,6 +31,7 @@ import {
   Key
 } from 'lucide-react';
 import { useApp } from '../contexts/AppContext';
+import { useAuth } from '../contexts/AuthContext';
 
 interface Notebook {
   id: string;
@@ -75,11 +76,6 @@ interface QueryResponse {
   error?: string;
 }
 
-// Default user ID that exists in the database
-// TODO: Replace with actual auth when implemented
-const DEFAULT_USER_ID = '00000000-0000-0000-0000-000000000001';
-
-
 export function QueryPage() {
   const [notebooks, setNotebooks] = useState<Notebook[]>([]);
   const [selectedNotebook, setSelectedNotebook] = useState<Notebook | null>(null);
@@ -90,8 +86,6 @@ export function QueryPage() {
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [showTimings, setShowTimings] = useState(false);
-  const [apiKey, setApiKey] = useState<string | null>(null);
-  const [isLoadingApiKey, setIsLoadingApiKey] = useState(true);
   const [apiKeyCopied, setApiKeyCopied] = useState(false);
   // Memory toggle: when enabled, session_id is sent for ephemeral in-memory history
   const [memoryEnabled, setMemoryEnabled] = useState(false);
@@ -101,34 +95,17 @@ export function QueryPage() {
   // Use global model selection from app context (header selector)
   const { selectedModel, selectedProvider } = useApp();
 
+  // Get user and API key from auth context
+  const { user, isLoading: isLoadingAuth } = useAuth();
+  const apiKey = user?.api_key ?? null;
+
   // Clear session when notebook changes (new context = new conversation)
   useEffect(() => {
     setSessionId(null);
     setResponse(null);
   }, [selectedNotebook?.id]);
 
-  // Load API key on mount
-  useEffect(() => {
-    const loadApiKey = async () => {
-      setIsLoadingApiKey(true);
-      try {
-        const res = await fetch(`/api/user/api-key?user_id=${DEFAULT_USER_ID}`);
-        const data = await res.json();
-        if (data.success && data.api_key) {
-          setApiKey(data.api_key);
-        } else {
-          console.warn('Failed to load API key:', data.error);
-        }
-      } catch (err) {
-        console.error('Error loading API key:', err);
-      } finally {
-        setIsLoadingApiKey(false);
-      }
-    };
-    loadApiKey();
-  }, []);
-
-  // Load notebooks on mount
+  // Load notebooks when API key becomes available
   useEffect(() => {
     loadNotebooks();
   }, [apiKey]);
@@ -289,7 +266,7 @@ export function QueryPage() {
             <div className="flex items-center gap-2 bg-void-surface rounded-lg px-3 py-2 border border-void-lighter">
               <Key className="w-4 h-4 text-glow" />
               <span className="text-xs text-text-muted">API Key:</span>
-              {isLoadingApiKey ? (
+              {isLoadingAuth ? (
                 <Loader2 className="w-4 h-4 text-text-muted animate-spin" />
               ) : apiKey ? (
                 <>

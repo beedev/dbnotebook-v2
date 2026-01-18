@@ -189,7 +189,12 @@ class LocalRAGPipeline:
             host=host,
             setting=self._settings
         )
-        Settings.llm = self._default_model
+        # Settings.llm requires a proper LlamaIndex LLM instance
+        # If using a wrapper (e.g., GroqWithBackoff), extract the raw LLM
+        if hasattr(self._default_model, 'get_raw_llm'):
+            Settings.llm = self._default_model.get_raw_llm()
+        else:
+            Settings.llm = self._default_model
         Settings.embed_model = LocalEmbedding.set(
             host=host,
             setting=self._settings

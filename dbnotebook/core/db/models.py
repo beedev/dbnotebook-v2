@@ -85,6 +85,7 @@ class User(Base):
     conversations = relationship("Conversation", back_populates="user", cascade="all, delete-orphan")
     query_logs = relationship("QueryLog", back_populates="user", cascade="all, delete-orphan")
     analytics_sessions = relationship("AnalyticsSession", back_populates="user", cascade="all, delete-orphan")
+    user_roles = relationship("UserRole", foreign_keys="[UserRole.user_id]", back_populates="user", cascade="all, delete-orphan", passive_deletes=True)
 
     def __repr__(self):
         return f"<User(user_id={self.user_id}, username='{self.username}')>"
@@ -456,7 +457,7 @@ class UserRole(Base):
     assigned_at = Column(TIMESTAMP, default=datetime.utcnow, nullable=False)
 
     # Relationships
-    user = relationship("User", foreign_keys=[user_id], backref="roles")
+    user = relationship("User", foreign_keys=[user_id], back_populates="user_roles")
     role = relationship("Role", back_populates="user_roles")
     assigned_by_user = relationship("User", foreign_keys=[assigned_by])
 

@@ -5,18 +5,33 @@ Supports Llama 4, Llama 3.x, Mixtral, and other models.
 
 Speed: 300-800 tokens/second (vs ~50 for OpenAI)
 Cost: ~10x cheaper than OpenAI
+
+Rate Limiting: Implements exponential backoff for handling HTTP 429 errors.
 """
 
 import logging
 import os
 from typing import Generator, Dict, Any, Optional
 
+import backoff
+from groq import RateLimitError as GroqRateLimitError
+from openai import RateLimitError as OpenAIRateLimitError
 from llama_index.llms.groq import Groq
 
 from ..interfaces import LLMProvider
 from ...setting import get_settings, RAGSettings
 
 logger = logging.getLogger(__name__)
+
+# Rate limit exceptions to catch (LlamaIndex Groq uses OpenAI-like interface)
+RATE_LIMIT_EXCEPTIONS = (GroqRateLimitError, OpenAIRateLimitError)
+
+
+def _log_backoff(details: dict) -> None:
+    """Log rate limit backoff events."""
+    logger.warning(
+        f"Groq rate limited, retry {details['tries']}/5 in {details['wait']:.1f}s"
+    )
 
 
 class GroqLLMProvider(LLMProvider):
@@ -97,16 +112,38 @@ class GroqLLMProvider(LLMProvider):
 
         logger.info(f"Initialized Groq provider with model: {self._model}")
 
+    @backoff.on_exception(
+        backoff.expo,
+        RATE_LIMIT_EXCEPTIONS,
+        max_tries=5,
+        max_time=60,
+        on_backoff=_log_backoff,
+    )
     def complete(self, prompt: str, **kwargs) -> str:
-        """Generate completion for prompt."""
+        """Generate completion for prompt.
+
+        Implements exponential backoff for rate limit (HTTP 429) errors.
+        Max 5 retries over 60 seconds with exponential delays.
+        """
         if self._llm is None:
             raise RuntimeError("Groq client not initialized")
 
         response = self._llm.complete(prompt, **kwargs)
         return str(response)
 
+    @backoff.on_exception(
+        backoff.expo,
+        RATE_LIMIT_EXCEPTIONS,
+        max_tries=5,
+        max_time=60,
+        on_backoff=_log_backoff,
+    )
     def stream(self, prompt: str, **kwargs) -> Generator[str, None, None]:
-        """Stream completion tokens."""
+        """Stream completion tokens.
+
+        Implements exponential backoff for rate limit (HTTP 429) errors.
+        Note: Backoff applies to stream initialization, not mid-stream.
+        """
         if self._llm is None:
             raise RuntimeError("Groq client not initialized")
 
@@ -133,7 +170,16 @@ class GroqLLMProvider(LLMProvider):
             "max_tokens": self._max_tokens,
             "capabilities": ["completion", "streaming", "chat", "function_calling"],
             "pricing": self._get_pricing(),
-            "speed": self._get_speed()
+            "speed": self._get_speed(),
+            "rate_limits": {
+                "free_tier": "30 RPM",
+                "paid_tier": "varies by model",
+            },
+            "retry_config": {
+                "max_tries": 5,
+                "max_time_seconds": 60,
+                "strategy": "exponential_backoff",
+            },
         }
 
     def _get_pricing(self) -> Dict[str, float]:

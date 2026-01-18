@@ -6,6 +6,7 @@ Provides CRUD operations for notebooks and document tracking with PostgreSQL per
 
 import logging
 import hashlib
+import secrets
 from typing import Dict, List, Optional
 from datetime import datetime
 from uuid import UUID, uuid4
@@ -583,7 +584,8 @@ class NotebookManager:
                     user = User(
                         user_id=user_uuid,
                         username=username,
-                        email=None
+                        email=None,
+                        api_key=f"dbn_{secrets.token_hex(16)}"
                     )
                     session.add(user)
                     logger.info(f"Created default user: {user_uuid}")
