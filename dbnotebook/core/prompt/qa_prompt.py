@@ -1,18 +1,15 @@
-def get_context_prompt(language: str) -> str:
-    if language == "vi":
-        return CONTEXT_PROMPT_VI
+def get_context_prompt(language: str = "en") -> str:
+    """Get context prompt. Language parameter kept for API compatibility."""
     return CONTEXT_PROMPT_EN
 
 
-def get_system_prompt(language: str, is_rag_prompt: bool = True) -> str:
-    if language == "vi":
-        return SYSTEM_PROMPT_RAG_VI if is_rag_prompt else SYSTEM_PROMPT_VI
+def get_system_prompt(language: str = "en", is_rag_prompt: bool = True) -> str:
+    """Get system prompt. Language parameter kept for API compatibility."""
     return SYSTEM_PROMPT_RAG_EN if is_rag_prompt else SYSTEM_PROMPT_EN
 
 
-def get_condense_prompt(language: str) -> str:
-    if language == "vi":
-        return CONDENSED_CONTEXT_PROMPT_VI
+def get_condense_prompt(language: str = "en") -> str:
+    """Get condense prompt. Language parameter kept for API compatibility."""
     return CONDENSED_CONTEXT_PROMPT_EN
 
 
@@ -59,20 +56,20 @@ The user's query may explicitly or implicitly request a specific response format
 
 1. **Elevator Pitch Format** (30-60 seconds, ~100-150 words):
    - Trigger keywords: "elevator pitch", "quick pitch", "30-second", "brief pitch"
-   - Structure: Hook → Problem → Solution → Value Proposition → Call to Action
+   - Structure: Hook -> Problem -> Solution -> Value Proposition -> Call to Action
    - Keep it concise, compelling, and memorable
    - Focus on the "why" and unique value proposition
 
 2. **Brief Summary Format** (2-3 paragraphs, ~200-300 words):
    - Trigger keywords: "summary", "brief", "quick overview", "in short", "TLDR", "concise"
-   - Structure: Current State → Core Challenges → Recommended Solution → Expected Outcomes
+   - Structure: Current State -> Core Challenges -> Recommended Solution -> Expected Outcomes
    - Highlight only the most critical points
    - Use bullet points for key takeaways
 
 3. **Detailed Response Format** (comprehensive, ~500-1000+ words):
    - Trigger keywords: "detailed", "comprehensive", "in-depth", "elaborate", "full analysis"
    - Default format when no specific brevity is requested
-   - Structure: Problem Analysis → Solution Bundle → Implementation Approach → Technical Details → Outcomes
+   - Structure: Problem Analysis -> Solution Bundle -> Implementation Approach -> Technical Details -> Outcomes
    - Include specific technical details, examples, and evidence
    - Use multiple sections with clear headers
 
@@ -84,7 +81,7 @@ The user's query may explicitly or implicitly request a specific response format
 
 5. **Use Case Format** (narrative style, ~400-600 words):
    - Trigger keywords: "use case", "example", "how would this work", "real-world scenario"
-   - Structure: Current State → Proposed Solution → Implementation Steps → Expected Outcomes → Success Metrics
+   - Structure: Current State -> Proposed Solution -> Implementation Steps -> Expected Outcomes -> Success Metrics
    - Use storytelling approach with concrete examples
 
 **CRITICAL INSTRUCTION**: Always analyze the user's query for format indicators BEFORE generating your response. If the user asks for a "brief summary" or "elevator pitch", do NOT provide a detailed multi-section response. Match your response length and depth to the user's explicit request."""
@@ -93,6 +90,26 @@ CONTEXT_PROMPT_EN = """\
 Here are the relevant documents for the context:
 
 {context_str}
+
+**ANTI-HALLUCINATION INSTRUCTIONS (CRITICAL - MUST FOLLOW)**:
+
+**STRICT RULES FOR FACTUAL QUERIES**:
+1. **ONLY use data from the documents ABOVE** - ignore ALL previous responses in chat history for facts/numbers/values
+2. **NEVER compare to previous items** - Do NOT say "similar to L7" or "like the previous" or "same as before"
+3. **NEVER reference chat history values** - If asked about L8, answer ONLY about L8 using L8's data from documents above
+4. **Each query is INDEPENDENT** - Treat each question as if it's the first question, using only the fresh documents above
+5. **If data not found** - Say "I don't have information about [X] in the documents" - do NOT substitute with other data
+
+**FORBIDDEN PHRASES** (never use these):
+- "similar to L7/previous"
+- "same as before"
+- "like the previous response"
+- "compared to L7"
+- "the difference from L7"
+
+**Example**: User asked about L7, now asks about L8.
+- WRONG: "L8 is similar to L7 but with higher allowances"
+- CORRECT: "L8 travel entitlements are: [only L8 data from documents above]"
 
 **CRITICAL INSTRUCTIONS FOR USING THE ABOVE DOCUMENTS**:
 
@@ -133,10 +150,10 @@ Given the conversation history and a follow-up question, rephrase the follow-up 
 - If the follow-up is ambiguous but short (like a code, level, or name), check if it makes sense in the context of the previous question
 
 **Examples**:
-- History: "What are travel policies for L6?" | Follow-up: "L12" → "What are the travel policies for L12?"
-- History: "What are travel policies for L6?" | Follow-up: "What is machine learning?" → "What is machine learning?"
-- History: "Explain RPA for retail" | Follow-up: "What about healthcare?" → "Explain RPA for healthcare"
-- History: "Company vacation policy" | Follow-up: "And sick leave?" → "What is the company sick leave policy?"
+- History: "What are travel policies for L6?" | Follow-up: "L12" -> "What are the travel policies for L12?"
+- History: "What are travel policies for L6?" | Follow-up: "What is machine learning?" -> "What is machine learning?"
+- History: "Explain RPA for retail" | Follow-up: "What about healthcare?" -> "Explain RPA for healthcare"
+- History: "Company vacation policy" | Follow-up: "And sick leave?" -> "What is the company sick leave policy?"
 
 Chat History:
 {chat_history}
@@ -144,32 +161,4 @@ Chat History:
 Follow Up Input: {question}
 
 Standalone question:\
-"""
-
-SYSTEM_PROMPT_VI = """\
-Đây là một cuộc trò chuyện giữa người dùng và một trợ lí trí tuệ nhân tạo. \
-Trợ lí đưa ra các câu trả lời hữu ích, chi tiết và lịch sự đối với các câu hỏi của người dùng dựa trên bối cảnh. \
-Trợ lí cũng nên chỉ ra khi câu trả lời không thể được tìm thấy trong ngữ cảnh."""
-
-SYSTEM_PROMPT_RAG_VI = """\
-Đây là một cuộc trò chuyện giữa người dùng và một trợ lí trí tuệ nhân tạo. \
-Trợ lí đưa ra các câu trả lời hữu ích, chi tiết và lịch sự đối với các câu hỏi của người dùng dựa trên bối cảnh. \
-Trợ lí cũng nên chỉ ra khi câu trả lời không thể được tìm thấy trong ngữ cảnh."""
-
-CONTEXT_PROMPT_VI = """\
-Dưới đây là các tài liệu liên quan cho ngữ cảnh:
-
-{context_str}
-
-Hướng dẫn: Dựa trên các tài liệu trên, cung cấp một câu trả lời chi tiết cho câu hỏi của người dùng dưới đây. \
-Trả lời 'không biết' nếu không có trong tài liệu."""
-
-CONDENSED_CONTEXT_PROMPT_VI = """\
-Cho cuộc trò chuyện sau giữa một người dùng và một trợ lí trí tuệ nhân tạo và một câu hỏi tiếp theo từ người dùng,
-đổi lại câu hỏi tiếp theo để là một câu hỏi độc lập.
-
-Lịch sử Trò chuyện:
-{chat_history}
-Đầu vào Tiếp Theo: {question}
-Câu hỏi độc lập:\
 """

@@ -194,3 +194,5 @@ local_dev.py
 # Claude settings (local)
 .claude/settings.local.json
 test_gpt5.py
+context/
+context/.compact-count

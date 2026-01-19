@@ -22,10 +22,13 @@ from typing import Optional
 import json
 
 # Configuration
-BASE_URL = "http://localhost:7007"  # Adjust if needed
+BASE_URL = "http://localhost:7007"  # Docker container
 NOTEBOOK_ID = None  # Will be auto-detected
 API_KEY = None  # Will be auto-fetched
 CONCURRENT_USERS = 100
+QUERIES_PER_USER = 5
+MODEL = "gpt-4.1-mini"  # OpenAI GPT-4.1 mini
+PROVIDER = "openai"
 DEFAULT_USER_ID = "00000000-0000-0000-0000-000000000001"
 
 # Policy-related queries for testing
@@ -123,7 +126,7 @@ async def run_user_session(
     session: aiohttp.ClientSession,
     notebook_id: str,
     api_key: str,
-    num_queries: int = 3
+    num_queries: int = QUERIES_PER_USER
 ) -> list[QueryResult]:
     """
     Simulate a user session with multiple queries.
@@ -147,6 +150,12 @@ async def run_user_session(
                 "max_sources": 3,
                 "max_history": 10,
             }
+
+            # Include model and provider if specified
+            if MODEL:
+                request_body["model"] = MODEL
+            if PROVIDER:
+                request_body["provider"] = PROVIDER
 
             # Include session_id for conversation continuity
             if session_id:
@@ -246,7 +255,8 @@ async def main():
             return
 
         # Run concurrent user sessions
-        print(f"\n[Test] Starting {CONCURRENT_USERS} concurrent users (3 queries each)...")
+        model_info = f" using {MODEL}" if MODEL else ""
+        print(f"\n[Test] Starting {CONCURRENT_USERS} concurrent users ({QUERIES_PER_USER} queries each){model_info}...")
         print("-" * 80)
 
         start_time = time.time()
@@ -258,7 +268,7 @@ async def main():
                 session=session,
                 notebook_id=notebook_id,
                 api_key=api_key,
-                num_queries=3
+                num_queries=QUERIES_PER_USER
             )
             for i in range(CONCURRENT_USERS)
         ]
