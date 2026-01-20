@@ -2,7 +2,7 @@
 name = "dbnotebook"
 version = "0.2.0"
 description = "Local RAG chatbot with notebook management and vision capabilities"
-authors = ["Vo Dinh Dat <vodinhdat03@gmail.com>"]
+authors = ["Bharath D <vaspar@gmail.com>"]
 readme = "README.md"
 packages = [{include = "dbnotebook"}]
 

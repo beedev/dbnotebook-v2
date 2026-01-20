@@ -133,8 +133,3 @@ docker compose up --build
 
 Apache License 2.0
 
----
-
-## Attribution
-
-Built on foundations from [rag-chatbot](https://github.com/datvodinh/rag-chatbot) with significant enhancements for notebook architecture, multimodal capabilities, and modern React frontend.
