@@ -23,6 +23,7 @@ from dbnotebook.core.stateless import (
     save_conversation_turn,
     generate_session_id,
 )
+from dbnotebook.core.prompt import get_condense_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -140,7 +141,28 @@ def create_chat_v2_routes(app, pipeline, db_manager, notebook_manager, conversat
                     user_id=user_id,
                     max_history=max_history,
                 )
-            timings["2_load_history_ms"] = int((time.time() - t2) * 1000)
+            timings["2a_load_history_ms"] = int((time.time() - t2) * 1000)
+
+            # Step 2b: Expand follow-up queries using conversation history
+            retrieval_query = query  # Default to original query
+            if include_history and conversation_history and len(conversation_history) >= 2:
+                t2b = time.time()
+                try:
+                    history_text = "\n".join([
+                        f"{'User' if msg['role'] == 'user' else 'Assistant'}: {msg['content'][:500]}"
+                        for msg in conversation_history[-4:]
+                    ])
+                    condense_prompt = get_condense_prompt().format(
+                        chat_history=history_text,
+                        question=query
+                    )
+                    expanded = local_llm.complete(condense_prompt).text.strip()
+                    if expanded and len(expanded) > 5 and expanded != query:
+                        retrieval_query = expanded
+                        logger.info(f"V2 expanded: '{query}' → '{retrieval_query}'")
+                    timings["2b_query_expansion_ms"] = int((time.time() - t2b) * 1000)
+                except Exception as e:
+                    logger.warning(f"V2 query expansion failed: {e}")
 
             # Step 3: Get cached nodes (thread-safe)
             t3 = time.time()
@@ -162,7 +184,7 @@ def create_chat_v2_routes(app, pipeline, db_manager, notebook_manager, conversat
                     t4 = time.time()
                     retrieval_results = fast_retrieve(
                         nodes=nodes,
-                        query=query,
+                        query=retrieval_query,  # Use expanded query for retrieval
                         notebook_id=notebook_id,
                         vector_store=pipeline._vector_store,
                         retriever_factory=pipeline._engine._retriever,
@@ -170,15 +192,15 @@ def create_chat_v2_routes(app, pipeline, db_manager, notebook_manager, conversat
                         top_k=max_sources,
                     )
                     timings["4_fast_retrieval_ms"] = int((time.time() - t4) * 1000)
-                    retrieval_strategy = "combined_raptor"
+                    retrieval_strategy = "hybrid"  # Now using get_retrievers() (chunks only)
 
                 except Exception as e:
                     logger.warning(f"Retrieval failed [{type(e).__name__}]: {e}", exc_info=True)
 
-            # Step 5: Get RAPTOR summaries
+            # Step 5: Get RAPTOR summaries (for LLM context, not retrieval)
             t5 = time.time()
             raptor_summaries = get_raptor_summaries(
-                query=query,
+                query=retrieval_query,  # Use expanded query for RAPTOR lookup
                 notebook_id=notebook_id,
                 vector_store=pipeline._vector_store,
                 embed_model=Settings.embed_model,
@@ -316,7 +338,28 @@ def create_chat_v2_routes(app, pipeline, db_manager, notebook_manager, conversat
                             user_id=user_id,
                             max_history=max_history,
                         )
-                    timings["1_load_history_ms"] = int((time_module.time() - t1) * 1000)
+                    timings["1a_load_history_ms"] = int((time_module.time() - t1) * 1000)
+
+                    # Query expansion for follow-up queries
+                    retrieval_query = query  # Default to original query
+                    if include_history and conversation_history and len(conversation_history) >= 2:
+                        t1b = time_module.time()
+                        try:
+                            history_text = "\n".join([
+                                f"{'User' if msg['role'] == 'user' else 'Assistant'}: {msg['content'][:500]}"
+                                for msg in conversation_history[-4:]
+                            ])
+                            condense_prompt = get_condense_prompt().format(
+                                chat_history=history_text,
+                                question=query
+                            )
+                            expanded = local_llm.complete(condense_prompt).text.strip()
+                            if expanded and len(expanded) > 5 and expanded != query:
+                                retrieval_query = expanded
+                                logger.info(f"V2 stream expanded: '{query}' → '{retrieval_query}'")
+                            timings["1b_query_expansion_ms"] = int((time_module.time() - t1b) * 1000)
+                        except Exception as e:
+                            logger.warning(f"V2 stream query expansion failed: {e}")
 
                     # Get nodes and retrieve
                     t2 = time_module.time()
@@ -328,7 +371,7 @@ def create_chat_v2_routes(app, pipeline, db_manager, notebook_manager, conversat
                         t3 = time_module.time()
                         retrieval_results = fast_retrieve(
                             nodes=nodes,
-                            query=query,
+                            query=retrieval_query,  # Use expanded query for retrieval
                             notebook_id=notebook_id,
                             vector_store=pipeline._vector_store,
                             retriever_factory=pipeline._engine._retriever,
@@ -337,10 +380,10 @@ def create_chat_v2_routes(app, pipeline, db_manager, notebook_manager, conversat
                         )
                         timings["3_retrieval_ms"] = int((time_module.time() - t3) * 1000)
 
-                    # Get RAPTOR summaries
+                    # Get RAPTOR summaries (for LLM context, not retrieval)
                     t4 = time_module.time()
                     raptor_summaries = get_raptor_summaries(
-                        query=query,
+                        query=retrieval_query,  # Use expanded query for RAPTOR lookup
                         notebook_id=notebook_id,
                         vector_store=pipeline._vector_store,
                         embed_model=Settings.embed_model,

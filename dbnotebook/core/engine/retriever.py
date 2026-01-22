@@ -10,13 +10,10 @@ from llama_index.core.retrievers import (
     BaseRetriever,
     QueryFusionRetriever,
     VectorIndexRetriever,
-    RouterRetriever
 )
 from llama_index.core.callbacks.base import CallbackManager
 from llama_index.core.retrievers.fusion_retriever import FUSION_MODES
 from dbnotebook.core.providers.reranker_provider import get_shared_reranker
-from llama_index.core.tools import RetrieverTool
-from llama_index.core.selectors import LLMSingleSelector
 from llama_index.core.schema import BaseNode, NodeWithScore, QueryBundle, IndexNode
 from llama_index.core.llms.llm import LLM
 from llama_index.retrievers.bm25 import BM25Retriever
@@ -36,7 +33,7 @@ def _unwrap_llm(llm):
 
     LlamaIndex's resolve_llm() requires instances of the LLM base class.
     Wrapper classes (e.g., GroqWithBackoff for rate limiting) must be
-    unwrapped before passing to components like RouterRetriever.
+    unwrapped before passing to LlamaIndex components.
 
     Args:
         llm: LLM instance or wrapper
@@ -456,37 +453,6 @@ class LocalRetriever:
                 verbose=False
             )
 
-    def _get_router_retriever(
-        self,
-        vector_index: VectorStoreIndex,
-        llm: Optional[LLM] = None,
-        language: str = "eng",
-    ) -> RouterRetriever:
-        """Create router retriever that selects between fusion and two-stage."""
-        llm = llm or Settings.llm
-
-        fusion_tool = RetrieverTool.from_defaults(
-            retriever=self._get_hybrid_retriever(
-                vector_index, llm, language, gen_query=True
-            ),
-            description="Use this tool when the user's query is ambiguous or unclear.",
-            name="Fusion Retriever with BM25 and Vector Retriever and LLM Query Generation."
-        )
-
-        two_stage_tool = RetrieverTool.from_defaults(
-            retriever=self._get_hybrid_retriever(
-                vector_index, llm, language, gen_query=False
-            ),
-            description="Use this tool when the user's query is clear and unambiguous.",
-            name="Two Stage Retriever with BM25 and Vector Retriever and LLM Rerank."
-        )
-
-        return RouterRetriever.from_defaults(
-            selector=LLMSingleSelector.from_defaults(llm=llm),
-            retriever_tools=[fusion_tool, two_stage_tool],
-            llm=llm
-        )
-
     def get_retrievers(
         self,
         llm: LLM,
@@ -611,8 +577,8 @@ class LocalRetriever:
         node_count = len(filtered_nodes)
 
         if node_count > self._setting.retriever.top_k_rerank:
-            logger.debug(f"Using router retriever for {node_count} nodes")
-            retriever = self._get_router_retriever(vector_index, llm, language)
+            logger.debug(f"Using two-stage retriever for {node_count} nodes")
+            retriever = self._get_hybrid_retriever(vector_index, llm, language, gen_query=False)
         else:
             logger.debug(f"Using simple retriever for {node_count} nodes")
             retriever = self._get_normal_retriever(vector_index, llm, language)

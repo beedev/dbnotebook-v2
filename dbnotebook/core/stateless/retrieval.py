@@ -42,22 +42,25 @@ def create_retriever(
     language: str = "eng",
     retriever_factory: Optional[Any] = None,
 ) -> Any:
-    """Create a per-request RAPTOR-aware retriever.
+    """Create a per-request chunk-only retriever (no RAPTOR in retrieval).
 
     This is thread-safe because it creates a new retriever instance
     for each request rather than reusing a global one.
+
+    Design: Retrieval uses chunks only via get_retrievers() for fast, precise
+    results. RAPTOR summaries are fetched separately and added to LLM context.
 
     Args:
         nodes: Cached nodes for the notebook
         notebook_id: UUID of the notebook to query
         vector_store: PGVectorStore instance
         llm: LLM instance (defaults to Settings.llm)
-        source_ids: Optional list of source IDs to filter
+        source_ids: Optional list of source IDs to filter (unused, kept for API compat)
         language: Language code for prompts (default: "eng")
-        retriever_factory: LocalRetriever instance with get_combined_raptor_retriever method
+        retriever_factory: LocalRetriever instance with get_retrievers method
 
     Returns:
-        RAPTOR-aware retriever instance
+        Chunk-only retriever instance
     """
     if llm is None:
         llm = Settings.llm
@@ -68,13 +71,14 @@ def create_retriever(
     if retriever_factory is None:
         raise ValueError("retriever_factory is required to create per-request retrievers")
 
-    return retriever_factory.get_combined_raptor_retriever(
+    # Use get_retrievers() for chunk-only retrieval (matches API pattern)
+    # RAPTOR summaries are fetched separately via get_raptor_summaries()
+    return retriever_factory.get_retrievers(
         llm=llm,
         language=language,
         nodes=nodes,
         vector_store=vector_store,
         notebook_id=notebook_id,
-        source_ids=source_ids,
     )
 
 
