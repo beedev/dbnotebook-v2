@@ -39,6 +39,8 @@ export function ChatArea({ notebookId, notebookName, selectedModel, onCopy, onFi
   const [showSourceSuggestion, setShowSourceSuggestion] = useState(false);
   const [sourceSuggestionReason, setSourceSuggestionReason] = useState('');
   const [suggestedSearchQuery, setSuggestedSearchQuery] = useState('');
+  // Track dismissed knowledge gap messages to prevent re-showing after skip
+  const [dismissedGapMessageId, setDismissedGapMessageId] = useState<string | null>(null);
 
   // Get documents from context to determine hasDocuments
   const { documents } = useDocument();
@@ -115,11 +117,14 @@ export function ChatArea({ notebookId, notebookName, selectedModel, onCopy, onFi
 
   // Detect knowledge gaps in the latest response (agentic - does NOT affect routing)
   const lastMessage = messages[messages.length - 1];
+  // Use id or timestamp ISO string as unique identifier for the message
+  const lastMessageId = lastMessage?.id || lastMessage?.timestamp?.toISOString();
   const hasKnowledgeGap = lastMessage?.role === 'assistant' &&
     !lastMessage.isStreaming &&
     lastMessage.sources?.length === 0 &&
     documents.length > 0 &&
-    lastMessage.content.length > 50;
+    lastMessage.content.length > 50 &&
+    lastMessageId !== dismissedGapMessageId;  // Don't show if user already dismissed this message
 
   // Show SourceSuggestion when knowledge gap detected
   useEffect(() => {
@@ -254,7 +259,11 @@ export function ChatArea({ notebookId, notebookName, selectedModel, onCopy, onFi
                   setShowSourceSuggestion(false);
                   handleUploadClick();
                 }}
-                onSkip={() => setShowSourceSuggestion(false)}
+                onSkip={() => {
+                  // Track this message as dismissed so we don't re-show the modal
+                  setDismissedGapMessageId(lastMessageId);
+                  setShowSourceSuggestion(false);
+                }}
               />
             </div>
           )}

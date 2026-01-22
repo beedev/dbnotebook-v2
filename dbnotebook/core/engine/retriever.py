@@ -31,6 +31,26 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 
 
+def _unwrap_llm(llm):
+    """Extract raw LlamaIndex LLM from wrapper classes like GroqWithBackoff.
+
+    LlamaIndex's resolve_llm() requires instances of the LLM base class.
+    Wrapper classes (e.g., GroqWithBackoff for rate limiting) must be
+    unwrapped before passing to components like RouterRetriever.
+
+    Args:
+        llm: LLM instance or wrapper
+
+    Returns:
+        Raw LlamaIndex LLM instance
+    """
+    if hasattr(llm, 'get_raw_llm'):
+        raw_llm = llm.get_raw_llm()
+        logger.debug(f"Unwrapped LLM: {type(llm).__name__} → {type(raw_llm).__name__}")
+        return raw_llm
+    return llm
+
+
 class QueryIntent(Enum):
     """Types of query intent for transformation-aware retrieval."""
     SUMMARY = "summary"       # User wants document overview/summary
@@ -495,6 +515,9 @@ class LocalRetriever:
         Returns:
             Configured retriever instance
         """
+        # Unwrap LLM wrappers (e.g., GroqWithBackoff) for LlamaIndex compatibility
+        llm = _unwrap_llm(llm)
+
         # Check retriever cache first (only if notebook_id is valid)
         cache_key = f"{notebook_id}:{len(nodes)}" if notebook_id else None
         current_time = time.time()
@@ -735,6 +758,9 @@ class LocalRetriever:
         Returns:
             Combined retriever with RAPTOR and standard retrieval
         """
+        # Unwrap LLM wrappers (e.g., GroqWithBackoff) for LlamaIndex compatibility
+        llm = _unwrap_llm(llm)
+
         if not vector_store or not notebook_id:
             return self.get_retrievers(llm, language, nodes, vector_store=vector_store)
 

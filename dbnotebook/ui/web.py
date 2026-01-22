@@ -831,7 +831,7 @@ Output ONLY valid JSON, nothing else."""
                 })
 
             except Exception as e:
-                logger.error(f"Error uploading files: {e}")
+                logger.error(f"Error uploading files: {e}", exc_info=True)
                 return jsonify({"success": False, "error": str(e)})
 
         @self._app.route("/clear", methods=["POST"])

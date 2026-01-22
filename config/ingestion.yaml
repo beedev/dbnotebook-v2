@@ -63,10 +63,12 @@ retriever:
   # Retriever weights for hybrid search [BM25, Vector]
   retriever_weights: [0.5, 0.5]
 
-  # Reranking - using larger MxBai model for better accuracy (~3GB)
-  # Higher quality reranking at cost of more memory
+  # Reranking - MxBai reranker models:
+  # - mxbai-rerank-large-v1: ~3GB, slow (~30s), best quality
+  # - mxbai-rerank-base-v1: ~500MB, medium (~10s), good quality
+  # - mxbai-rerank-xsmall-v1: ~100MB, fast (~2s), acceptable quality
   top_k_rerank: 10            # Top k after reranking (final results to LLM)
-  rerank_model: "mixedbread-ai/mxbai-rerank-large-v1"
+  rerank_model: "mixedbread-ai/mxbai-rerank-base-v1"
 
   # Fusion mode for combining results
   fusion_mode: "dist_based_score"

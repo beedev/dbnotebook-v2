@@ -30,8 +30,9 @@ RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/wh
 COPY requirements-docker.txt .
 RUN pip install --no-cache-dir -r requirements-docker.txt
 
-# Download HuggingFace reranker model during build (embeddings use OpenAI API)
-RUN python -c "from sentence_transformers import CrossEncoder; CrossEncoder('mixedbread-ai/mxbai-rerank-large-v1')"
+# Download HuggingFace reranker models during build (embeddings use OpenAI API)
+# Options: large (~3GB, slow), base (~500MB, medium), xsmall (~100MB, fast)
+RUN python -c "from sentence_transformers import CrossEncoder; CrossEncoder('mixedbread-ai/mxbai-rerank-base-v1')"
 
 # Pre-download NLTK punkt tokenizer (used by LlamaIndex) to avoid runtime download
 RUN python -c "import nltk; nltk.download('punkt_tab', download_dir='/app/venv/lib/python3.11/site-packages/llama_index/core/_static/nltk_cache')"

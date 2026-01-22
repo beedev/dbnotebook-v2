@@ -33,6 +33,7 @@ services:
       - ./uploads:/app/uploads # user uploads
       - ./dbnotebook:/app/dbnotebook # backend source - instant code changes
       - ./frontend/dist:/app/frontend/dist:ro # frontend build - npm run build
+      - ./models:/app/models:ro # pre-downloaded reranker models (avoids 3GB download)
     extra_hosts:
       - "host.docker.internal:host-gateway"
     networks:

@@ -11,19 +11,30 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 **LOCAL DEVELOPMENT (PREFERRED)**: Use `./dev.sh` with local PostgreSQL on port 5432.
 
 ```bash
+# First-time setup
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+brew services start postgresql@17        # macOS - start PostgreSQL
+createdb dbnotebook_dev                   # Create database if needed
+
 # Local development (PREFERRED method)
-./dev.sh                      # Start Flask backend locally (uses venv, localhost:5432)
-./start-local.sh backend      # Alternative: start backend with migrations
-./start-local.sh frontend     # Start frontend dev server
+./dev.sh local                # Start Flask backend locally (uses venv, localhost:5432)
+./dev.sh                      # Shows usage help
+./dev.sh status               # Check status of all services
+./dev.sh stop                 # Stop all services
+./dev.sh logs                 # Follow Docker container logs
 
 # Local PostgreSQL setup
 # - PostgreSQL running on localhost:5432
 # - Database: dbnotebook_dev
 # - User/Password: dbnotebook/dbnotebook
+# - Default login: admin / admin123
 # - .env uses host.docker.internal but dev.sh replaces with localhost
 
 # Docker deployment (for production-like testing)
-docker compose up --build     # Builds and starts all services
+./dev.sh docker               # Build and start Docker container (port 7007)
+docker compose up --build     # Alternative: direct docker compose
 docker compose up -d          # Run in background
 docker compose logs -f        # Follow logs
 
@@ -49,6 +60,16 @@ pytest                        # All tests
 pytest tests/test_notebook_integration.py  # Specific test
 pytest tests/raptor/          # RAPTOR module tests
 pytest -v -x                  # Verbose, stop on first failure
+
+# Utility Scripts
+python scripts/query_api_example.py --list-models   # List available LLM models
+python scripts/query_api_example.py -m gpt-4.1-mini -q "Your query"  # Single query
+python scripts/rebuild_raptor.py                     # Rebuild RAPTOR trees
+python scripts/download_reranker_models.py           # Pre-download reranker models
+
+# Load Testing (requires: pip install aiohttp)
+python tests/simple_load_test.py                    # 100 concurrent users, local
+python scripts/load_test_query_api.py               # Configurable cloud load test
 ```
 
 ## Quick Reference
@@ -136,6 +157,23 @@ Tree building flow: Document chunks (level 0) → Cluster by similarity → Summ
 - `query_analyzer.py` - Analyzes queries to determine retrieval strategy
 - `document_analyzer.py` - Analyzes document content for routing decisions
 
+### Authentication & Multi-User
+
+**`dbnotebook/core/auth/`** - Multi-user authentication system:
+- `auth_service.py` - Login, password management, API key generation (bcrypt hashing)
+- `rbac.py` - Role-based access control (admin, user roles)
+
+**API Routes** (`/api/auth/*`):
+- `POST /login` - Username/password authentication, returns session + API key
+- `POST /logout` - End session
+- `GET /me` - Current user info
+- `POST /change-password` - Update password
+- `POST /regenerate-api-key` - Generate new API key
+
+**Default Credentials**: `admin` / `admin123`
+
+**Admin Routes** (`/api/admin/*`): User management (create, delete, list users)
+
 ### SQL Chat (Chat with Data)
 
 **`dbnotebook/core/sql_chat/`** - Natural language to SQL with multi-database support:
@@ -213,7 +251,7 @@ Complete Excel/CSV analysis pipeline with LLM-powered dashboard generation.
 
 **`dbnotebook/core/registry.py`** - PluginRegistry:
 ```
-├── LLM Providers: Ollama, OpenAI, Anthropic, Gemini
+├── LLM Providers: Ollama, OpenAI, Anthropic, Gemini, Groq
 ├── Embedding Providers: HuggingFace, OpenAI
 ├── Retrieval Strategies: Hybrid, Semantic, Keyword
 ├── Image Providers: Gemini/Imagen
@@ -221,6 +259,8 @@ Complete Excel/CSV analysis pipeline with LLM-powered dashboard generation.
 ├── Web Search: Firecrawl
 └── Web Scraper: Jina Reader
 ```
+
+**Groq Provider** (`core/providers/groq.py`): Ultra-fast inference (300-800 tok/s), supports Llama 4, Llama 3.x, Mixtral. Implements exponential backoff for rate limits.
 
 Providers selected via env vars: `LLM_PROVIDER`, `EMBEDDING_PROVIDER`, `RETRIEVAL_STRATEGY`, `VISION_PROVIDER`
 
@@ -240,7 +280,10 @@ value = get_config_value('raptor', 'clustering', 'min_cluster_size', default=3)
 ### API Routes
 
 Routes in `dbnotebook/api/routes/`:
+- `auth.py` - `/api/auth/*` - Login, logout, password management
+- `admin.py` - `/api/admin/*` - User management (admin only)
 - `chat.py` - `/chat`, `/api/chat/*` - Chat and streaming
+- `chat_v2.py` - `/api/v2/chat/*` - V2 Chat API with multi-user support
 - `studio.py` - `/api/studio/*` - Content generation gallery
 - `vision.py` - `/api/vision/*` - Image analysis
 - `web_content.py` - `/api/web/*` - Web search and scraping
@@ -250,6 +293,7 @@ Routes in `dbnotebook/api/routes/`:
 - `agents.py` - `/api/agents/*` - Agentic query analysis endpoints
 - `sql_chat.py` - `/api/sql-chat/*` - Natural language to SQL queries
 - `query.py` - `/api/query` - Programmatic RAG API (for scripting/automation)
+- `settings.py` - `/api/settings/*` - User settings management
 
 Routes follow pattern: `create_*_routes(app, pipeline, db_manager, notebook_manager)`
 
@@ -276,6 +320,7 @@ Simple REST API for scripting and automation (`/api/query`):
 **Migrations**: Alembic (`/alembic/`)
 
 **Tables**:
+- `users` - User accounts with password hash, roles, API keys
 - `notebooks` - Document collections with `user_id`
 - `notebook_sources` - Documents with `active` toggle for RAG inclusion
 - `conversations` - Persistent chat history per notebook
@@ -324,6 +369,14 @@ JINA_API_KEY=...                # Optional (higher rate limits)
 SQL_CHAT_SKIP_READONLY_CHECK=false  # Set true for dev/testing only
 SQL_CHAT_ENCRYPTION_KEY=...     # Fernet key for stored credentials
 FEW_SHOT_MAX_EXAMPLES=100000    # Max examples for SQL generation
+
+# Groq (optional - ultra-fast LLM inference)
+GROQ_API_KEY=...                # Required when LLM_PROVIDER=groq
+GROQ_MODEL=meta-llama/llama-4-scout-17b-16e-instruct  # Default model
+
+# Authentication & Sessions
+FLASK_SECRET_KEY=...            # Required for consistent sessions across workers
+RBAC_STRICT_MODE=false          # Enable strict role-based access control
 ```
 
 ## Frontend
@@ -331,15 +384,18 @@ FEW_SHOT_MAX_EXAMPLES=100000    # Max examples for SQL generation
 Located in `/frontend/`:
 - **Stack**: React 19, Vite 7, Tailwind CSS 4, TypeScript
 - **Theme**: Deep Space Terminal (dark theme)
+- **Charts**: CSS-based (no external charting library)
 - **Proxy**: Vite proxies `/api`, `/chat`, `/upload`, `/image` to Flask :7860
 - **State**: React Context pattern - `AnalyticsContext`, `ChatContext`, `NotebookContext`, `DocumentContext`
 - **v2 Components**: Alternative UI in `components/v2/` (NotebookLM-style layout)
 
 ## Key Defaults
 
-- Flask: http://localhost:7860
+- Flask (local): http://localhost:7860
+- Flask (Docker): http://localhost:7007 (maps to container :7860)
 - Frontend dev: http://localhost:3000
-- PostgreSQL: localhost:5433 (Docker maps to internal 5432)
+- PostgreSQL: localhost:5432 (local dev), localhost:5433 (.env default)
+- Default login: admin / admin123
 - Chunk size: 512 tokens, overlap: 32
 - Similarity top-k: 20, rerank top-k: 6
 - Embedding dimension: 1536 (OpenAI text-embedding-3-small) or 768 (nomic)
@@ -404,3 +460,7 @@ class MyService(BaseService):
 - **Docker backend changes not reflected**: Check volume mount in docker-compose.yml (`./dbnotebook:/app/dbnotebook`)
 - **Frontend build issues**: Run `npm run lint` and check TypeScript errors (build runs `tsc -b` first)
 - **Model detection**: Check `LocalRAGModel` in `core/model/model.py` for supported model names per provider
+- **Auth issues**: Check `FLASK_SECRET_KEY` is set for session persistence, verify `users` table has admin user
+- **Groq rate limits**: Provider implements exponential backoff (5 retries, 60s max), check logs for "rate limited" warnings
+- **Load testing**: Requires `pip install aiohttp` for async load tests
+- **RAPTOR rebuild**: Use `python scripts/rebuild_raptor.py` to rebuild hierarchical summaries for a notebook

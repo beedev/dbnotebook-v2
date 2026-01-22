@@ -13,6 +13,26 @@ from llama_index.core.schema import QueryBundle, TextNode, NodeWithScore
 logger = logging.getLogger(__name__)
 
 
+def _unwrap_llm(llm):
+    """Extract raw LlamaIndex LLM from wrapper classes like GroqWithBackoff.
+
+    LlamaIndex's resolve_llm() requires instances of the LLM base class.
+    Wrapper classes (e.g., GroqWithBackoff for rate limiting) must be
+    unwrapped before passing to components like QueryFusionRetriever.
+
+    Args:
+        llm: LLM instance or wrapper
+
+    Returns:
+        Raw LlamaIndex LLM instance
+    """
+    if hasattr(llm, 'get_raw_llm'):
+        raw_llm = llm.get_raw_llm()
+        logger.debug(f"Unwrapped LLM: {type(llm).__name__} → {type(raw_llm).__name__}")
+        return raw_llm
+    return llm
+
+
 def create_retriever(
     nodes: List[TextNode],
     notebook_id: str,
@@ -41,6 +61,9 @@ def create_retriever(
     """
     if llm is None:
         llm = Settings.llm
+
+    # Unwrap LLM wrappers (e.g., GroqWithBackoff) for LlamaIndex compatibility
+    llm = _unwrap_llm(llm)
 
     if retriever_factory is None:
         raise ValueError("retriever_factory is required to create per-request retrievers")
@@ -119,7 +142,7 @@ def fast_retrieve(
         return retrieval_results[:top_k]
 
     except Exception as e:
-        logger.warning(f"Retrieval failed: {e}")
+        logger.warning(f"Retrieval failed [{type(e).__name__}]: {e}", exc_info=True)
         return []
 
 

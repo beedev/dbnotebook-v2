@@ -81,8 +81,8 @@ few_shot:
     # Use reranker for final ranking
     use_reranker: true
 
-    # Reranker model (cross-encoder) - using larger model for better accuracy
-    rerank_model: "mixedbread-ai/mxbai-rerank-large-v1"
+    # Reranker model (cross-encoder) - base model for faster performance
+    rerank_model: "mixedbread-ai/mxbai-rerank-base-v1"
 
     # Number of candidates to retrieve before reranking
     rerank_top_k: 15

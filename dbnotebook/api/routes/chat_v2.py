@@ -173,7 +173,7 @@ def create_chat_v2_routes(app, pipeline, db_manager, notebook_manager, conversat
                     retrieval_strategy = "combined_raptor"
 
                 except Exception as e:
-                    logger.warning(f"Retrieval failed: {e}")
+                    logger.warning(f"Retrieval failed [{type(e).__name__}]: {e}", exc_info=True)
 
             # Step 5: Get RAPTOR summaries
             t5 = time.time()

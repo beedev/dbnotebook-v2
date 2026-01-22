@@ -22,10 +22,10 @@ from typing import Optional
 import json
 
 # Configuration
-BASE_URL = "http://localhost:7007"  # Docker container
+BASE_URL = "http://20.79.168.17:7007"  # Azure cloud server
 NOTEBOOK_ID = None  # Will be auto-detected
 API_KEY = None  # Will be auto-fetched
-CONCURRENT_USERS = 100
+CONCURRENT_USERS = 100  # 100 concurrent users
 QUERIES_PER_USER = 5
 MODEL = "gpt-4.1-mini"  # OpenAI GPT-4.1 mini
 PROVIDER = "openai"
@@ -92,6 +92,7 @@ class QueryResult:
     response_preview: str
     response_time_ms: float
     history_messages_used: int
+    response_char_count: int = 0
     error: Optional[str] = None
 
 
@@ -191,6 +192,7 @@ async def run_user_session(
                         response_preview=preview,
                         response_time_ms=elapsed_ms,
                         history_messages_used=history_used,
+                        response_char_count=len(response_text),
                     ))
                 else:
                     results.append(QueryResult(
@@ -335,6 +337,22 @@ async def main():
             print(f"  P90:  {p90:,.0f} ms")
             print(f"  P95:  {p95:,.0f} ms")
             print(f"  P99:  {p99:,.0f} ms")
+
+        # Response character count stats
+        char_counts = [r.response_char_count for r in successful if r.response_char_count > 0]
+        if char_counts:
+            print(f"\nResponse Length (characters):")
+            print(f"  Min:     {min(char_counts):,} chars")
+            print(f"  Max:     {max(char_counts):,} chars")
+            print(f"  Mean:    {statistics.mean(char_counts):,.0f} chars")
+            print(f"  Median:  {statistics.median(char_counts):,.0f} chars")
+            print(f"  Total:   {sum(char_counts):,} chars")
+
+            # Chars per second (throughput)
+            total_chars = sum(char_counts)
+            print(f"\nCharacter Throughput:")
+            print(f"  Chars/second: {total_chars/total_time:,.0f}")
+            print(f"  Avg chars/query: {statistics.mean(char_counts):,.0f}")
 
         # Memory usage stats
         with_memory = [r for r in successful if r.history_messages_used > 0]

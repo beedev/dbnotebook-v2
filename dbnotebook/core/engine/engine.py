@@ -14,6 +14,26 @@ from ...setting import get_settings, RAGSettings, QueryTimeSettings
 logger = logging.getLogger(__name__)
 
 
+def _unwrap_llm(llm):
+    """Extract raw LlamaIndex LLM from wrapper classes like GroqWithBackoff.
+
+    LlamaIndex's resolve_llm() requires instances of the LLM base class.
+    Wrapper classes (e.g., GroqWithBackoff for rate limiting) must be
+    unwrapped before passing to components like SimpleChatEngine.
+
+    Args:
+        llm: LLM instance or wrapper
+
+    Returns:
+        Raw LlamaIndex LLM instance
+    """
+    if hasattr(llm, 'get_raw_llm'):
+        raw_llm = llm.get_raw_llm()
+        logger.debug(f"Unwrapped LLM: {type(llm).__name__} → {type(raw_llm).__name__}")
+        return raw_llm
+    return llm
+
+
 class LocalChatEngine:
     """
     Factory for creating chat engines with or without document context.
@@ -57,6 +77,9 @@ class LocalChatEngine:
         Returns:
             Configured chat engine
         """
+        # Unwrap LLM wrappers (e.g., GroqWithBackoff) for LlamaIndex compatibility
+        llm = _unwrap_llm(llm)
+
         # Session-only memory: Limit based on CHAT_TOKEN_LIMIT setting
         # Must account for: system prompt (~500) + context prompt (~1000) + exchanges
         # Default 32K tokens allows larger context windows for RAPTOR summaries + chunks
