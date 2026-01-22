@@ -40,6 +40,7 @@ from llama_index.core.schema import QueryBundle
 from dbnotebook.core.auth import check_notebook_access, AccessLevel
 from dbnotebook.core.constants import DEFAULT_USER_ID
 from dbnotebook.core.db.models import User
+from dbnotebook.core.prompt import get_condense_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -280,6 +281,37 @@ def create_query_routes(app, pipeline, db_manager, notebook_manager):
                 timings["1b_load_history_ms"] = int((time.time() - t1b) * 1000)
                 logger.debug(f"Loaded {len(history_messages)} history messages from in-memory session {session_id}")
 
+            # Step 1.6: Expand follow-up queries using conversation history
+            # This prevents hallucination by giving the retriever full context
+            retrieval_query = query  # Default to original query
+            if use_memory and history_messages and len(history_messages) >= 2:
+                t1c = time.time()
+                try:
+                    # Format history for the condense prompt
+                    history_text = "\n".join([
+                        f"{'User' if msg['role'] == 'user' else 'Assistant'}: {msg['content'][:500]}"
+                        for msg in history_messages[-4:]  # Last 2 exchanges
+                    ])
+
+                    # Use condense prompt to expand follow-up query
+                    condense_prompt = get_condense_prompt().format(
+                        chat_history=history_text,
+                        question=query
+                    )
+
+                    # Use LLM to generate standalone question
+                    expanded = llm.complete(condense_prompt).text.strip()
+
+                    # Only use expanded query if it's meaningful
+                    if expanded and len(expanded) > 5 and expanded != query:
+                        retrieval_query = expanded
+                        logger.info(f"Expanded follow-up query: '{query}' → '{retrieval_query}'")
+
+                    timings["1c_query_expansion_ms"] = int((time.time() - t1c) * 1000)
+                except Exception as e:
+                    logger.warning(f"Query expansion failed, using original: {e}")
+                    # Continue with original query
+
             # MULTI-USER SAFE: No global state mutations
             # - Uses thread-safe _get_cached_nodes
             # - Creates per-request retriever
@@ -319,9 +351,9 @@ def create_query_routes(app, pipeline, db_manager, notebook_manager):
                     )
                     timings["3_create_retriever_ms"] = int((time.time() - t3) * 1000)
 
-                    # Step 4: Retrieve relevant chunks
+                    # Step 4: Retrieve relevant chunks (using expanded query for follow-ups)
                     t4 = time.time()
-                    query_bundle = QueryBundle(query_str=query)
+                    query_bundle = QueryBundle(query_str=retrieval_query)
                     retrieval_results = retriever.retrieve(query_bundle)
                     timings["4_chunk_retrieval_ms"] = int((time.time() - t4) * 1000)
 
@@ -355,7 +387,7 @@ def create_query_routes(app, pipeline, db_manager, notebook_manager):
                 try:
                     # Get query embedding for similarity search
                     t6a = time.time()
-                    query_embedding = Settings.embed_model.get_query_embedding(query)
+                    query_embedding = Settings.embed_model.get_query_embedding(retrieval_query)
                     timings["6a_raptor_embedding_ms"] = int((time.time() - t6a) * 1000)
 
                     # Bounded lookup: max 5 summaries, tree_level >= 1
