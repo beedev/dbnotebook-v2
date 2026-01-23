@@ -1,3 +1,9 @@
+# Project directories (not tracked)
+tests/
+scripts/
+upload/
+prototype/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
