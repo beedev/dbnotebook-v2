@@ -9,15 +9,25 @@ info:
 
     ## Features
     - **Multi-user safe**: Thread-safe for concurrent requests
-    - **Stateless**: No session state, each request is independent
+    - **Conversation Memory**: Optional session-based memory for multi-turn conversations
+    - **Model Selection**: Override LLM model per request (OpenAI, Groq, etc.)
+    - **Response Formats**: Choose from default, detailed, analytical, or brief formats
+    - **Reranker Control**: Enable/disable reranking per request for benchmarking
     - **Document isolation**: Each notebook's documents are isolated
     - **Source attribution**: Responses include source documents with relevance scores
+    - **Detailed Timing**: Response includes timing breakdown for performance analysis
 
     ## Authentication
-    Optional API key authentication via `X-API-Key` header.
-    Set the `API_KEY` environment variable to enable authentication.
+    API key authentication via `X-API-Key` header.
+    - Keys are stored per-user in the database
+    - Environment variable `API_KEY` serves as fallback for backward compatibility
 
-  version: 1.0.0
+    ## Conversation Memory
+    - **Stateless mode**: Omit `session_id` for independent queries
+    - **Memory mode**: Include `session_id` (client-generated UUID) for multi-turn conversations
+    - Memory is ephemeral (in-memory) and isolated from the main chat interface
+
+  version: 2.0.0
   contact:
     name: DBNotebook Support
   license:
@@ -26,7 +36,9 @@ info:
 
 servers:
   - url: http://localhost:7860
-    description: Local development server
+    description: Local development server (Flask)
+  - url: http://localhost:7007
+    description: Docker container (maps to 7860)
   - url: https://your-domain.com
     description: Production server
 
@@ -35,6 +47,8 @@ tags:
     description: RAG query operations
   - name: Notebooks
     description: Notebook management
+  - name: User
+    description: User management
 
 paths:
   /api/query:
@@ -47,9 +61,19 @@ paths:
 
         The system will:
         1. Retrieve relevant document chunks using hybrid search (BM25 + vector)
-        2. Build context from the top matching chunks
-        3. Generate a response using the configured LLM
-        4. Return the response with source attribution
+        2. Optionally rerank results for improved relevance
+        3. Build context from the top matching chunks
+        4. Optionally include RAPTOR hierarchical summaries
+        5. Generate a response using the configured or specified LLM
+        6. Return the response with source attribution and timing metrics
+
+        **Conversation Memory:**
+        - Omit `session_id` → stateless query (no history)
+        - Include `session_id` → conversational mode (maintains context across requests)
+
+        **Model Selection:**
+        - Supports OpenAI (gpt-4.1, gpt-4.1-mini), Groq (llama-4-maverick), and more
+        - Use `model` and optionally `provider` to override the default
 
       operationId: executeQuery
       security:
@@ -62,22 +86,45 @@ paths:
               $ref: '#/components/schemas/QueryRequest'
             examples:
               simple:
-                summary: Simple query
+                summary: Simple stateless query
                 value:
                   notebook_id: "990b1f11-fb85-4c7c-ab49-f44d0caaab7d"
                   query: "What is the main topic of these documents?"
-              sales_pitch:
-                summary: Sales pitch generation
-                value:
-                  notebook_id: "990b1f11-fb85-4c7c-ab49-f44d0caaab7d"
-                  query: "Create a sales pitch for digital offerings to the Retail industry"
-                  max_sources: 5
-              no_sources:
-                summary: Query without sources
+              with_model:
+                summary: Query with specific model
                 value:
                   notebook_id: "990b1f11-fb85-4c7c-ab49-f44d0caaab7d"
                   query: "Summarize the key points"
-                  include_sources: false
+                  model: "gpt-4.1-mini"
+                  provider: "openai"
+              with_memory:
+                summary: Conversational query with memory
+                value:
+                  notebook_id: "990b1f11-fb85-4c7c-ab49-f44d0caaab7d"
+                  query: "Tell me more about that"
+                  session_id: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+                  max_history: 5
+              analytical:
+                summary: Analytical response format
+                value:
+                  notebook_id: "990b1f11-fb85-4c7c-ab49-f44d0caaab7d"
+                  query: "What are the compensation bands and benefits?"
+                  response_format: "analytical"
+                  max_sources: 10
+              fast_groq:
+                summary: Fast query with Groq Llama 4
+                value:
+                  notebook_id: "990b1f11-fb85-4c7c-ab49-f44d0caaab7d"
+                  query: "What is the leave policy?"
+                  model: "meta-llama/llama-4-maverick-17b-128e-instruct"
+                  provider: "groq"
+              benchmark:
+                summary: Benchmark with reranker disabled
+                value:
+                  notebook_id: "990b1f11-fb85-4c7c-ab49-f44d0caaab7d"
+                  query: "Explain the travel policy"
+                  reranker_enabled: false
+                  skip_raptor: true
       responses:
         '200':
           description: Successful query response
@@ -86,25 +133,77 @@ paths:
               schema:
                 $ref: '#/components/schemas/QueryResponse'
               examples:
-                success:
-                  summary: Successful response
+                stateless:
+                  summary: Stateless response
                   value:
                     success: true
-                    response: "The main topic is digital transformation and automation solutions for enterprises..."
+                    response: "The main topic is digital transformation and automation solutions..."
                     sources:
-                      - document: "Automation.md"
-                        excerpt: "The MODERNIZE offering is a comprehensive solution..."
+                      - filename: "Automation.md"
+                        snippet: "The MODERNIZE offering is a comprehensive solution..."
                         score: 0.492
-                      - document: "AIDigitalEngineering.md"
-                        excerpt: "AI-enabled digital engineering combines..."
+                      - filename: "AIDigitalEngineering.md"
+                        snippet: "AI-enabled digital engineering combines..."
                         score: 0.385
                     metadata:
                       execution_time_ms: 3500
                       model: "gpt-4.1"
-                      retrieval_strategy: "hybrid"
-                      node_count: 77
+                      retrieval_strategy: "twostage"
+                      node_count: 67
+                      stateless: true
+                      history_messages_used: 0
+                      raptor_summaries_used: 0
+                      skip_raptor: true
+                      reranker_enabled: true
+                      reranker_model: "xsmall"
+                      top_k: 6
+                      response_format: "default"
+                      timings:
+                        1_notebook_lookup_ms: 5
+                        2_node_cache_ms: 30
+                        3_create_retriever_ms: 150
+                        4_chunk_retrieval_ms: 580
+                        5_format_sources_ms: 2
+                        6_raptor_total_ms: 0
+                        7_context_building_ms: 3
+                        8_llm_completion_ms: 2700
+                with_memory:
+                  summary: Response with conversation memory
+                  value:
+                    success: true
+                    response: "Based on our previous discussion about policies..."
+                    session_id: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+                    sources:
+                      - filename: "Policies.md"
+                        snippet: "The work from home policy allows..."
+                        score: 0.65
+                    metadata:
+                      execution_time_ms: 4200
+                      model: "gpt-4.1-mini"
+                      retrieval_strategy: "twostage"
+                      node_count: 67
+                      stateless: false
+                      history_messages_used: 4
+                      raptor_summaries_used: 0
+                      skip_raptor: true
+                      reranker_enabled: true
+                      reranker_model: "xsmall"
+                      top_k: 6
+                      response_format: "default"
+                      timings:
+                        1_notebook_lookup_ms: 4
+                        1b_load_history_ms: 1
+                        1c_query_expansion_ms: 850
+                        2_node_cache_ms: 0
+                        3_create_retriever_ms: 0
+                        4_chunk_retrieval_ms: 520
+                        5_format_sources_ms: 1
+                        6_raptor_total_ms: 0
+                        7_context_building_ms: 2
+                        8_llm_completion_ms: 2800
+                        9_save_history_ms: 1
         '400':
-          description: Bad request - missing required fields
+          description: Bad request - missing or invalid fields
           content:
             application/json:
               schema:
@@ -118,6 +217,10 @@ paths:
                   value:
                     success: false
                     error: "query is required"
+                invalid_session:
+                  value:
+                    success: false
+                    error: "Invalid session_id format. Must be a valid UUID."
         '401':
           description: Unauthorized - invalid or missing API key
           content:
@@ -127,6 +230,15 @@ paths:
               example:
                 success: false
                 error: "Invalid or missing API key"
+        '403':
+          description: Forbidden - no access to notebook (RBAC)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                success: false
+                error: "Access denied to notebook"
         '404':
           description: Notebook not found
           content:
@@ -190,8 +302,8 @@ paths:
                     document_count: 4
                     created_at: "2026-01-11T09:01:17.738829"
                   - id: "f4eb5943-6ae9-44c4-99f1-e61fc2c483da"
-                    name: "Daaji"
-                    document_count: 1
+                    name: "Policies"
+                    document_count: 8
                     created_at: "2026-01-11T09:01:45.393501"
         '401':
           description: Unauthorized
@@ -206,6 +318,53 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
 
+  /api/user/api-key:
+    get:
+      tags:
+        - User
+      summary: Get user's API key
+      description: |
+        Retrieve the API key for a specific user.
+        This endpoint is intended for frontend use to display/copy the user's API key for programmatic access.
+
+        **Note:** This endpoint does not require authentication - it's used to retrieve the key itself.
+      operationId: getUserApiKey
+      parameters:
+        - name: user_id
+          in: query
+          description: User ID (optional, defaults to system user)
+          required: false
+          schema:
+            type: string
+            format: uuid
+            example: "00000000-0000-0000-0000-000000000001"
+      responses:
+        '200':
+          description: User's API key
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiKeyResponse'
+              example:
+                success: true
+                api_key: "dbn_abc123def456..."
+                user_id: "00000000-0000-0000-0000-000000000001"
+        '404':
+          description: User not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                success: false
+                error: "User not found: 00000000-0000-0000-0000-000000000001"
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
 components:
   securitySchemes:
     ApiKeyAuth:
@@ -213,8 +372,10 @@ components:
       in: header
       name: X-API-Key
       description: |
-        API key for authentication (optional).
-        Only required if the `API_KEY` environment variable is set on the server.
+        API key for authentication.
+        - Keys are stored per-user in the database (`users.api_key` column)
+        - Environment variable `API_KEY` serves as fallback for backward compatibility
+        - Use `/api/user/api-key` endpoint to retrieve a user's API key
 
   schemas:
     QueryRequest:
@@ -234,11 +395,40 @@ components:
           minLength: 1
           maxLength: 10000
           example: "What are the key features of the digital offering?"
+        session_id:
+          type: string
+          format: uuid
+          description: |
+            Client-generated UUID for conversation memory.
+            - Omit for stateless queries
+            - Include to maintain conversation context across requests
+            - Client must generate and send the same session_id for related queries
+          example: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+        max_history:
+          type: integer
+          minimum: 1
+          maximum: 20
+          default: 5
+          description: Maximum number of conversation history messages to include (only used with session_id)
+        model:
+          type: string
+          description: |
+            LLM model override. Examples:
+            - OpenAI: `gpt-4.1`, `gpt-4.1-mini`, `gpt-4o`
+            - Groq: `meta-llama/llama-4-maverick-17b-128e-instruct`
+            - Anthropic: `claude-3-5-sonnet`
+          example: "gpt-4.1-mini"
+        provider:
+          type: string
+          enum: [openai, groq, anthropic, gemini, ollama]
+          description: LLM provider (auto-detected from model if not specified)
+          example: "openai"
         mode:
           type: string
           enum: [chat, QA]
           default: chat
-          description: Query mode (kept for API compatibility, currently ignored)
+          description: Query mode (kept for API compatibility)
+          deprecated: true
         include_sources:
           type: boolean
           default: true
@@ -249,6 +439,46 @@ components:
           maximum: 20
           default: 6
           description: Maximum number of source documents to return
+        reranker_enabled:
+          type: boolean
+          description: |
+            Enable/disable reranking for this request.
+            - `true`: Use reranker for improved relevance
+            - `false`: Skip reranking (faster but less accurate)
+            - Omit to use server default
+          example: true
+        reranker_model:
+          type: string
+          enum: [xsmall, base, large]
+          description: |
+            Reranker model size override. Trade-off between speed and accuracy:
+            - `xsmall`: ~0.5s (fastest, good accuracy)
+            - `base`: ~1.5s (balanced)
+            - `large`: ~4s (most accurate)
+          example: "xsmall"
+        top_k:
+          type: integer
+          minimum: 1
+          maximum: 20
+          description: Number of chunks to retrieve and rerank
+          example: 6
+        skip_raptor:
+          type: boolean
+          default: true
+          description: |
+            Skip RAPTOR hierarchical summaries.
+            - `true` (default): Use only retrieved chunks (better for specific queries)
+            - `false`: Include RAPTOR summaries for broader context
+        response_format:
+          type: string
+          enum: [default, detailed, analytical, brief]
+          default: default
+          description: |
+            Response format style:
+            - `default`: Adaptive format based on query
+            - `detailed`: Comprehensive with full technical details
+            - `analytical`: Data-focused with tables and metrics
+            - `brief`: Concise 2-3 paragraph summary
 
     QueryResponse:
       type: object
@@ -261,6 +491,11 @@ components:
           type: string
           description: Generated response from the LLM
           example: "Based on the documents, the main features include..."
+        session_id:
+          type: string
+          format: uuid
+          description: Session ID (only returned if session_id was provided in request)
+          example: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
         sources:
           type: array
           description: Source documents used to generate the response
@@ -272,11 +507,11 @@ components:
     Source:
       type: object
       properties:
-        document:
+        filename:
           type: string
           description: Name of the source document
           example: "Automation.md"
-        excerpt:
+        snippet:
           type: string
           description: Relevant excerpt from the document (max 200 chars)
           example: "The MODERNIZE offering is a comprehensive solution..."
@@ -298,15 +533,106 @@ components:
         model:
           type: string
           description: LLM model used for generation
-          example: "gpt-4.1"
+          example: "gpt-4.1-mini"
         retrieval_strategy:
           type: string
-          description: Retrieval strategy used
-          example: "hybrid"
+          description: Retrieval strategy used (vectorindex, twostage, queryfusion)
+          example: "twostage"
         node_count:
           type: integer
           description: Number of document chunks in the notebook
-          example: 77
+          example: 67
+        stateless:
+          type: boolean
+          description: Whether the query was stateless (no conversation memory)
+          example: true
+        history_messages_used:
+          type: integer
+          description: Number of conversation history messages included
+          example: 0
+        raptor_summaries_used:
+          type: integer
+          description: Number of RAPTOR hierarchical summaries included
+          example: 0
+        skip_raptor:
+          type: boolean
+          description: Whether RAPTOR summaries were skipped
+          example: true
+        reranker_enabled:
+          type: boolean
+          description: Whether reranking was enabled
+          example: true
+        reranker_model:
+          type: string
+          description: Reranker model used (xsmall, base, large, or null if disabled)
+          example: "xsmall"
+        top_k:
+          type: integer
+          description: Number of chunks retrieved/reranked
+          example: 6
+        response_format:
+          type: string
+          description: Response format used
+          example: "default"
+        timings:
+          $ref: '#/components/schemas/TimingBreakdown'
+
+    TimingBreakdown:
+      type: object
+      description: Detailed timing breakdown for performance analysis
+      properties:
+        1_notebook_lookup_ms:
+          type: integer
+          description: Time to look up notebook
+          example: 5
+        1b_load_history_ms:
+          type: integer
+          description: Time to load conversation history (only with session_id)
+          example: 1
+        1c_query_expansion_ms:
+          type: integer
+          description: Time to expand follow-up query (only with history)
+          example: 850
+        2_node_cache_ms:
+          type: integer
+          description: Time to retrieve cached nodes
+          example: 30
+        3_create_retriever_ms:
+          type: integer
+          description: Time to create retriever (0 if cached)
+          example: 150
+        4_chunk_retrieval_ms:
+          type: integer
+          description: Time to retrieve and rerank chunks
+          example: 580
+        5_format_sources_ms:
+          type: integer
+          description: Time to format source documents
+          example: 2
+        6_raptor_total_ms:
+          type: integer
+          description: Time for RAPTOR summary retrieval (0 if skipped)
+          example: 0
+        6a_raptor_embedding_ms:
+          type: integer
+          description: Time for RAPTOR query embedding
+          example: 50
+        6b_raptor_lookup_ms:
+          type: integer
+          description: Time for RAPTOR similarity lookup
+          example: 30
+        7_context_building_ms:
+          type: integer
+          description: Time to build context for LLM
+          example: 3
+        8_llm_completion_ms:
+          type: integer
+          description: Time for LLM to generate response
+          example: 2700
+        9_save_history_ms:
+          type: integer
+          description: Time to save conversation history (only with session_id)
+          example: 1
 
     NotebooksResponse:
       type: object
@@ -340,6 +666,22 @@ components:
           format: date-time
           description: Creation timestamp
           example: "2026-01-11T09:01:17.738829"
+
+    ApiKeyResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        api_key:
+          type: string
+          description: User's API key for programmatic access
+          example: "dbn_abc123def456..."
+        user_id:
+          type: string
+          format: uuid
+          description: User ID
+          example: "00000000-0000-0000-0000-000000000001"
 
     ErrorResponse:
       type: object

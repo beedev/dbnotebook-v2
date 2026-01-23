@@ -210,6 +210,16 @@ Execute a RAG query against documents in a notebook.
 | `reranker_model` | string | No | - | Reranker model override |
 | `top_k` | integer | No | `6` | Retrieval top-k override |
 | `skip_raptor` | boolean | No | `true` | Skip RAPTOR summaries (set `false` for broader context) |
+| `response_format` | string | No | `default` | Response format: `default`, `analytical`, `detailed`, or `brief` |
+
+#### Response Format Options
+
+| Format | Description | Use Case |
+|--------|-------------|----------|
+| `default` | Standard adaptive response | General queries |
+| `analytical` | Structured with tables, key findings, metrics | Data extraction, reports |
+| `detailed` | Comprehensive with full technical details | In-depth analysis |
+| `brief` | Concise 2-3 paragraphs | Quick summaries |
 
 #### Response Fields
 
@@ -224,6 +234,9 @@ Execute a RAG query against documents in a notebook.
 | `metadata.stateless` | boolean | `true` if no session_id, `false` if memory enabled |
 | `metadata.history_messages_used` | integer | Number of prior messages used (0 if stateless) |
 | `metadata.node_count` | integer | Document chunks in notebook |
+| `metadata.response_format` | string | Response format used (`default`, `analytical`, `detailed`, `brief`) |
+| `metadata.reranker_enabled` | boolean | Whether reranking was enabled |
+| `metadata.raptor_summaries_used` | integer | Number of RAPTOR summaries included in context |
 | `metadata.timings` | object | Detailed timing breakdown (see below) |
 
 #### Timing Breakdown (metadata.timings)
@@ -395,12 +408,17 @@ class DBNotebookClient:
         response = requests.get(f"{self.base_url}/api/query/notebooks", headers=self.headers)
         return response.json()["notebooks"]
 
-    def query(self, notebook_id, query, use_memory=False, max_sources=3):
-        """Execute a query. Set use_memory=True for conversation continuity."""
+    def query(self, notebook_id, query, use_memory=False, max_sources=3, response_format="default"):
+        """Execute a query. Set use_memory=True for conversation continuity.
+
+        Args:
+            response_format: "default", "analytical", "detailed", or "brief"
+        """
         payload = {
             "notebook_id": notebook_id,
             "query": query,
-            "max_sources": max_sources
+            "max_sources": max_sources,
+            "response_format": response_format
         }
 
         if use_memory:
@@ -424,6 +442,12 @@ client = DBNotebookClient(api_key="your-api-key")
 
 # Stateless queries
 result = client.query("notebook-id", "What is X?")
+
+# Analytical response (structured with tables and metrics)
+result = client.query("notebook-id", "What are the key metrics?", response_format="analytical")
+
+# Brief response (concise summary)
+result = client.query("notebook-id", "Summarize the findings", response_format="brief")
 
 # Conversational queries
 result = client.query("notebook-id", "What is Y?", use_memory=True)
@@ -503,6 +527,18 @@ curl -X POST http://localhost:7860/api/query \
   -H "Content-Type: application/json" \
   -H "X-API-Key: YOUR_API_KEY" \
   -d "{\"notebook_id\": \"YOUR_NOTEBOOK_ID\", \"query\": \"Follow-up question\", \"session_id\": \"$SESSION_ID\"}"
+
+# Analytical response format (structured with tables and metrics)
+curl -X POST http://localhost:7860/api/query \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: YOUR_API_KEY" \
+  -d '{"notebook_id": "YOUR_NOTEBOOK_ID", "query": "What are the key metrics?", "response_format": "analytical"}'
+
+# Brief response (concise summary)
+curl -X POST http://localhost:7860/api/query \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: YOUR_API_KEY" \
+  -d '{"notebook_id": "YOUR_NOTEBOOK_ID", "query": "Summarize the document", "response_format": "brief"}'
 ```
 
 ---

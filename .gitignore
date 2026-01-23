@@ -186,7 +186,6 @@ uploads/
 .playwright-mcp/
 
 # Local development
-dev.sh
 start-local.sh
 GAP
 local_dev.py
