@@ -71,6 +71,7 @@ interface QueryResponse {
     node_count: number;
     raptor_summaries_used?: number;
     history_messages_used?: number;
+    response_format?: string;
     timings?: Timings;
   };
   error?: string;
@@ -91,6 +92,8 @@ export function QueryPage() {
   const [memoryEnabled, setMemoryEnabled] = useState(false);
   // Session tracking for conversation memory (only used when memoryEnabled)
   const [sessionId, setSessionId] = useState<string | null>(null);
+  // Response format: default|analytical|detailed|brief
+  const [responseFormat, setResponseFormat] = useState<'default' | 'analytical' | 'detailed' | 'brief'>('default');
 
   // Use global model selection from app context (header selector)
   const { selectedModel, selectedProvider } = useApp();
@@ -165,6 +168,8 @@ export function QueryPage() {
         // Include selected model and provider
         model: selectedModel || undefined,
         provider: selectedProvider || undefined,
+        // Response format: default|analytical|detailed|brief
+        response_format: responseFormat,
       };
 
       const res = await fetch('/api/query', {
@@ -192,7 +197,7 @@ export function QueryPage() {
     } finally {
       setIsQuerying(false);
     }
-  }, [selectedNotebook, query, apiKey, sessionId, memoryEnabled, selectedModel, selectedProvider]);
+  }, [selectedNotebook, query, apiKey, sessionId, memoryEnabled, selectedModel, selectedProvider, responseFormat]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -261,6 +266,22 @@ export function QueryPage() {
               <span className="text-sm font-medium">Memory</span>
               {memoryEnabled && <span className="w-2 h-2 rounded-full bg-glow" />}
             </button>
+
+            {/* Response Format Dropdown */}
+            <div className="flex items-center gap-2 bg-void-surface rounded-lg px-3 py-2 border border-void-lighter">
+              <FileText className="w-4 h-4 text-nebula-bright" />
+              <select
+                value={responseFormat}
+                onChange={(e) => setResponseFormat(e.target.value as 'default' | 'analytical' | 'detailed' | 'brief')}
+                className="bg-transparent text-sm text-text border-none outline-none cursor-pointer"
+                title="Response format - controls how the API structures the response"
+              >
+                <option value="default" className="bg-void-surface text-text">Default</option>
+                <option value="analytical" className="bg-void-surface text-text">Analytical (Tables)</option>
+                <option value="detailed" className="bg-void-surface text-text">Detailed</option>
+                <option value="brief" className="bg-void-surface text-text">Brief</option>
+              </select>
+            </div>
 
             {/* API Key Display */}
             <div className="flex items-center gap-2 bg-void-surface rounded-lg px-3 py-2 border border-void-lighter">
@@ -562,6 +583,12 @@ export function QueryPage() {
                       <span className="px-2 py-1 bg-void-surface rounded text-text-muted">
                         {response.metadata.node_count} nodes
                       </span>
+                      {response.metadata.response_format && response.metadata.response_format !== 'default' && (
+                        <span className="px-2 py-1 bg-nebula/20 rounded text-nebula-bright">
+                          <FileText className="w-3 h-3 inline mr-1" />
+                          {response.metadata.response_format}
+                        </span>
+                      )}
                       {response.metadata.raptor_summaries_used !== undefined && (
                         <span className="px-2 py-1 bg-nebula/20 rounded text-nebula-bright">
                           <Layers className="w-3 h-3 inline mr-1" />

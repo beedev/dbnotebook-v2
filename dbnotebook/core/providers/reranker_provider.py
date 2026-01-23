@@ -60,13 +60,22 @@ MODEL_ALIASES = {
 }
 
 
+def _is_valid_local_model(path: Path) -> bool:
+    """Check if a local model directory contains valid model files."""
+    if not path.exists() or not path.is_dir():
+        return False
+    # Check for common model files
+    model_files = ["pytorch_model.bin", "model.safetensors", "tf_model.h5", "model.ckpt.index", "flax_model.msgpack"]
+    return any((path / f).exists() for f in model_files)
+
+
 def resolve_model_path(model: str) -> Optional[str]:
     """Resolve model identifier to actual model path or HuggingFace ID.
 
     Priority:
     1. If model is "disabled", return None
     2. If model is an alias (e.g., "base", "large"), expand it
-    3. If model is a local path that exists, use it
+    3. If model is a local path with valid model files, use it
     4. Otherwise, assume it's a HuggingFace model ID
 
     Args:
@@ -84,22 +93,23 @@ def resolve_model_path(model: str) -> Optional[str]:
         alias_value = MODEL_ALIASES[model.lower()]
         if alias_value is None:
             return None
-        # Try to find local model for alias
+        # Try to find local model for alias (must have valid model files)
         local_path = Path(DEFAULT_LOCAL_MODEL_DIR) / alias_value
-        if local_path.exists():
+        if _is_valid_local_model(local_path):
             logger.info(f"Using local model for alias '{model}': {local_path}")
             return str(local_path)
         # Fall back to HuggingFace ID
         return f"mixedbread-ai/{alias_value}"
 
-    # Check if it's a local path
-    if os.path.exists(model):
+    # Check if it's a local path with valid model files
+    local_path = Path(model)
+    if _is_valid_local_model(local_path):
         logger.info(f"Using local model path: {model}")
         return model
 
     # Check in default local model directory
     local_path = Path(DEFAULT_LOCAL_MODEL_DIR) / model
-    if local_path.exists():
+    if _is_valid_local_model(local_path):
         logger.info(f"Found model in local directory: {local_path}")
         return str(local_path)
 
@@ -183,6 +193,9 @@ def get_shared_reranker(
     - Local: "models/rerankers/mxbai-rerank-base-v1"
     - HuggingFace: "mixedbread-ai/mxbai-rerank-base-v1"
 
+    Environment variables:
+    - RERANKER_MODEL: Override model (xsmall, base, large, disabled)
+
     Args:
         model: Reranker model alias, path, or HuggingFace ID (default: "base")
         top_n: Default top_n for reranking (can be overridden via setter)
@@ -191,6 +204,11 @@ def get_shared_reranker(
         Thread-safe reranker wrapper instance, or None if reranker is disabled
     """
     global _shared_reranker, _reranker_config, _reranker_enabled
+
+    # RERANKER_MODEL env var overrides parameter default
+    env_model = os.getenv("RERANKER_MODEL", "").strip()
+    if env_model:
+        model = env_model
 
     # Early return if reranker is disabled
     if not _reranker_enabled:

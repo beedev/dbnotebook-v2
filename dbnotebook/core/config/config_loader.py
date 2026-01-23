@@ -159,11 +159,6 @@ def get_llm_settings() -> Dict[str, Any]:
     return load_ingestion_config().get("llm", {})
 
 
-def get_storage_settings() -> Dict[str, Any]:
-    """Get storage settings from ingestion config."""
-    return load_ingestion_config().get("storage", {})
-
-
 def get_config_value(
     config_type: str,
     *keys: str,

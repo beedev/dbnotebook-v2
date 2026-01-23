@@ -56,6 +56,49 @@ ENV_API_KEY = os.getenv("API_KEY")
 _db_manager = None
 
 
+def get_api_format_instructions(response_format: str) -> str:
+    """Get API-specific formatting instructions based on response_format parameter.
+
+    Args:
+        response_format: One of "default", "detailed", "analytical", "brief"
+
+    Returns:
+        Format instructions to inject into the prompt, or empty string for default
+    """
+    if response_format == "analytical":
+        return """
+
+**ANALYTICAL RESPONSE FORMAT (API REQUEST)**:
+- Extract and present ALL key data points, metrics, and figures from the documents
+- Use markdown tables for comparative data, lists of items, or structured information
+- Structure your response with these sections:
+  1. **Key Findings** - Bullet points of most important information
+  2. **Detailed Analysis** - Comprehensive breakdown with supporting data
+  3. **Data Tables** - Present any numerical data, comparisons, or lists in table format
+  4. **Summary** - Brief conclusion with actionable insights
+- Include ALL relevant numerical values, percentages, dates, and metrics
+- Do NOT omit data for brevity - this is an analytical API response"""
+    elif response_format == "detailed":
+        return """
+
+**DETAILED RESPONSE FORMAT (API REQUEST)**:
+- Provide comprehensive, in-depth analysis with full technical details
+- Use structured headers (##, ###) to organize multiple sections
+- Include all relevant evidence and examples from documents
+- Do NOT abbreviate or summarize - provide complete information
+- Use bullet points and numbered lists for clarity
+- Aim for thorough coverage over brevity"""
+    elif response_format == "brief":
+        return """
+
+**BRIEF RESPONSE FORMAT (API REQUEST)**:
+- Provide concise summary in 2-3 paragraphs max
+- Focus only on the most critical points
+- Use bullet points for key takeaways
+- Omit detailed explanations - just the essentials"""
+    return ""  # default - use existing adaptive format
+
+
 def validate_api_key(provided_key: str) -> tuple[bool, str | None]:
     """Validate API key against database or environment variable.
 
@@ -146,7 +189,8 @@ def create_query_routes(app, pipeline, db_manager, notebook_manager):
                 "reranker_enabled": true,        # Optional - enable/disable reranking
                 "reranker_model": "...",         # Optional - reranker model override
                 "top_k": 6,                      # Optional - retrieval top_k override
-                "skip_raptor": true              # Optional, default: true - set false to include RAPTOR summaries
+                "skip_raptor": true,             # Optional, default: true - set false to include RAPTOR summaries
+                "response_format": "analytical"  # Optional: default|detailed|analytical|brief
             }
 
         Response JSON (stateless - no session_id sent):
@@ -237,6 +281,7 @@ def create_query_routes(app, pipeline, db_manager, notebook_manager):
             reranker_model = data.get("reranker_model")  # None means use global setting
             top_k = data.get("top_k")  # None means use default
             skip_raptor = data.get("skip_raptor", True)  # Default True: RAPTOR summaries can dilute precision for specific queries
+            response_format = data.get("response_format", "default")  # default|detailed|analytical|brief
 
             # Get LLM instance for this specific request
             from dbnotebook.core.model.model import LocalRAGModel
@@ -256,7 +301,7 @@ def create_query_routes(app, pipeline, db_manager, notebook_manager):
                 )
                 logger.info(f"Per-request reranker config: enabled={reranker_enabled}, model={reranker_model}, top_k={top_k}")
 
-            logger.info(f"API query: notebook_id={notebook_id}, session_id={session_id}, use_memory={use_memory}, model={model_name or 'default'}")
+            logger.info(f"API query: notebook_id={notebook_id}, session_id={session_id}, use_memory={use_memory}, model={model_name or 'default'}, response_format={response_format}")
 
             # Step 1: Verify notebook exists
             t1 = time.time()
@@ -456,10 +501,13 @@ def create_query_routes(app, pipeline, db_manager, notebook_manager):
                     history_parts.append(f"{role_label}: {msg['content']}")
                 history_section = "\n\n## CONVERSATION HISTORY\n" + "\n\n".join(history_parts)
 
+            # Get API-specific format instructions (if requested)
+            format_instructions = get_api_format_instructions(response_format)
+
             prompt = f"""{system_prompt}
 
 {context_prompt}
-{history_section}
+{history_section}{format_instructions}
 
 User question: {query}"""
 
@@ -503,6 +551,7 @@ User question: {query}"""
                     "reranker_enabled": current_reranker_config.get("enabled", True),
                     "reranker_model": current_reranker_config.get("model"),
                     "top_k": current_reranker_config.get("top_n"),
+                    "response_format": response_format,
                     "timings": timings
                 }
             }

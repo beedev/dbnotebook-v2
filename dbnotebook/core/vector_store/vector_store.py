@@ -17,29 +17,41 @@ logger = logging.getLogger(__name__)
 
 
 class LocalVectorStore:
-    """Persistent vector store using ChromaDB."""
+    """Persistent vector store using ChromaDB.
+
+    NOTE: This is legacy code - PGVectorStore is the primary vector store.
+    Kept for backwards compatibility only.
+    """
+
+    # Legacy defaults (previously in config/ingestion.yaml storage section)
+    DEFAULT_PERSIST_DIR = "data/chroma"
+    DEFAULT_COLLECTION_NAME = "collection"
 
     def __init__(
         self,
         host: str = "host.docker.internal",
         setting: RAGSettings | None = None,
-        persist: bool = True
+        persist: bool = True,
+        persist_dir: str | None = None,
+        collection_name: str | None = None
     ) -> None:
         self._setting = setting or get_settings()
         self._host = host
         self._persist = persist
 
+        # Use provided values or legacy defaults
+        self._persist_dir = persist_dir or self.DEFAULT_PERSIST_DIR
+        self._collection_name = collection_name or self.DEFAULT_COLLECTION_NAME
+
         # Initialize ChromaDB
         if persist:
-            persist_dir = Path(self._setting.storage.persist_dir_chroma)
-            persist_dir.mkdir(parents=True, exist_ok=True)
+            persist_path = Path(self._persist_dir)
+            persist_path.mkdir(parents=True, exist_ok=True)
             self._chroma_client = chromadb.PersistentClient(
-                path=str(persist_dir)
+                path=str(persist_path)
             )
         else:
             self._chroma_client = chromadb.EphemeralClient()
-
-        self._collection_name = self._setting.storage.collection_name
 
         # Per-notebook cache for vector indices (MVP 3 optimization)
         # Cache key format: f"index_{notebook_id}" or "index_all" for global
@@ -85,12 +97,12 @@ class LocalVectorStore:
         # Create new index
         try:
             if self._persist:
-                persist_dir = Path(self._setting.storage.persist_dir_chroma)
+                persist_path = Path(self._persist_dir)
 
                 # Use from_params classmethod which properly initializes PrivateAttr
                 vector_store = ChromaVectorStore.from_params(
                     collection_name=self._collection_name,
-                    persist_dir=str(persist_dir),
+                    persist_dir=str(persist_path),
                     collection_kwargs={"metadata": {"hnsw:space": "cosine"}}
                 )
 

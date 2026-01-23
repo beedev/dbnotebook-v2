@@ -131,6 +131,7 @@ retrieval:
 
   # Retrieval parameters
   top_k_per_level: 6          # Results to retrieve per tree level
+  # Note: This is RAPTOR-specific. RAG uses retriever.top_k_rerank in ingestion.yaml
   rerank_top_k: 6             # Final results after reranking
   min_similarity_threshold: 0.3  # Minimum similarity for inclusion
 
@@ -167,8 +168,7 @@ presets:
       summary_max_tokens: 300
       max_chunks_per_summary: 15
 
-  balanced:
-    # Default settings - uses values above
+  # Note: "balanced" preset removed - uses root-level defaults automatically
 
   thorough:
     # Maximum quality - more clusters, detailed summaries

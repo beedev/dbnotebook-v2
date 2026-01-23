@@ -19,7 +19,6 @@ from dbnotebook.core.config.config_loader import (
     get_contextual_retrieval_config,
     get_retriever_settings,
     get_llm_settings,
-    get_storage_settings,
 )
 
 load_dotenv()
@@ -127,7 +126,7 @@ class IngestionSettings(BaseModel):
     """Ingestion settings (loaded from config/ingestion.yaml chunking/embedding sections)."""
 
     embed_llm: str = Field(
-        default_factory=lambda: os.getenv("DEFAULT_EMBEDDING_MODEL", "text-embedding-3-small"),
+        default_factory=lambda: os.getenv("EMBEDDING_MODEL", "text-embedding-3-small"),
         description="Embedding LLM model"
     )
     embed_batch_size: int = Field(
@@ -154,10 +153,6 @@ class IngestionSettings(BaseModel):
         default_factory=lambda: _get(get_chunking_config(), "paragraph_sep", "\n \n"),
         description="Paragraph separator"
     )
-    num_workers: int = Field(
-        default_factory=lambda: _get(get_embedding_config(), "num_workers", 0),
-        description="Number of workers"
-    )
 
 
 class ContextualRetrievalSettings(BaseModel):
@@ -177,30 +172,6 @@ class ContextualRetrievalSettings(BaseModel):
     max_concurrency: int = Field(
         default_factory=lambda: _get(get_contextual_retrieval_config(), "max_concurrency", 3),
         description="Maximum concurrent LLM calls for context generation"
-    )
-    max_chunk_chars: int = Field(
-        default_factory=lambda: _get(get_contextual_retrieval_config(), "max_chunk_chars", 2000),
-        description="Maximum characters from chunk to send to LLM"
-    )
-
-
-class StorageSettings(BaseModel):
-    """Storage settings (loaded from config/ingestion.yaml storage section)."""
-
-    persist_dir_chroma: str = Field(
-        default_factory=lambda: _get(get_storage_settings(), "persist_dir_chroma", "data/chroma"),
-        description="Chroma directory"
-    )
-    persist_dir_storage: str = Field(
-        default_factory=lambda: _get(get_storage_settings(), "persist_dir_storage", "data/storage"),
-        description="Storage directory"
-    )
-    collection_name: str = Field(
-        default_factory=lambda: _get(get_storage_settings(), "collection_name", "collection"),
-        description="Collection name"
-    )
-    port: int = Field(
-        default=8000, description="Port number"
     )
 
 
@@ -454,7 +425,6 @@ class RAGSettings(BaseModel):
     ollama: OllamaSettings = Field(default_factory=OllamaSettings)
     retriever: RetrieverSettings = Field(default_factory=RetrieverSettings)
     ingestion: IngestionSettings = Field(default_factory=IngestionSettings)
-    storage: StorageSettings = Field(default_factory=StorageSettings)
     anthropic: AnthropicSettings = Field(default_factory=AnthropicSettings)
     gemini: GeminiSettings = Field(default_factory=GeminiSettings)
     image_generation: ImageGenerationSettings = Field(default_factory=ImageGenerationSettings)

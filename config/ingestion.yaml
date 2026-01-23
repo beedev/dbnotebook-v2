@@ -20,7 +20,6 @@ chunking:
 embedding:
   batch_size: 8               # Number of embeddings to generate at once
   cache_folder: "data/huggingface"  # Cache directory for models
-  num_workers: 0              # Parallel workers for embedding (0 = auto)
 
 # -----------------------------------------------------------------------------
 # CONTEXTUAL RETRIEVAL (Anthropic approach)
@@ -32,7 +31,6 @@ contextual_retrieval:
   enabled: false              # Enable contextual retrieval enrichment
   batch_size: 5               # Number of chunks to process in each batch
   max_concurrency: 3          # Maximum concurrent LLM calls for context generation
-  max_chunk_chars: 2000       # Maximum characters from chunk to send to LLM
 
   # Context generation prompt
   context_prompt: |
@@ -67,6 +65,7 @@ retriever:
   # - mxbai-rerank-large-v1: ~3GB, slow (~30s), best quality
   # - mxbai-rerank-base-v1: ~500MB, medium (~10s), good quality
   # - mxbai-rerank-xsmall-v1: ~100MB, fast (~2s), acceptable quality
+  # Override via RERANKER_MODEL env var (xsmall|base|large|disabled)
   top_k_rerank: 10            # Top k after reranking (final results to LLM)
   rerank_model: "mixedbread-ai/mxbai-rerank-base-v1"
 
@@ -86,12 +85,3 @@ llm:
   repeat_penalty: 1.1         # Repeat penalty factor
   request_timeout: 300        # Request timeout in seconds
   temperature: 0.1            # Default temperature (low = deterministic, high = creative)
-
-# -----------------------------------------------------------------------------
-# STORAGE
-# Vector store and data persistence settings
-# -----------------------------------------------------------------------------
-storage:
-  persist_dir_chroma: "data/chroma"    # ChromaDB directory (legacy)
-  persist_dir_storage: "data/storage"   # General storage directory
-  collection_name: "collection"         # Default collection name

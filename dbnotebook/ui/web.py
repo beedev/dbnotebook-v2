@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Generator
 
 from flask import Flask, render_template, request, jsonify, Response, stream_with_context, send_file, send_from_directory
+from sqlalchemy import text
 
 from ..pipeline import LocalRAGPipeline
 from ..setting import QueryTimeSettings
@@ -991,7 +992,7 @@ Output ONLY valid JSON, nothing else."""
             try:
                 if self._db_manager:
                     with self._db_manager.get_session() as session:
-                        session.execute("SELECT 1")
+                        session.execute(text("SELECT 1"))
                     health_status["components"]["database"] = {
                         "status": "healthy",
                         "type": "postgresql"
