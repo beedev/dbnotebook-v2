@@ -518,10 +518,19 @@ class LocalRetriever:
                 # Update filtered_nodes count for retriever selection
                 if offering_filter or practice_filter:
                     # Estimate filtered node count
-                    filtered_nodes = vector_store.get_nodes_by_metadata(
-                        nodes,
-                        {"offering_id": offering_filter[0]} if offering_filter else {"it_practice": practice_filter[0]}
-                    ) if (offering_filter or practice_filter) else nodes
+                    # Note: offering_filter contains notebook_id (legacy naming)
+                    if offering_filter:
+                        # Use notebook_id - the current architecture
+                        filtered_nodes = vector_store.get_nodes_by_metadata(
+                            nodes, {"notebook_id": offering_filter[0]}
+                        )
+                    elif practice_filter:
+                        filtered_nodes = vector_store.get_nodes_by_metadata(
+                            nodes, {"it_practice": practice_filter[0]}
+                        )
+                    # Fall back to all nodes if no matches
+                    if not filtered_nodes:
+                        filtered_nodes = nodes
         elif offering_filter or practice_filter:
             # Manual filtering without vector store
             logger.debug("Filtering nodes manually without vector store")
