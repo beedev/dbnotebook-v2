@@ -367,23 +367,39 @@ python3 -c "import secrets; print('dbn_' + secrets.token_hex(16))"
 
 ## Running the Application
 
-### Option 1: Development Mode (dev.sh local)
+### Option 1: Production Script (Recommended)
 
-The `dev.sh local` script is designed for local development but can be used for testing on servers.
+Use `prod.sh` for production deployments on Linux servers:
 
 ```bash
 cd /opt/dbnotebook
-source venv/bin/activate
 
-# Start the application
-./dev.sh local
+# Start in background
+./prod.sh start
+
+# Check status
+./prod.sh status
+
+# View logs
+./prod.sh logs
+
+# Stop
+./prod.sh stop
+
+# Restart
+./prod.sh restart
+
+# Health check
+./prod.sh health
 ```
 
-**What dev.sh local does:**
-1. Activates the virtual environment
-2. Loads environment variables from `.env`
+**What prod.sh does:**
+1. Loads environment variables from `.env`
+2. Activates the virtual environment
 3. Runs Alembic database migrations
-4. Starts Flask development server on `0.0.0.0:7860`
+4. Starts Flask with threading in background (`nohup`)
+5. Manages PID file for process tracking
+6. Logs to `logs/app.log` and `logs/error.log`
 
 **Access the application:**
 - Local: http://localhost:7860
@@ -401,50 +417,46 @@ export $(grep -v '^#' .env | xargs)
 # Run migrations
 PYTHONPATH=. alembic upgrade head
 
-# Start Flask development server
-PYTHONPATH=. python -m dbnotebook.ui.web
+# Start Flask with threading (foreground)
+PYTHONPATH=. python3 -m flask --app "dbnotebook.ui.web:create_app()" run --host 0.0.0.0 --port 7860 --with-threads
 ```
 
 ---
 
 ## Production Deployment
 
-For production, use Gunicorn with multiple workers instead of Flask's development server.
+For production, use `prod.sh` which runs Flask with threading. This provides better compatibility with the app's SSE streaming and long-running LLM requests.
 
-### Install Gunicorn
+### Using prod.sh (Recommended)
 
 ```bash
-source venv/bin/activate
-pip install gunicorn
+# Start application in background
+./prod.sh start
+
+# The script handles:
+# - Environment loading
+# - Database migrations
+# - Background process management
+# - Logging to logs/ directory
+# - PID tracking for stop/restart
 ```
 
-### Run with Gunicorn
+### Alternative: Gunicorn with gevent
+
+If you prefer Gunicorn, use gevent workers for better async handling:
 
 ```bash
-# Basic (4 workers)
-gunicorn -w 4 -b 0.0.0.0:7860 "dbnotebook.ui.web:create_app()"
+pip install gunicorn gevent
 
-# With timeout and logging
-gunicorn -w 4 -b 0.0.0.0:7860 \
-  --timeout 120 \
+gunicorn -k gevent -w 4 --worker-connections 1000 \
+  -b 0.0.0.0:7860 \
+  --timeout 180 \
   --access-logfile /var/log/dbnotebook/access.log \
   --error-logfile /var/log/dbnotebook/error.log \
   "dbnotebook.ui.web:create_app()"
-
-# With SSL (if not using Nginx)
-gunicorn -w 4 -b 0.0.0.0:443 \
-  --certfile=/etc/ssl/certs/your-cert.pem \
-  --keyfile=/etc/ssl/private/your-key.pem \
-  "dbnotebook.ui.web:create_app()"
 ```
 
-### Worker Calculation
-
-```
-workers = (2 × CPU_CORES) + 1
-```
-
-For a 4-core server: `workers = 9`
+**Note**: Standard Gunicorn sync workers may cause issues with SSE streaming and long LLM requests. Use `gevent` workers or stick with `prod.sh`.
 
 ---
 
@@ -470,16 +482,18 @@ User=dbnotebook
 Group=dbnotebook
 WorkingDirectory=/opt/dbnotebook
 Environment="PATH=/opt/dbnotebook/venv/bin"
+Environment="PYTHONPATH=/opt/dbnotebook"
 EnvironmentFile=/opt/dbnotebook/.env
-ExecStart=/opt/dbnotebook/venv/bin/gunicorn \
-    -w 4 \
-    -b 0.0.0.0:7860 \
-    --timeout 120 \
-    --access-logfile /var/log/dbnotebook/access.log \
-    --error-logfile /var/log/dbnotebook/error.log \
-    "dbnotebook.ui.web:create_app()"
+ExecStart=/opt/dbnotebook/venv/bin/python3 -m flask \
+    --app "dbnotebook.ui.web:create_app()" \
+    run \
+    --host 0.0.0.0 \
+    --port 7860 \
+    --with-threads
 Restart=always
 RestartSec=10
+StandardOutput=append:/var/log/dbnotebook/app.log
+StandardError=append:/var/log/dbnotebook/error.log
 
 [Install]
 WantedBy=multi-user.target
