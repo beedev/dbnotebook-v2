@@ -13,7 +13,7 @@ from llama_index.core.retrievers import (
 )
 from llama_index.core.callbacks.base import CallbackManager
 from llama_index.core.retrievers.fusion_retriever import FUSION_MODES
-from dbnotebook.core.providers.reranker_provider import get_shared_reranker
+from dbnotebook.core.providers.reranker_provider import get_shared_reranker, is_reranker_enabled
 from llama_index.core.schema import BaseNode, NodeWithScore, QueryBundle, IndexNode
 from llama_index.core.llms.llm import LLM
 from llama_index.retrievers.bm25 import BM25Retriever
@@ -119,17 +119,11 @@ class TwoStageRetriever(QueryFusionRetriever):
             use_async, verbose, callback_manager, objects, object_map, retriever_weights
         )
         self._setting = setting or get_settings()
-        # Allow disabling reranker for testing (set DISABLE_RERANKER=true)
-        self._disable_reranker = os.getenv("DISABLE_RERANKER", "").lower() == "true"
-        if self._disable_reranker:
-            self._rerank_model = None
-            logger.warning("Reranker DISABLED via DISABLE_RERANKER env var")
-        else:
-            self._rerank_model = get_shared_reranker(
-                model=self._setting.retriever.rerank_llm,
-                top_n=self._setting.retriever.top_k_rerank
-            )
-            logger.debug(f"TwoStageRetriever using shared rerank model: {self._setting.retriever.rerank_llm}")
+        # Store default from env var, but allow per-request override via is_reranker_enabled()
+        env_disable_reranker = os.getenv("DISABLE_RERANKER", "").lower() == "true"
+        if env_disable_reranker:
+            logger.info("DISABLE_RERANKER env var is set - reranker will be disabled unless overridden by API")
+        logger.debug(f"TwoStageRetriever initialized (default rerank model: {self._setting.retriever.rerank_llm})")
 
     def _retrieve(self, query_bundle: QueryBundle) -> List[NodeWithScore]:
         queries: List[QueryBundle] = [query_bundle]
@@ -142,9 +136,22 @@ class TwoStageRetriever(QueryFusionRetriever):
             results = self._run_sync_queries(queries)
 
         results = self._simple_fusion(results)
-        if self._disable_reranker:
+
+        # Check reranker status at query time (respects per-request config from set_reranker_config)
+        if not is_reranker_enabled():
+            logger.debug("Reranker disabled (per-request or env var)")
             return results[:self._setting.retriever.top_k_rerank]
-        return self._rerank_model.postprocess_nodes(results, query_bundle)
+
+        # Get reranker at query time (may have changed via set_reranker_config)
+        rerank_model = get_shared_reranker(
+            model=self._setting.retriever.rerank_llm,
+            top_n=self._setting.retriever.top_k_rerank
+        )
+        if rerank_model is None:
+            logger.debug("Reranker model not available, returning fusion results")
+            return results[:self._setting.retriever.top_k_rerank]
+
+        return rerank_model.postprocess_nodes(results, query_bundle)
 
     async def _aretrieve(self, query_bundle: QueryBundle) -> List[NodeWithScore]:
         queries: List[QueryBundle] = [query_bundle]
@@ -153,9 +160,22 @@ class TwoStageRetriever(QueryFusionRetriever):
 
         results = await self._run_async_queries(queries)
         results = self._simple_fusion(results)
-        if self._disable_reranker:
+
+        # Check reranker status at query time (respects per-request config from set_reranker_config)
+        if not is_reranker_enabled():
+            logger.debug("Reranker disabled (per-request or env var)")
             return results[:self._setting.retriever.top_k_rerank]
-        return self._rerank_model.postprocess_nodes(results, query_bundle)
+
+        # Get reranker at query time (may have changed via set_reranker_config)
+        rerank_model = get_shared_reranker(
+            model=self._setting.retriever.rerank_llm,
+            top_n=self._setting.retriever.top_k_rerank
+        )
+        if rerank_model is None:
+            logger.debug("Reranker model not available, returning fusion results")
+            return results[:self._setting.retriever.top_k_rerank]
+
+        return rerank_model.postprocess_nodes(results, query_bundle)
 
 
 class LocalRetriever:
