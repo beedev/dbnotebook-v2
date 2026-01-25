@@ -9,7 +9,7 @@ Available Services:
 - DocumentService: Document upload, processing, and lifecycle management
 - DocumentRoutingService: Two-stage LLM document routing for intelligent retrieval
 - ImageService: Image generation and provider management
-- MultiNotebookService: Cross-notebook query and retrieval
+- RetrievalService: Unified retrieval with RAPTOR and reranker control
 - SuggestionService: Smart document suggestions based on query gaps
 - RefinementService: Query refinement and improvement
 - ContinuityService: Conversation continuity and session management
@@ -25,8 +25,8 @@ from .continuity_service import ContinuityService
 from .document_service import DocumentService
 from .document_routing_service import DocumentRoutingService
 from .image_service import ImageService
-from .multi_notebook_service import MultiNotebookService
 from .refinement_service import RefinementService
+from .retrieval_service import RetrievalService, RetrievalRequest, RetrievalResult
 from .suggestion_service import SuggestionService
 
 __all__ = [
@@ -36,7 +36,9 @@ __all__ = [
     "DocumentService",
     "DocumentRoutingService",
     "ImageService",
-    "MultiNotebookService",
     "RefinementService",
+    "RetrievalRequest",
+    "RetrievalResult",
+    "RetrievalService",
     "SuggestionService",
 ]

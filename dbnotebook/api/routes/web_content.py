@@ -195,6 +195,9 @@ def create_web_content_routes(app, web_ingestion: WebContentIngestion, pipeline)
                             # Add embedded nodes to vector store
                             added = pipeline._vector_store.add_nodes(nodes, notebook_id=notebook_id)
                             logger.info(f"Added {added} embeddings for {source['url']}")
+
+                            # Invalidate node cache so new content is retrieved
+                            pipeline.invalidate_node_cache(notebook_id)
                         else:
                             logger.error("No embedding model configured")
                     except Exception as e:

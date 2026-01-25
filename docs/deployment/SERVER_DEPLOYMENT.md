@@ -8,7 +8,7 @@ Deploy DBNotebook on any Linux server (Ubuntu, Azure VM, AWS EC2, etc.) using `d
 2. [Quick Start](#quick-start)
 3. [Server Setup (Ubuntu/Debian)](#server-setup-ubuntudebian)
 4. [Azure VM Deployment](#azure-vm-deployment)
-5. [PostgreSQL + pgvector Setup](#postgresql--pgvector-setup)
+5. [PostgreSQL + pgvector Setup](#postgresql-pgvector-setup)
 6. [Application Installation](#application-installation)
 7. [Environment Configuration](#environment-configuration)
 8. [Running the Application](#running-the-application)
@@ -16,7 +16,7 @@ Deploy DBNotebook on any Linux server (Ubuntu, Azure VM, AWS EC2, etc.) using `d
 10. [Systemd Service](#systemd-service)
 11. [Nginx Reverse Proxy](#nginx-reverse-proxy)
 12. [SSL/TLS with Let's Encrypt](#ssltls-with-lets-encrypt)
-13. [Monitoring & Maintenance](#monitoring--maintenance)
+13. [Monitoring & Maintenance](#monitoring-maintenance)
 14. [Troubleshooting](#troubleshooting)
 
 ---

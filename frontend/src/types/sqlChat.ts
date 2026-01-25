@@ -321,8 +321,8 @@ export interface SQLChatContextActions {
   refreshSchema: (connectionId: string) => Promise<void>;
 
   // Query execution
-  sendQuery: (query: string) => Promise<QueryResult | null>;
-  refineQuery: (refinement: string) => Promise<QueryResult | null>;
+  sendQuery: (query: string, settings?: SQLQuerySettings) => Promise<QueryResult | null>;
+  refineQuery: (refinement: string, settings?: SQLQuerySettings) => Promise<QueryResult | null>;
   cancelQuery: () => void;
 
   // History
@@ -333,6 +333,14 @@ export interface SQLChatContextActions {
 
   // Error handling
   clearError: () => void;
+}
+
+// SQL Query Settings (per-request tuning)
+export interface SQLQuerySettings {
+  rerankerEnabled?: boolean;
+  rerankerModel?: 'xsmall' | 'base' | 'large';
+  topK?: number;
+  hybridEnabled?: boolean;
 }
 
 // Full Context Value

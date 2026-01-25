@@ -28,7 +28,8 @@ import {
   Database,
   Brain,
   Layers,
-  Key
+  Key,
+  Filter
 } from 'lucide-react';
 import { useApp } from '../contexts/AppContext';
 import { useAuth } from '../contexts/AuthContext';
@@ -72,10 +73,24 @@ interface QueryResponse {
     raptor_summaries_used?: number;
     history_messages_used?: number;
     response_format?: string;
+    reranker_enabled?: boolean;
+    reranker_model?: string;
+    top_k?: number;
     timings?: Timings;
   };
   error?: string;
 }
+
+// Reranker model options
+type RerankerOption = 'default' | 'xsmall' | 'base' | 'large' | 'disabled';
+
+const RERANKER_OPTIONS: { value: RerankerOption; label: string; description: string }[] = [
+  { value: 'default', label: 'Default', description: 'Use server default' },
+  { value: 'xsmall', label: 'XSmall', description: 'Fastest (~0.5s)' },
+  { value: 'base', label: 'Base', description: 'Balanced (~1.5s)' },
+  { value: 'large', label: 'Large', description: 'Best quality (~4s)' },
+  { value: 'disabled', label: 'Disabled', description: 'No reranking' },
+];
 
 export function QueryPage() {
   const [notebooks, setNotebooks] = useState<Notebook[]>([]);
@@ -94,6 +109,8 @@ export function QueryPage() {
   const [sessionId, setSessionId] = useState<string | null>(null);
   // Response format: default|analytical|detailed|brief
   const [responseFormat, setResponseFormat] = useState<'default' | 'analytical' | 'detailed' | 'brief'>('default');
+  // Reranker model selection
+  const [rerankerModel, setRerankerModel] = useState<RerankerOption>('default');
 
   // Use global model selection from app context (header selector)
   const { selectedModel, selectedProvider } = useApp();
@@ -170,6 +187,11 @@ export function QueryPage() {
         provider: selectedProvider || undefined,
         // Response format: default|analytical|detailed|brief
         response_format: responseFormat,
+        // Reranker settings (only if not default)
+        ...(rerankerModel !== 'default' ? {
+          reranker_enabled: rerankerModel !== 'disabled',
+          reranker_model: rerankerModel !== 'disabled' ? rerankerModel : undefined,
+        } : {}),
       };
 
       const res = await fetch('/api/query', {
@@ -197,7 +219,7 @@ export function QueryPage() {
     } finally {
       setIsQuerying(false);
     }
-  }, [selectedNotebook, query, apiKey, sessionId, memoryEnabled, selectedModel, selectedProvider, responseFormat]);
+  }, [selectedNotebook, query, apiKey, sessionId, memoryEnabled, selectedModel, selectedProvider, responseFormat, rerankerModel]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -266,6 +288,23 @@ export function QueryPage() {
               <span className="text-sm font-medium">Memory</span>
               {memoryEnabled && <span className="w-2 h-2 rounded-full bg-glow" />}
             </button>
+
+            {/* Reranker Model Dropdown */}
+            <div className="flex items-center gap-2 bg-void-surface rounded-lg px-3 py-2 border border-void-lighter">
+              <Filter className="w-4 h-4 text-glow" />
+              <select
+                value={rerankerModel}
+                onChange={(e) => setRerankerModel(e.target.value as RerankerOption)}
+                className="bg-transparent text-sm text-text border-none outline-none cursor-pointer"
+                title="Reranker model - controls retrieval quality vs speed"
+              >
+                {RERANKER_OPTIONS.map((opt) => (
+                  <option key={opt.value} value={opt.value} className="bg-void-surface text-text">
+                    {opt.label} {opt.value !== 'default' && `(${opt.description})`}
+                  </option>
+                ))}
+              </select>
+            </div>
 
             {/* Response Format Dropdown */}
             <div className="flex items-center gap-2 bg-void-surface rounded-lg px-3 py-2 border border-void-lighter">
@@ -587,6 +626,13 @@ export function QueryPage() {
                         <span className="px-2 py-1 bg-nebula/20 rounded text-nebula-bright">
                           <FileText className="w-3 h-3 inline mr-1" />
                           {response.metadata.response_format}
+                        </span>
+                      )}
+                      {response.metadata.reranker_model && (
+                        <span className={`px-2 py-1 rounded ${response.metadata.reranker_enabled ? 'bg-glow/20 text-glow' : 'bg-void-lighter text-text-muted'}`}>
+                          <Filter className="w-3 h-3 inline mr-1" />
+                          Reranker: {response.metadata.reranker_model}
+                          {response.metadata.top_k && ` (top ${response.metadata.top_k})`}
                         </span>
                       )}
                       {response.metadata.raptor_summaries_used !== undefined && (

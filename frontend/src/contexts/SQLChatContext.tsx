@@ -29,6 +29,7 @@ import type {
   QueryHistoryEntry,
   SQLChatMessage,
   SQLChatContextValue,
+  SQLQuerySettings,
 } from '../types/sqlChat';
 
 // API base URL
@@ -353,7 +354,7 @@ export function SQLChatProvider({ children }: { children: ReactNode }) {
   // Query Execution
   // ========================================
 
-  const sendQuery = useCallback(async (query: string): Promise<QueryResult | null> => {
+  const sendQuery = useCallback(async (query: string, settings?: SQLQuerySettings): Promise<QueryResult | null> => {
     if (!activeSession) {
       setError('No active session. Please select a connection first.');
       return null;
@@ -380,7 +381,14 @@ export function SQLChatProvider({ children }: { children: ReactNode }) {
       const response = await fetch(`${API_BASE}/query/${activeSession.id}/stream`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query }),
+        body: JSON.stringify({
+          query,
+          // SQL query settings for few-shot retrieval
+          use_reranker: settings?.rerankerEnabled,
+          reranker_model: settings?.rerankerModel,
+          top_k: settings?.topK,
+          use_hybrid: settings?.hybridEnabled,
+        }),
         signal: abortControllerRef.current.signal,
       });
 
@@ -488,14 +496,14 @@ export function SQLChatProvider({ children }: { children: ReactNode }) {
     }
   }, [activeSession]);
 
-  const refineQuery = useCallback(async (refinement: string): Promise<QueryResult | null> => {
+  const refineQuery = useCallback(async (refinement: string, settings?: SQLQuerySettings): Promise<QueryResult | null> => {
     if (!activeSession) {
       setError('No active session');
       return null;
     }
 
     // Refinement is just another query with context
-    return sendQuery(refinement);
+    return sendQuery(refinement, settings);
   }, [activeSession, sendQuery]);
 
   const cancelQuery = useCallback(() => {

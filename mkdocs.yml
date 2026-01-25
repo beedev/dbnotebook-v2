@@ -1,0 +1,100 @@
+site_name: DBNotebook Documentation
+site_description: A multimodal RAG system with NotebookLM-style document organization
+site_author: Bharath D
+site_url: https://dbnotebook.dev
+
+repo_name: beedev/dbnotebook-v2
+repo_url: https://github.com/beedev/dbnotebook-v2
+
+theme:
+  name: material
+  palette:
+    - scheme: slate
+      primary: indigo
+      accent: cyan
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+    - scheme: default
+      primary: indigo
+      accent: cyan
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.code.annotate
+  icon:
+    repo: fontawesome/brands/github
+
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          paths: [dbnotebook]
+          options:
+            show_source: true
+            show_root_heading: true
+
+markdown_extensions:
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.details
+  - pymdownx.critic
+  - pymdownx.caret
+  - pymdownx.keys
+  - pymdownx.mark
+  - pymdownx.tilde
+  - admonition
+  - tables
+  - attr_list
+  - md_in_html
+  - toc:
+      permalink: true
+
+nav:
+  - Home: index.md
+  - Getting Started:
+    - Installation: getting-started/installation.md
+    - Quick Start: getting-started/quickstart.md
+    - Configuration: configuration.md
+  - Features:
+    - RAG Chat: features/rag-chat.md
+    - SQL Chat: features/sql-chat.md
+    - RAPTOR Retrieval: features/raptor.md
+    - Content Studio: features/content-studio.md
+    - Excel Analytics: features/excel-analytics.md
+    - Web Ingestion: features/web-ingestion.md
+  - API Reference:
+    - Programmatic API: api/API_GUIDE.md
+    - Authentication: api/authentication.md
+  - Architecture:
+    - System Overview: ARCHITECTURE.md
+    - Query Flows: query-flows-architecture.md
+    - Conversation System: CONVERSATION_ARCHITECTURE.md
+  - Deployment:
+    - Server Deployment: deployment/SERVER_DEPLOYMENT.md
+    - PostgreSQL Setup: POSTGRESQL_PGVECTOR_SETUP.md
+    - Multi-User & RBAC: USER_RBAC_GUIDE.md
+  - Troubleshooting: troubleshooting.md
+  - Changelog: changelog.md
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/beedev/dbnotebook
+  generator: false

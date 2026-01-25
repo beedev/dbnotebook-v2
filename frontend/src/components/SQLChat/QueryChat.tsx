@@ -19,16 +19,17 @@ import {
   Sparkles,
   RefreshCw,
 } from 'lucide-react';
-import type { SQLChatMessage, QueryState } from '../../types/sqlChat';
+import type { SQLChatMessage, QueryState, SQLQuerySettings } from '../../types/sqlChat';
 import { SQLPreview } from './SQLPreview';
 import { ResultsTable } from './ResultsTable';
 import { TimingBreakdown, SQL_CHAT_STAGES } from '../shared/TimingBreakdown';
+import { SQLQuerySettings as SQLQuerySettingsPanel, DEFAULT_SQL_QUERY_CONFIG, type SQLQueryConfig } from './SQLQuerySettings';
 
 interface QueryChatProps {
   messages: SQLChatMessage[];
   queryState: QueryState;
   isQuerying: boolean;
-  onSendQuery: (query: string) => void;
+  onSendQuery: (query: string, settings?: SQLQuerySettings) => void;
   onCancelQuery: () => void;
   onClearMessages: () => void;
   onAnalyzeInDashboard?: (file: File) => void;
@@ -63,6 +64,7 @@ export function QueryChat({
   disabled = false,
 }: QueryChatProps) {
   const [input, setInput] = useState('');
+  const [querySettings, setQuerySettings] = useState<SQLQueryConfig>(DEFAULT_SQL_QUERY_CONFIG);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
@@ -82,7 +84,14 @@ export function QueryChat({
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (input.trim() && !isQuerying && !disabled) {
-      onSendQuery(input.trim());
+      // Convert config to settings format
+      const settings: SQLQuerySettings = {
+        rerankerEnabled: querySettings.rerankerEnabled,
+        rerankerModel: querySettings.rerankerModel,
+        topK: querySettings.topK,
+        hybridEnabled: querySettings.hybridEnabled,
+      };
+      onSendQuery(input.trim(), settings);
       setInput('');
     }
   };
@@ -236,6 +245,13 @@ export function QueryChat({
           </button>
         </div>
       )}
+
+      {/* Query Settings Panel */}
+      <SQLQuerySettingsPanel
+        config={querySettings}
+        onChange={setQuerySettings}
+        disabled={disabled || isQuerying}
+      />
 
       {/* Input area */}
       <div className="border-t border-slate-700 p-4">

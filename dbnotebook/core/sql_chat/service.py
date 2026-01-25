@@ -497,7 +497,8 @@ class SQLChatService(BaseService):
         self,
         session_id: str,
         nl_query: str,
-        user_id: Optional[str] = None
+        user_id: Optional[str] = None,
+        **query_settings
     ) -> QueryResult:
         """Execute a natural language query.
 
@@ -517,10 +518,18 @@ class SQLChatService(BaseService):
             session_id: Session ID
             nl_query: Natural language query
             user_id: Optional user ID for access validation
+            **query_settings: Optional settings for few-shot retrieval:
+                - use_reranker: bool - Enable/disable reranking
+                - reranker_model: str - Model: 'xsmall', 'base', 'large'
+                - top_k: int - Number of few-shot examples
+                - use_hybrid: bool - Enable hybrid BM25+vector search
 
         Returns:
             QueryResult
         """
+        # Log query settings for debugging (settings ready for future wire-up)
+        if query_settings:
+            logger.debug(f"SQL query settings: {query_settings}")
         # Get per-request LLM (multi-user safe)
         request_llm = self._get_current_llm()
 
@@ -1115,16 +1124,40 @@ class SQLChatService(BaseService):
             # Get query embedding
             query_embedding = self._embed_model.get_query_embedding(retrieval_query)
 
-            # Query vector store filtered to this notebook
+            # Query vector store filtered to this notebook (retrieve more for reranking)
             results = self.pipeline._vector_store.query(
                 query_embedding=query_embedding,
-                similarity_top_k=10,
+                similarity_top_k=15,  # Retrieve more for reranking
                 filters={"notebook_id": notebook_id}
             )
 
             if not results:
                 logger.debug(f"No dictionary chunks found for query")
                 return None
+
+            # 4b. Apply reranking for better precision
+            from dbnotebook.core.providers.reranker_provider import (
+                get_shared_reranker,
+                is_reranker_enabled,
+            )
+            from llama_index.core.schema import NodeWithScore, QueryBundle
+
+            if is_reranker_enabled() and len(results) > 5:
+                try:
+                    reranker = get_shared_reranker(model="base", top_n=5)
+                    if reranker:
+                        # Convert results to NodeWithScore for reranking
+                        nodes_with_scores = [
+                            NodeWithScore(node=node, score=score)
+                            for node, score in results
+                        ]
+                        query_bundle = QueryBundle(query_str=retrieval_query)
+                        reranked = reranker.postprocess_nodes(nodes_with_scores, query_bundle)
+                        # Convert back to (node, score) tuples
+                        results = [(nws.node, nws.score) for nws in reranked]
+                        logger.debug(f"Reranked {len(results)} dictionary chunks")
+                except Exception as e:
+                    logger.debug(f"Reranking failed, using original results: {e}")
 
             # 5. Format dictionary chunks for prompt
             context_parts = ["## Dictionary Context (from database documentation):"]

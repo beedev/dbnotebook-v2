@@ -1,4 +1,4 @@
-import { Trash2, Download, Upload, MessageSquare, Sparkles } from 'lucide-react';
+import { Trash2, Download, MessageSquare, Sparkles } from 'lucide-react';
 
 export type ViewMode = 'chat' | 'studio';
 
@@ -11,7 +11,6 @@ interface ChatHeaderProps {
   onViewModeChange?: (mode: ViewMode) => void;
   onClearChat?: () => void;
   onExport?: () => void;
-  onUpload?: () => void;
 }
 
 export function ChatHeader({
@@ -23,7 +22,6 @@ export function ChatHeader({
   onViewModeChange,
   onClearChat,
   onExport,
-  onUpload,
 }: ChatHeaderProps) {
   return (
     <header className="flex items-center justify-between px-6 py-4 border-b border-void-surface bg-void-light/50">
@@ -66,14 +64,6 @@ export function ChatHeader({
 
       {/* Right: Actions */}
       <div className="flex items-center gap-2">
-        {notebookId && viewMode === 'chat' && (
-          <ActionButton
-            icon={<Upload className="w-4 h-4" />}
-            label="Upload"
-            onClick={onUpload}
-            variant="primary"
-          />
-        )}
         {viewMode === 'chat' && messageCount > 0 && (
           <>
             <ActionButton

@@ -14,13 +14,11 @@ from ..pipeline import LocalRAGPipeline
 from ..setting import QueryTimeSettings
 from ..core.plugins import get_configured_image_provider, register_default_plugins
 from ..core.metadata import MetadataManager
-from ..api.routes.chat import create_chat_routes
 from ..api.routes.web_content import create_web_content_routes
 from ..api.routes.studio import create_studio_routes
 from ..api.routes.vision import create_vision_routes
 from ..api.routes.transformations import create_transformation_routes
 from ..api.routes.agents import create_agent_routes
-from ..api.routes.multi_notebook import create_multi_notebook_routes
 from ..api.routes.analytics import create_analytics_routes
 from ..api.routes.sql_chat import create_sql_chat_routes
 from ..api.routes.query import create_query_routes
@@ -1411,9 +1409,6 @@ Output ONLY valid JSON, nothing else."""
                 logger.error(f"Error getting stats: {e}")
                 return jsonify({"success": False, "error": str(e)})
 
-        # Register chat API routes (with db_manager for two-stage routing)
-        create_chat_routes(self._app, self._pipeline, db_manager=self._db_manager)
-
         # Register web content routes (for web search and scraping)
         try:
             self._web_ingestion = WebContentIngestion(
@@ -1476,17 +1471,6 @@ Output ONLY valid JSON, nothing else."""
             logger.info("Agent API routes registered")
         except Exception as e:
             logger.warning(f"Agent API routes not available: {e}")
-
-        # Register Multi-Notebook Query routes
-        try:
-            create_multi_notebook_routes(
-                self._app,
-                self._pipeline,
-                notebook_manager=self._notebook_manager
-            )
-            logger.info("Multi-notebook query routes registered")
-        except Exception as e:
-            logger.warning(f"Multi-notebook query routes not available: {e}")
 
         # Register Analytics routes (pass pipeline for LLM access in dashboard generation)
         try:
@@ -2024,6 +2008,30 @@ Output ONLY valid JSON, nothing else."""
                 logger.error(f"Error clearing conversation: {e}")
                 return jsonify({"success": False, "error": str(e)}), 500
 
+        # Documentation route - serve mkdocs static site
+        @self._app.route("/docs")
+        @self._app.route("/docs/")
+        def serve_docs_index():
+            """Serve documentation homepage."""
+            docs_dir = Path(__file__).parent.parent.parent / "site"
+            if docs_dir.exists():
+                return send_from_directory(str(docs_dir), "index.html")
+            return jsonify({"error": "Documentation not built. Run 'mkdocs build' first."}), 404
+
+        @self._app.route("/docs/<path:path>")
+        def serve_docs(path):
+            """Serve documentation static files."""
+            docs_dir = Path(__file__).parent.parent.parent / "site"
+            if docs_dir.exists():
+                file_path = docs_dir / path
+                if file_path.exists() and file_path.is_file():
+                    return send_from_directory(str(docs_dir), path)
+                # For directory paths, serve index.html
+                index_path = docs_dir / path / "index.html"
+                if index_path.exists():
+                    return send_from_directory(str(docs_dir / path), "index.html")
+            return jsonify({"error": "Not found"}), 404
+
         # React SPA catch-all route - must be last to not interfere with API routes
         @self._app.route("/<path:path>")
         def serve_react_app(path):
@@ -2031,7 +2039,7 @@ Output ONLY valid JSON, nothing else."""
             # Skip API and other backend routes
             if path.startswith(('api/', 'chat', 'upload', 'clear', 'reset', 'model',
                                'notebooks', 'documents', 'health', 'generate-image',
-                               'image/', 'images', 'clear-images', 'outputs/')):
+                               'image/', 'images', 'clear-images', 'outputs/', 'docs')):
                 return jsonify({"error": "Not found"}), 404
 
             if self._frontend_dist.exists():

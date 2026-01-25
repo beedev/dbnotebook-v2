@@ -45,8 +45,18 @@ function generateMessageId(): string {
   return `msg_${Date.now()}_${++messageId}`;
 }
 
-export function useChatV2(notebookId?: string, options?: { model?: string; provider?: string }) {
-  const { model, provider } = options || {};
+export interface ChatV2Options {
+  model?: string;
+  provider?: string;
+  // Retrieval settings
+  useReranker?: boolean;
+  rerankerModel?: 'xsmall' | 'base' | 'large';
+  useRaptor?: boolean;
+  topK?: number;
+}
+
+export function useChatV2(notebookId?: string, options?: ChatV2Options) {
+  const { model, provider, useReranker, rerankerModel, useRaptor, topK } = options || {};
   const [state, setState] = useState<ChatV2State>({
     messages: [],
     isLoading: false,
@@ -223,6 +233,11 @@ export function useChatV2(notebookId?: string, options?: { model?: string; provi
             // Pass selected model and provider from UI
             model: model,
             provider: provider,
+            // Retrieval settings
+            use_reranker: useReranker,
+            reranker_model: rerankerModel,
+            use_raptor: useRaptor,
+            top_k: topK,
           },
           {
             onContent: (token) => {
@@ -262,6 +277,10 @@ export function useChatV2(notebookId?: string, options?: { model?: string; provi
       state.userId,
       model,
       provider,
+      useReranker,
+      rerankerModel,
+      useRaptor,
+      topK,
       addUserMessage,
       addAssistantMessage,
       updateStreamingMessage,

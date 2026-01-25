@@ -120,6 +120,11 @@ export interface ChatV2Request {
   max_sources?: number;
   model?: string;
   provider?: string;
+  // Retrieval settings (per-request tuning)
+  use_reranker?: boolean;
+  reranker_model?: 'xsmall' | 'base' | 'large';
+  use_raptor?: boolean;
+  top_k?: number;
 }
 
 export interface ChatV2Response {

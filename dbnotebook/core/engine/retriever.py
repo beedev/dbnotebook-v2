@@ -1,3 +1,18 @@
+"""
+Retrieval engine for DBNotebook RAG pipeline.
+
+This module provides the core retrieval logic, including:
+- TwoStageRetriever: Hybrid BM25 + vector retrieval with optional reranking
+- LocalRetriever: Smart retriever selection based on index size and query type
+- QueryIntent detection: Routes queries to appropriate retrieval strategy
+- RAPTOR integration: Hierarchical retrieval for summary-type queries
+
+The retrieval pipeline adapts based on:
+- Index size: Small indexes (≤6 nodes) use simple vector search
+- Query intent: Summary queries leverage RAPTOR trees when available
+- Reranker availability: Falls back to fusion scoring when reranker disabled
+"""
+
 import logging
 import os
 import re
@@ -22,30 +37,11 @@ from llama_index.core import Settings, VectorStoreIndex
 from ..prompt import get_query_gen_prompt
 from ...setting import get_settings, RAGSettings, QueryTimeSettings
 from ..raptor import RAPTORRetriever, has_raptor_tree, RAPTORConfig
+from ..utils import unwrap_llm
 
 load_dotenv()
 
 logger = logging.getLogger(__name__)
-
-
-def _unwrap_llm(llm):
-    """Extract raw LlamaIndex LLM from wrapper classes like GroqWithBackoff.
-
-    LlamaIndex's resolve_llm() requires instances of the LLM base class.
-    Wrapper classes (e.g., GroqWithBackoff for rate limiting) must be
-    unwrapped before passing to LlamaIndex components.
-
-    Args:
-        llm: LLM instance or wrapper
-
-    Returns:
-        Raw LlamaIndex LLM instance
-    """
-    if hasattr(llm, 'get_raw_llm'):
-        raw_llm = llm.get_raw_llm()
-        logger.debug(f"Unwrapped LLM: {type(llm).__name__} → {type(raw_llm).__name__}")
-        return raw_llm
-    return llm
 
 
 class QueryIntent(Enum):
@@ -502,7 +498,7 @@ class LocalRetriever:
             Configured retriever instance
         """
         # Unwrap LLM wrappers (e.g., GroqWithBackoff) for LlamaIndex compatibility
-        llm = _unwrap_llm(llm)
+        llm = unwrap_llm(llm)
 
         # Check retriever cache first (only if notebook_id is valid)
         cache_key = f"{notebook_id}:{len(nodes)}" if notebook_id else None
@@ -754,7 +750,7 @@ class LocalRetriever:
             Combined retriever with RAPTOR and standard retrieval
         """
         # Unwrap LLM wrappers (e.g., GroqWithBackoff) for LlamaIndex compatibility
-        llm = _unwrap_llm(llm)
+        llm = unwrap_llm(llm)
 
         if not vector_store or not notebook_id:
             return self.get_retrievers(llm, language, nodes, vector_store=vector_store)
@@ -802,3 +798,94 @@ class LocalRetriever:
         # TODO: Implement proper fusion of RAPTOR and standard retrievers
         logger.debug("Mixed RAPTOR/standard sources, falling back to standard retrieval")
         return self.get_retrievers(llm, language, nodes, vector_store=vector_store)
+
+    def get_unified_retriever(
+        self,
+        llm: LLM,
+        language: str,
+        nodes: List[BaseNode],
+        vector_store=None,
+        notebook_id: Optional[str] = None,
+        source_ids: Optional[List[str]] = None,
+        use_reranker: bool = True,
+        reranker_top_k: Optional[int] = None,
+    ) -> BaseRetriever:
+        """Get a retriever with explicit reranker control.
+
+        This method creates a TwoStageRetriever that:
+        1. Uses hybrid BM25 + vector retrieval
+        2. Applies reranking with the specified top_k
+
+        Use this when you need explicit control over reranker behavior
+        without relying on global configuration.
+
+        Args:
+            llm: Language model for query generation
+            language: Language code for prompts
+            nodes: Document nodes to index
+            vector_store: Optional vector store for metadata filtering
+            notebook_id: Notebook ID for cache isolation
+            source_ids: Optional source IDs to filter by
+            use_reranker: Whether to apply reranking (default: True)
+            reranker_top_k: Override for reranker top_k (default: from config)
+
+        Returns:
+            Configured retriever with explicit reranker control
+        """
+        # Unwrap LLM wrappers
+        llm = unwrap_llm(llm)
+
+        # Get or create index
+        vector_index = self._get_or_create_index(nodes, notebook_id=notebook_id)
+
+        # Get settings
+        similarity_top_k = self._get_similarity_top_k()
+        weights = self._get_retriever_weights()
+        effective_rerank_top_k = reranker_top_k or self._setting.retriever.top_k_rerank
+
+        # Vector retriever
+        vector_retriever = VectorIndexRetriever(
+            index=vector_index,
+            similarity_top_k=similarity_top_k,
+            embed_model=Settings.embed_model,
+            verbose=False
+        )
+
+        # BM25 retriever
+        bm25_retriever = BM25Retriever.from_defaults(
+            index=vector_index,
+            similarity_top_k=similarity_top_k,
+            verbose=False
+        )
+
+        retrievers = [bm25_retriever, vector_retriever]
+
+        if use_reranker:
+            # TwoStageRetriever with reranking
+            logger.debug(f"Creating unified retriever with reranker (top_k={effective_rerank_top_k})")
+            return TwoStageRetriever(
+                retrievers=retrievers,
+                retriever_weights=weights,
+                setting=self._setting,
+                llm=llm,
+                query_gen_prompt=None,
+                similarity_top_k=similarity_top_k,
+                num_queries=1,  # Single query for speed
+                mode=self._setting.retriever.fusion_mode,
+                use_async=False,
+                verbose=False
+            )
+        else:
+            # Simple fusion without reranking
+            logger.debug("Creating unified retriever without reranker")
+            return QueryFusionRetriever(
+                retrievers=retrievers,
+                retriever_weights=weights,
+                llm=llm,
+                query_gen_prompt=None,
+                similarity_top_k=effective_rerank_top_k,
+                num_queries=1,
+                mode=self._setting.retriever.fusion_mode,
+                use_async=False,
+                verbose=False
+            )

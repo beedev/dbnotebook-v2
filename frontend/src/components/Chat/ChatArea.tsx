@@ -58,7 +58,14 @@ export function ChatArea({ notebookId, notebookName, selectedModel, onCopy, onFi
     clearMessages,
     sessionId: _sessionId,
     userId: _userId,
-  } = useChatV2(notebookId, { model: selectedModel });
+  } = useChatV2(notebookId, {
+    model: selectedModel,
+    // Pass retrieval settings
+    useReranker: querySettings.retrieval.rerankerEnabled,
+    rerankerModel: querySettings.retrieval.rerankerModel,
+    useRaptor: querySettings.retrieval.raptorEnabled,
+    topK: querySettings.retrieval.topK,
+  });
 
   // Wrapper to analyze query before sending (agentic enhancement)
   const sendMessage = useCallback(async (message: string) => {
@@ -192,7 +199,6 @@ export function ChatArea({ notebookId, notebookName, selectedModel, onCopy, onFi
         onViewModeChange={setViewMode}
         onClearChat={clearMessages}
         onExport={handleExport}
-        onUpload={handleUploadClick}
       />
 
       {/* Conditional Content based on View Mode */}

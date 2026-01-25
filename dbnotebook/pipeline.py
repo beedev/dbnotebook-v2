@@ -25,28 +25,10 @@ from .core.transformations import TransformationWorker, TransformationJob
 from .core.raptor import RAPTORWorker, RAPTORJob
 from .core.memory import SessionMemoryService
 from .core.constants import DEFAULT_USER_ID
+from .core.utils import unwrap_llm
 from .setting import get_settings, QueryTimeSettings
 
 logger = logging.getLogger(__name__)
-
-
-def _unwrap_llm(llm):
-    """Extract raw LlamaIndex LLM from wrapper classes like GroqWithBackoff.
-
-    LlamaIndex's Settings.llm setter calls resolve_llm() which requires
-    instances of the LLM base class. Wrapper classes must be unwrapped.
-
-    Args:
-        llm: LLM instance or wrapper
-
-    Returns:
-        Raw LlamaIndex LLM instance
-    """
-    if hasattr(llm, 'get_raw_llm'):
-        raw_llm = llm.get_raw_llm()
-        logger.debug(f"Unwrapped LLM for Settings: {type(llm).__name__} → {type(raw_llm).__name__}")
-        return raw_llm
-    return llm
 
 
 class LocalRAGPipeline:
@@ -411,7 +393,7 @@ class LocalRAGPipeline:
             setting=self._settings
         )
         # Unwrap LLM wrappers (e.g., GroqWithBackoff) for LlamaIndex Settings compatibility
-        Settings.llm = _unwrap_llm(self._default_model)
+        Settings.llm = unwrap_llm(self._default_model)
         logger.info(f"Model updated: {self._model_name}")
 
     def reset_engine(self) -> None:

@@ -27,6 +27,7 @@ Usage:
 
 from .retrieval import (
     fast_retrieve,
+    enhanced_retrieve,
     get_raptor_summaries,
     create_retriever,
 )
@@ -45,10 +46,15 @@ from .memory import (
     generate_session_id,
     format_history_for_context,
 )
+from .query_utils import (
+    expand_query_with_history,
+    expand_query_with_history_timed,
+)
 
 __all__ = [
     # Retrieval
     "fast_retrieve",
+    "enhanced_retrieve",
     "get_raptor_summaries",
     "create_retriever",
     # Context
@@ -63,4 +69,7 @@ __all__ = [
     "save_conversation_turn",
     "generate_session_id",
     "format_history_for_context",
+    # Query Utils
+    "expand_query_with_history",
+    "expand_query_with_history_timed",
 ]

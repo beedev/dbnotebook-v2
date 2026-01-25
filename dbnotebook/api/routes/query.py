@@ -29,17 +29,19 @@ RBAC Integration:
 """
 
 import logging
-import os
 import time
 from flask import request, jsonify
-from functools import wraps
 
 from llama_index.core import Settings
 from llama_index.core.schema import QueryBundle
 
+from dbnotebook.api.core.decorators import require_api_key, set_db_manager
+from dbnotebook.api.core.response import (
+    success_response, error_response, not_found, validation_error,
+    forbidden, service_unavailable
+)
 from dbnotebook.core.auth import check_notebook_access, AccessLevel
 from dbnotebook.core.constants import DEFAULT_USER_ID
-from dbnotebook.core.db.models import User
 from dbnotebook.core.prompt import get_condense_prompt
 
 logger = logging.getLogger(__name__)
@@ -48,12 +50,6 @@ logger = logging.getLogger(__name__)
 # Key: session_id (str), Value: list of {"role": str, "content": str}
 # This keeps Query API memory isolated from RAG Chat (which uses DB)
 _query_sessions: dict[str, list[dict[str, str]]] = {}
-
-# Fallback API key from environment (for backward compatibility)
-ENV_API_KEY = os.getenv("API_KEY")
-
-# Module-level reference to db_manager (set during route creation)
-_db_manager = None
 
 
 def get_api_format_instructions(response_format: str) -> str:
@@ -99,56 +95,6 @@ def get_api_format_instructions(response_format: str) -> str:
     return ""  # default - use existing adaptive format
 
 
-def validate_api_key(provided_key: str) -> tuple[bool, str | None]:
-    """Validate API key against database or environment variable.
-
-    Returns:
-        Tuple of (is_valid, user_id or None)
-    """
-    if not provided_key:
-        return False, None
-
-    # Check database first (if db_manager is available)
-    if _db_manager:
-        try:
-            with _db_manager.get_session() as session:
-                user = session.query(User).filter(User.api_key == provided_key).first()
-                if user:
-                    return True, str(user.user_id)
-        except Exception as e:
-            logger.warning(f"Database API key lookup failed: {e}")
-
-    # Fallback to environment variable (backward compatibility)
-    if ENV_API_KEY and provided_key == ENV_API_KEY:
-        return True, DEFAULT_USER_ID
-
-    return False, None
-
-
-def require_api_key(f):
-    """Decorator to require API key for programmatic API access.
-
-    Validates against:
-    1. Database: users.api_key column
-    2. Environment: API_KEY variable (fallback for backward compatibility)
-    """
-    @wraps(f)
-    def decorated(*args, **kwargs):
-        provided_key = request.headers.get("X-API-Key")
-
-        is_valid, user_id = validate_api_key(provided_key)
-        if not is_valid:
-            return jsonify({
-                "success": False,
-                "error": "Invalid or missing API key"
-            }), 401
-
-        # Store validated user_id in request context for downstream use
-        request.api_user_id = user_id
-        return f(*args, **kwargs)
-    return decorated
-
-
 def create_query_routes(app, pipeline, db_manager, notebook_manager):
     """Create simple programmatic query API routes.
 
@@ -158,9 +104,9 @@ def create_query_routes(app, pipeline, db_manager, notebook_manager):
         db_manager: DatabaseManager instance
         notebook_manager: NotebookManager instance
     """
-    # Store db_manager reference for API key validation
-    global _db_manager
-    _db_manager = db_manager
+    # Set db_manager for API key validation in decorators module
+    if db_manager:
+        set_db_manager(db_manager)
 
     @app.route("/api/query", methods=["POST"])
     @require_api_key
@@ -224,16 +170,10 @@ def create_query_routes(app, pipeline, db_manager, notebook_manager):
             query = data.get("query")
 
             if not notebook_id:
-                return jsonify({
-                    "success": False,
-                    "error": "notebook_id is required"
-                }), 400
+                return validation_error("notebook_id is required")
 
             if not query:
-                return jsonify({
-                    "success": False,
-                    "error": "query is required"
-                }), 400
+                return validation_error("query is required")
 
             # Session management - optional conversation memory
             # Client MUST send session_id to enable memory (consistency: no session_id = stateless)
@@ -245,10 +185,7 @@ def create_query_routes(app, pipeline, db_manager, notebook_manager):
                 try:
                     session_id = uuid_lib.UUID(session_id_input)
                 except ValueError:
-                    return jsonify({
-                        "success": False,
-                        "error": "Invalid session_id format. Must be a valid UUID."
-                    }), 400
+                    return validation_error("Invalid session_id format. Must be a valid UUID.")
 
             # Get user_id for RBAC check
             user_id = (
@@ -265,10 +202,7 @@ def create_query_routes(app, pipeline, db_manager, notebook_manager):
                 access_level=AccessLevel.VIEWER
             )
             if not has_access:
-                return jsonify({
-                    "success": False,
-                    "error": error_msg
-                }), 403
+                return forbidden(error_msg)
 
             # Optional parameters
             model_name = data.get("model")
@@ -309,10 +243,7 @@ def create_query_routes(app, pipeline, db_manager, notebook_manager):
             timings["1_notebook_lookup_ms"] = int((time.time() - t1) * 1000)
 
             if not notebook:
-                return jsonify({
-                    "success": False,
-                    "error": f"Notebook not found: {notebook_id}"
-                }), 404
+                return not_found("Notebook", notebook_id)
 
             # Step 1.5: Load conversation history from in-memory store (ephemeral)
             # Query API uses in-memory sessions to avoid contaminating RAG Chat (DB-based)
@@ -377,10 +308,7 @@ def create_query_routes(app, pipeline, db_manager, notebook_manager):
                 try:
                     # Verify engine is initialized (set during app startup)
                     if not pipeline._engine or not pipeline._engine._retriever:
-                        return jsonify({
-                            "success": False,
-                            "error": "Pipeline not initialized. Please try again."
-                        }), 503
+                        return service_unavailable("Pipeline not initialized. Please try again.")
 
                     # Step 3: Create hybrid retriever (same as UI /chat)
                     # Uses BM25 + Vector + Rerank for precise chunk retrieval
@@ -566,10 +494,7 @@ User question: {query}"""
             logger.error(f"Error in query endpoint: {e}")
             import traceback
             logger.error(traceback.format_exc())
-            return jsonify({
-                "success": False,
-                "error": str(e)
-            }), 500
+            return error_response(str(e), 500)
         finally:
             # Restore original reranker config if it was overridden
             if original_reranker_config is not None:
@@ -614,17 +539,11 @@ User question: {query}"""
                     "created_at": nb.get("created_at")
                 })
 
-            return jsonify({
-                "success": True,
-                "notebooks": notebook_list
-            })
+            return success_response({"notebooks": notebook_list})
 
         except Exception as e:
             logger.error(f"Error listing notebooks: {e}")
-            return jsonify({
-                "success": False,
-                "error": str(e)
-            }), 500
+            return error_response(str(e), 500)
 
     @app.route("/api/user/api-key", methods=["GET"])
     def api_get_user_api_key():
@@ -645,28 +564,22 @@ User question: {query}"""
         the user's API key for programmatic access.
         """
         try:
+            from dbnotebook.core.db.models import User as UserModel
             user_id = request.args.get("user_id", DEFAULT_USER_ID)
 
-            with db_manager.get_session() as session:
-                user = session.query(User).filter(User.user_id == user_id).first()
+            with db_manager.get_session() as db_session:
+                user = db_session.query(UserModel).filter(UserModel.user_id == user_id).first()
 
                 if not user:
-                    return jsonify({
-                        "success": False,
-                        "error": f"User not found: {user_id}"
-                    }), 404
+                    return not_found("User", user_id)
 
-                return jsonify({
-                    "success": True,
+                return success_response({
                     "api_key": user.api_key,
                     "user_id": str(user.user_id)
                 })
 
         except Exception as e:
             logger.error(f"Error getting user API key: {e}")
-            return jsonify({
-                "success": False,
-                "error": str(e)
-            }), 500
+            return error_response(str(e), 500)
 
     return app

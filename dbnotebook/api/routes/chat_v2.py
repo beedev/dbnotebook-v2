@@ -12,9 +12,12 @@ from flask import request, jsonify, Response
 
 from llama_index.core import Settings
 
+from dbnotebook.api.core.response import (
+    error_response, validation_error, not_found, service_unavailable
+)
 from dbnotebook.core.stateless import (
     fast_retrieve,
-    get_raptor_summaries,
+    enhanced_retrieve,
     build_context_with_history,
     format_sources,
     execute_query,
@@ -22,8 +25,8 @@ from dbnotebook.core.stateless import (
     load_conversation_history,
     save_conversation_turn,
     generate_session_id,
+    expand_query_with_history_timed,
 )
-from dbnotebook.core.prompt import get_condense_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -88,22 +91,13 @@ def create_chat_v2_routes(app, pipeline, db_manager, notebook_manager, conversat
             user_id = data.get("user_id")
 
             if not notebook_id:
-                return jsonify({
-                    "success": False,
-                    "error": "notebook_id is required"
-                }), 400
+                return validation_error("notebook_id is required")
 
             if not query:
-                return jsonify({
-                    "success": False,
-                    "error": "query is required"
-                }), 400
+                return validation_error("query is required")
 
             if not user_id:
-                return jsonify({
-                    "success": False,
-                    "error": "user_id is required for multi-user chat"
-                }), 400
+                return validation_error("user_id is required for multi-user chat")
 
             # Optional parameters
             model_name = data.get("model")
@@ -112,6 +106,26 @@ def create_chat_v2_routes(app, pipeline, db_manager, notebook_manager, conversat
             max_history = min(data.get("max_history", 10), 50)
             include_sources = data.get("include_sources", True)
             max_sources = min(data.get("max_sources", 6), 20)
+
+            # Retrieval settings (per-request tuning)
+            use_reranker = data.get("use_reranker", True)
+            reranker_model = data.get("reranker_model")  # xsmall, base, large
+            use_raptor = data.get("use_raptor", True)
+            top_k = data.get("top_k", max_sources)  # Allow explicit top_k override
+
+            # Apply per-request reranker model if specified
+            original_reranker_config = None
+            if reranker_model:
+                from dbnotebook.core.providers.reranker_provider import (
+                    get_reranker_config, set_reranker_config
+                )
+                original_reranker_config = get_reranker_config()
+                set_reranker_config(
+                    model=reranker_model,
+                    enabled=use_reranker,
+                    top_n=top_k,
+                )
+                logger.debug(f"Per-request reranker: model={reranker_model}, enabled={use_reranker}")
 
             # Get LLM instance for this specific request
             from dbnotebook.core.model.model import LocalRAGModel
@@ -126,10 +140,7 @@ def create_chat_v2_routes(app, pipeline, db_manager, notebook_manager, conversat
             timings["1_notebook_lookup_ms"] = int((time.time() - t1) * 1000)
 
             if not notebook:
-                return jsonify({
-                    "success": False,
-                    "error": f"Notebook not found: {notebook_id}"
-                }), 404
+                return not_found("Notebook", notebook_id)
 
             # Step 2: Load conversation history (from database)
             t2 = time.time()
@@ -145,24 +156,14 @@ def create_chat_v2_routes(app, pipeline, db_manager, notebook_manager, conversat
 
             # Step 2b: Expand follow-up queries using conversation history
             retrieval_query = query  # Default to original query
-            if include_history and conversation_history and len(conversation_history) >= 2:
-                t2b = time.time()
-                try:
-                    history_text = "\n".join([
-                        f"{'User' if msg['role'] == 'user' else 'Assistant'}: {msg['content'][:500]}"
-                        for msg in conversation_history[-4:]
-                    ])
-                    condense_prompt = get_condense_prompt().format(
-                        chat_history=history_text,
-                        question=query
-                    )
-                    expanded = local_llm.complete(condense_prompt).text.strip()
-                    if expanded and len(expanded) > 5 and expanded != query:
-                        retrieval_query = expanded
-                        logger.info(f"V2 expanded: '{query}' → '{retrieval_query}'")
-                    timings["2b_query_expansion_ms"] = int((time.time() - t2b) * 1000)
-                except Exception as e:
-                    logger.warning(f"V2 query expansion failed: {e}")
+            if include_history and conversation_history:
+                retrieval_query = expand_query_with_history_timed(
+                    query=query,
+                    conversation_history=conversation_history,
+                    llm=local_llm,
+                    timings=timings,
+                    timing_key="2b_query_expansion_ms",
+                )
 
             # Step 3: Get cached nodes (thread-safe)
             t3 = time.time()
@@ -170,43 +171,56 @@ def create_chat_v2_routes(app, pipeline, db_manager, notebook_manager, conversat
             timings["3_node_cache_ms"] = int((time.time() - t3) * 1000)
             logger.debug(f"Got {len(nodes)} cached nodes for notebook {notebook_id}")
 
-            # Step 4: Fast retrieval (using stateless pattern)
+            # Step 4: Enhanced retrieval with RAPTOR-aware reranking
             retrieval_results = []
+            raptor_summaries = []
             retrieval_strategy = "hybrid"
             if nodes:
                 try:
                     if not pipeline._engine or not pipeline._engine._retriever:
-                        return jsonify({
-                            "success": False,
-                            "error": "Pipeline not initialized. Please try again."
-                        }), 503
+                        return service_unavailable("Pipeline not initialized. Please try again.")
 
                     t4 = time.time()
-                    retrieval_results = fast_retrieve(
+                    # Use enhanced_retrieve for unified RAPTOR + chunk retrieval with reranking
+                    retrieval_results, raptor_summaries, retrieval_meta = enhanced_retrieve(
                         nodes=nodes,
                         query=retrieval_query,  # Use expanded query for retrieval
                         notebook_id=notebook_id,
                         vector_store=pipeline._vector_store,
                         retriever_factory=pipeline._engine._retriever,
                         llm=local_llm,
-                        top_k=max_sources,
+                        embed_model=Settings.embed_model,
+                        top_k=top_k,
+                        use_raptor=use_raptor,
+                        use_reranker=use_reranker,
                     )
-                    timings["4_fast_retrieval_ms"] = int((time.time() - t4) * 1000)
-                    retrieval_strategy = "hybrid"  # Now using get_retrievers() (chunks only)
+                    timings["4_enhanced_retrieval_ms"] = int((time.time() - t4) * 1000)
+                    retrieval_strategy = retrieval_meta.get("strategy_used", "raptor_aware")
+
+                    # Add detailed timing breakdown if available
+                    if "chunk_retrieval_ms" in retrieval_meta:
+                        timings["4a_chunk_retrieval_ms"] = retrieval_meta["chunk_retrieval_ms"]
+                    if "raptor_retrieval_ms" in retrieval_meta:
+                        timings["4b_raptor_retrieval_ms"] = retrieval_meta["raptor_retrieval_ms"]
+                    if "reranking_ms" in retrieval_meta:
+                        timings["4c_reranking_ms"] = retrieval_meta["reranking_ms"]
 
                 except Exception as e:
-                    logger.warning(f"Retrieval failed [{type(e).__name__}]: {e}", exc_info=True)
-
-            # Step 5: Get RAPTOR summaries (for LLM context, not retrieval)
-            t5 = time.time()
-            raptor_summaries = get_raptor_summaries(
-                query=retrieval_query,  # Use expanded query for RAPTOR lookup
-                notebook_id=notebook_id,
-                vector_store=pipeline._vector_store,
-                embed_model=Settings.embed_model,
-                top_k=5,
-            )
-            timings["5_raptor_summaries_ms"] = int((time.time() - t5) * 1000)
+                    logger.warning(f"Enhanced retrieval failed [{type(e).__name__}]: {e}", exc_info=True)
+                    # Fallback to simple retrieval
+                    try:
+                        retrieval_results = fast_retrieve(
+                            nodes=nodes,
+                            query=retrieval_query,
+                            notebook_id=notebook_id,
+                            vector_store=pipeline._vector_store,
+                            retriever_factory=pipeline._engine._retriever,
+                            llm=local_llm,
+                            top_k=max_sources,
+                        )
+                        retrieval_strategy = "hybrid_fallback"
+                    except Exception as fallback_e:
+                        logger.warning(f"Fallback retrieval also failed: {fallback_e}")
 
             # Step 6: Build context with history
             t6 = time.time()
@@ -272,10 +286,7 @@ def create_chat_v2_routes(app, pipeline, db_manager, notebook_manager, conversat
             logger.error(f"Error in V2 chat endpoint: {e}")
             import traceback
             logger.error(traceback.format_exc())
-            return jsonify({
-                "success": False,
-                "error": str(e)
-            }), 500
+            return error_response(str(e), 500)
 
     @app.route("/api/v2/chat/stream", methods=["POST"])
     def api_v2_chat_stream():
@@ -293,10 +304,7 @@ def create_chat_v2_routes(app, pipeline, db_manager, notebook_manager, conversat
             user_id = data.get("user_id")
 
             if not notebook_id or not query or not user_id:
-                return jsonify({
-                    "success": False,
-                    "error": "notebook_id, query, and user_id are required"
-                }), 400
+                return validation_error("notebook_id, query, and user_id are required")
 
             # Optional parameters
             model_name = data.get("model")
@@ -304,6 +312,26 @@ def create_chat_v2_routes(app, pipeline, db_manager, notebook_manager, conversat
             include_history = data.get("include_history", True)
             max_history = min(data.get("max_history", 10), 50)
             max_sources = min(data.get("max_sources", 6), 20)
+
+            # Retrieval settings (per-request tuning)
+            use_reranker = data.get("use_reranker", True)
+            reranker_model = data.get("reranker_model")  # xsmall, base, large
+            use_raptor = data.get("use_raptor", True)
+            top_k = data.get("top_k", max_sources)
+
+            # Apply per-request reranker model if specified
+            original_reranker_config = None
+            if reranker_model:
+                from dbnotebook.core.providers.reranker_provider import (
+                    get_reranker_config, set_reranker_config
+                )
+                original_reranker_config = get_reranker_config()
+                set_reranker_config(
+                    model=reranker_model,
+                    enabled=use_reranker,
+                    top_n=top_k,
+                )
+                logger.debug(f"Per-request reranker (stream): model={reranker_model}, enabled={use_reranker}")
 
             # Get LLM instance for this specific request
             from dbnotebook.core.model.model import LocalRAGModel
@@ -315,10 +343,7 @@ def create_chat_v2_routes(app, pipeline, db_manager, notebook_manager, conversat
             # Verify notebook
             notebook = notebook_manager.get_notebook(notebook_id)
             if not notebook:
-                return jsonify({
-                    "success": False,
-                    "error": f"Notebook not found: {notebook_id}"
-                }), 404
+                return not_found("Notebook", notebook_id)
 
             def generate():
                 import json
@@ -342,24 +367,14 @@ def create_chat_v2_routes(app, pipeline, db_manager, notebook_manager, conversat
 
                     # Query expansion for follow-up queries
                     retrieval_query = query  # Default to original query
-                    if include_history and conversation_history and len(conversation_history) >= 2:
-                        t1b = time_module.time()
-                        try:
-                            history_text = "\n".join([
-                                f"{'User' if msg['role'] == 'user' else 'Assistant'}: {msg['content'][:500]}"
-                                for msg in conversation_history[-4:]
-                            ])
-                            condense_prompt = get_condense_prompt().format(
-                                chat_history=history_text,
-                                question=query
-                            )
-                            expanded = local_llm.complete(condense_prompt).text.strip()
-                            if expanded and len(expanded) > 5 and expanded != query:
-                                retrieval_query = expanded
-                                logger.info(f"V2 stream expanded: '{query}' → '{retrieval_query}'")
-                            timings["1b_query_expansion_ms"] = int((time_module.time() - t1b) * 1000)
-                        except Exception as e:
-                            logger.warning(f"V2 stream query expansion failed: {e}")
+                    if include_history and conversation_history:
+                        retrieval_query = expand_query_with_history_timed(
+                            query=query,
+                            conversation_history=conversation_history,
+                            llm=local_llm,
+                            timings=timings,
+                            timing_key="1b_query_expansion_ms",
+                        )
 
                     # Get nodes and retrieve
                     t2 = time_module.time()
@@ -367,28 +382,39 @@ def create_chat_v2_routes(app, pipeline, db_manager, notebook_manager, conversat
                     timings["2_node_cache_ms"] = int((time_module.time() - t2) * 1000)
 
                     retrieval_results = []
+                    raptor_summaries = []
+                    retrieval_strategy = "hybrid"
                     if nodes and pipeline._engine and pipeline._engine._retriever:
                         t3 = time_module.time()
-                        retrieval_results = fast_retrieve(
-                            nodes=nodes,
-                            query=retrieval_query,  # Use expanded query for retrieval
-                            notebook_id=notebook_id,
-                            vector_store=pipeline._vector_store,
-                            retriever_factory=pipeline._engine._retriever,
-                            llm=local_llm,
-                            top_k=max_sources,
-                        )
+                        try:
+                            # Use enhanced_retrieve for unified RAPTOR + chunk retrieval
+                            retrieval_results, raptor_summaries, retrieval_meta = enhanced_retrieve(
+                                nodes=nodes,
+                                query=retrieval_query,
+                                notebook_id=notebook_id,
+                                vector_store=pipeline._vector_store,
+                                retriever_factory=pipeline._engine._retriever,
+                                llm=local_llm,
+                                embed_model=Settings.embed_model,
+                                top_k=top_k,
+                                use_raptor=use_raptor,
+                                use_reranker=use_reranker,
+                            )
+                            retrieval_strategy = retrieval_meta.get("strategy_used", "raptor_aware")
+                        except Exception as e:
+                            logger.warning(f"Enhanced retrieval failed in stream: {e}")
+                            # Fallback to simple retrieval
+                            retrieval_results = fast_retrieve(
+                                nodes=nodes,
+                                query=retrieval_query,
+                                notebook_id=notebook_id,
+                                vector_store=pipeline._vector_store,
+                                retriever_factory=pipeline._engine._retriever,
+                                llm=local_llm,
+                                top_k=max_sources,
+                            )
+                            retrieval_strategy = "hybrid_fallback"
                         timings["3_retrieval_ms"] = int((time_module.time() - t3) * 1000)
-
-                    # Get RAPTOR summaries (for LLM context, not retrieval)
-                    t4 = time_module.time()
-                    raptor_summaries = get_raptor_summaries(
-                        query=retrieval_query,  # Use expanded query for RAPTOR lookup
-                        notebook_id=notebook_id,
-                        vector_store=pipeline._vector_store,
-                        embed_model=Settings.embed_model,
-                    )
-                    timings["4_raptor_ms"] = int((time_module.time() - t4) * 1000)
 
                     # Build context
                     t5 = time_module.time()
@@ -429,6 +455,7 @@ def create_chat_v2_routes(app, pipeline, db_manager, notebook_manager, conversat
                     metadata = {
                         "execution_time_ms": execution_time_ms,
                         "model": local_llm.model if hasattr(local_llm, 'model') else (pipeline._default_model.model if pipeline._default_model else "unknown"),
+                        "retrieval_strategy": retrieval_strategy,
                         "node_count": len(nodes) if nodes else 0,
                         "raptor_summaries_used": len(raptor_summaries) if raptor_summaries else 0,
                         "history_turns_used": len(conversation_history) // 2,
@@ -441,6 +468,15 @@ def create_chat_v2_routes(app, pipeline, db_manager, notebook_manager, conversat
                 except Exception as e:
                     logger.error(f"Streaming error: {e}")
                     yield f"data: {json.dumps({'type': 'error', 'error': str(e)})}\n\n"
+                finally:
+                    # Restore original reranker config if it was overridden
+                    if original_reranker_config is not None:
+                        from dbnotebook.core.providers.reranker_provider import set_reranker_config
+                        set_reranker_config(
+                            model=original_reranker_config.get("model"),
+                            enabled=original_reranker_config.get("enabled", True),
+                            top_n=original_reranker_config.get("top_n"),
+                        )
 
             return Response(
                 generate(),

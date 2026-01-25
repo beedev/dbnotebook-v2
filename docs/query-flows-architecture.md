@@ -876,7 +876,7 @@ Retrieval Strategy:
 
 ## Related Documentation
 
-- [CLAUDE.md](../CLAUDE.md) - Project overview and architecture
-- [dbnotebook/core/engine/retriever.py](../dbnotebook/core/engine/retriever.py) - Hybrid retrieval implementation
-- [dbnotebook/core/sql_chat/](../dbnotebook/core/sql_chat/) - SQL Chat components
-- [dbnotebook/core/raptor/](../dbnotebook/core/raptor/) - RAPTOR tree building
+- [Architecture Overview](ARCHITECTURE.md) - System architecture and components
+- [RAG Chat](features/rag-chat.md) - Hybrid retrieval and chat implementation
+- [SQL Chat](features/sql-chat.md) - Natural language to SQL queries
+- [RAPTOR Retrieval](features/raptor.md) - Hierarchical tree building and retrieval

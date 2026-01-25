@@ -1,16 +1,23 @@
 import { useState, useCallback } from 'react';
 import { ChevronDown, ChevronUp, Settings2 } from 'lucide-react';
+import {
+  RetrievalSettings,
+  DEFAULT_RETRIEVAL_CONFIG,
+  type RetrievalConfig,
+} from '../shared';
 
 export interface QuerySettings {
   searchStyle: number; // 0-100: 0 = keyword, 100 = semantic
   resultDepth: 'focused' | 'balanced' | 'comprehensive';
   temperature: number; // 0-100: maps to 0-2.0
+  retrieval: RetrievalConfig;
 }
 
 export const DEFAULT_QUERY_SETTINGS: QuerySettings = {
   searchStyle: 50,
   resultDepth: 'balanced',
   temperature: 5, // 5 = 0.1 (low = deterministic, high = creative)
+  retrieval: DEFAULT_RETRIEVAL_CONFIG,
 };
 
 interface QuerySettingsPanelProps {
@@ -47,11 +54,26 @@ export function QuerySettingsPanel({
     [settings, onChange]
   );
 
+  const handleRetrievalChange = useCallback(
+    (retrieval: RetrievalConfig) => {
+      onChange({ ...settings, retrieval });
+    },
+    [settings, onChange]
+  );
+
   // Determine if any settings are non-default
-  const hasCustomSettings =
+  const hasCustomQuerySettings =
     settings.searchStyle !== DEFAULT_QUERY_SETTINGS.searchStyle ||
     settings.resultDepth !== DEFAULT_QUERY_SETTINGS.resultDepth ||
     settings.temperature !== DEFAULT_QUERY_SETTINGS.temperature;
+
+  const hasCustomRetrievalSettings =
+    settings.retrieval.rerankerEnabled !== DEFAULT_RETRIEVAL_CONFIG.rerankerEnabled ||
+    settings.retrieval.rerankerModel !== DEFAULT_RETRIEVAL_CONFIG.rerankerModel ||
+    settings.retrieval.raptorEnabled !== DEFAULT_RETRIEVAL_CONFIG.raptorEnabled ||
+    settings.retrieval.topK !== DEFAULT_RETRIEVAL_CONFIG.topK;
+
+  const hasCustomSettings = hasCustomQuerySettings || hasCustomRetrievalSettings;
 
   return (
     <div className="w-full max-w-3xl mx-auto px-4 pb-3">
@@ -146,7 +168,7 @@ export function QuerySettingsPanel({
           </div>
 
           {/* Temperature Slider */}
-          <div>
+          <div className="mb-5">
             <div className="flex justify-between items-center mb-2">
               <label className="text-xs font-medium text-text">
                 Response Tone
@@ -175,6 +197,17 @@ export function QuerySettingsPanel({
             </div>
           </div>
 
+          {/* Divider */}
+          <div className="border-t border-void-surface my-4" />
+
+          {/* Retrieval Settings */}
+          <RetrievalSettings
+            config={settings.retrieval}
+            onChange={handleRetrievalChange}
+            disabled={disabled}
+            compact
+          />
+
           {/* Reset Button */}
           {hasCustomSettings && (
             <button
@@ -182,7 +215,7 @@ export function QuerySettingsPanel({
               className="mt-4 w-full py-2 text-xs text-text-muted hover:text-text
                 border border-void-surface hover:border-text-dim rounded-md transition-colors"
             >
-              Reset to Defaults
+              Reset All to Defaults
             </button>
           )}
         </div>
