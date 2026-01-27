@@ -311,6 +311,14 @@ CRITICAL SQL Generation Rules:
 - When grouping or aggregating, prefer name columns over ID columns for readability
 - Include both ID and name when the name might not be unique
 - Use meaningful column aliases in SELECT
+
+ANSI SQL Compliance (MANDATORY - works across PostgreSQL, MySQL, SQLite):
+- NO QUALIFY clause - use subquery: SELECT * FROM (SELECT ..., ROW_NUMBER() OVER (...) as rn FROM ...) sub WHERE rn = 1
+- Use COALESCE() for null handling (not IFNULL, NVL, or ISNULL)
+- Use CASE WHEN for conditionals (not IF())
+- Use CAST(column AS type) for type conversion (not :: or CONVERT)
+- Use standard JOIN syntax (INNER JOIN, LEFT JOIN, etc.)
+- Use LIMIT/OFFSET for pagination
 """)
 
         # Add the actual query

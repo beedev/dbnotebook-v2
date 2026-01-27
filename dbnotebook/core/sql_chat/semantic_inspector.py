@@ -182,8 +182,11 @@ SQL query:
 Issue detected: {feedback}
 {schema_context}
 IMPORTANT: Use ONLY the exact column and table names from the schema above.
-- For PostgreSQL, use STRING_AGG() instead of GROUP_CONCAT()
-- For PostgreSQL, use COALESCE for null handling
+- Generate ANSI-compliant SQL (works across all databases)
+- NO QUALIFY clause - use subquery with ROW_NUMBER() instead: SELECT * FROM (SELECT ..., ROW_NUMBER() OVER (...) as rn FROM ...) sub WHERE rn = 1
+- Use COALESCE() for null handling (not IFNULL, NVL, or ISNULL)
+- Use CASE WHEN for conditionals (not IF())
+- Use STRING_AGG() for string concatenation (PostgreSQL standard)
 
 Generate a corrected SQL query that addresses this issue.
 Return ONLY the SQL query, no explanation or markdown.

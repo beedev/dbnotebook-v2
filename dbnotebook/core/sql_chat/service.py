@@ -1144,7 +1144,7 @@ class SQLChatService(BaseService):
 
             if is_reranker_enabled() and len(results) > 5:
                 try:
-                    reranker = get_shared_reranker(model="base", top_n=5)
+                    reranker = get_shared_reranker(model="large", top_n=5)
                     if reranker:
                         # Convert results to NodeWithScore for reranking
                         nodes_with_scores = [

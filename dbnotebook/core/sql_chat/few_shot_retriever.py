@@ -29,7 +29,7 @@ def _get_rag_config() -> dict:
     # SQL_RERANKER_MODEL env var allows separate model for SQL Chat
     env_model = os.getenv("SQL_RERANKER_MODEL", "").strip()
     config_model = get_config_value("sql_chat", "few_shot", "rag_integration", "rerank_model",
-                                    default="mixedbread-ai/mxbai-rerank-base-v1")
+                                    default="mixedbread-ai/mxbai-rerank-large-v1")
     rerank_model = env_model if env_model else config_model
 
     return {
