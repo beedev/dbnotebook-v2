@@ -50,7 +50,7 @@ export interface ChatV2Options {
   provider?: string;
   // Retrieval settings
   useReranker?: boolean;
-  rerankerModel?: 'xsmall' | 'base' | 'large';
+  rerankerModel?: string;  // Supports local (xsmall, base, large) and groq:* models
   useRaptor?: boolean;
   topK?: number;
 }

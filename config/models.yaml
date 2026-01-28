@@ -92,28 +92,62 @@ providers:
     requires_api_key: true
     env_key: "GROQ_API_KEY"
     models:
-      # Llama 4 models (latest, fastest inference)
+      # OpenAI GPT-OSS models (Apache 2.0 license, best quality)
+      - name: "openai/gpt-oss-120b"
+        display_name: "GPT-OSS 120B"
+        context_window: 128000
+      - name: "openai/gpt-oss-20b"
+        display_name: "GPT-OSS 20B"
+        context_window: 128000
+      # Llama 4 models (fastest inference)
       - name: "meta-llama/llama-4-maverick-17b-128e-instruct"
-        display_name: "Llama 4 Maverick (128E)"
+        display_name: "Llama 4 Maverick"
         context_window: 128000
       - name: "meta-llama/llama-4-scout-17b-16e-instruct"
-        display_name: "Llama 4 Scout (16E)"
+        display_name: "Llama 4 Scout"
         context_window: 128000
-      # Llama 3 models
+      # Llama 3.3 70B (high quality)
       - name: "llama-3.3-70b-versatile"
         display_name: "Llama 3.3 70B"
         context_window: 128000
-      - name: "llama-3.1-8b-instant"
-        display_name: "Llama 3.1 8B Instant"
-        context_window: 128000
-      # Other models
-      - name: "mixtral-8x7b-32768"
-        display_name: "Mixtral 8x7B"
-        context_window: 32768
-      - name: "gemma2-9b-it"
-        display_name: "Gemma 2 9B"
-        context_window: 8192
 
 # Default model to select on startup (optional)
 default_model: "gpt-4.1"
 default_provider: "openai"
+
+# ============================================
+# Reranker Models
+# ============================================
+# Local models always available, Groq models available if groq provider is enabled above
+rerankers:
+  default: "base"
+
+  # Local cross-encoder models (always available)
+  local:
+    - id: "xsmall"
+      name: "XSmall"
+      description: "Fastest (~22s CPU)"
+    - id: "base"
+      name: "Base"
+      description: "Balanced (~30s CPU)"
+    - id: "large"
+      name: "Large"
+      description: "Best local (~60s CPU)"
+
+  # Groq rerankers (uses groq provider config above)
+  groq:
+    - id: "groq:gpt-oss"
+      name: "GPT-OSS 120B"
+      description: "Best accuracy (~600ms)"
+    - id: "groq:gpt-oss-20b"
+      name: "GPT-OSS 20B"
+      description: "Fast GPT-OSS (~400ms)"
+    - id: "groq:scout"
+      name: "Llama 4 Scout"
+      description: "Fast (~300ms)"
+    - id: "groq:maverick"
+      name: "Llama 4 Maverick"
+      description: "Better (~400ms)"
+    - id: "groq:llama70b"
+      name: "Llama 3.3 70B"
+      description: "High quality (~600ms)"

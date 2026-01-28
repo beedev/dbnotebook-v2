@@ -338,7 +338,7 @@ export interface SQLChatContextActions {
 // SQL Query Settings (per-request tuning)
 export interface SQLQuerySettings {
   rerankerEnabled?: boolean;
-  rerankerModel?: 'xsmall' | 'base' | 'large';
+  rerankerModel?: string;  // Supports local (xsmall, base, large) and groq:* models
   topK?: number;
   hybridEnabled?: boolean;
 }

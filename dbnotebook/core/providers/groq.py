@@ -1,10 +1,14 @@
 """Groq LLM provider implementation.
 
 Groq provides ultra-fast inference using their LPU (Language Processing Unit).
-Supports Llama 4, Llama 3.x, Mixtral, and other models.
+Supports Llama 4, Llama 3.x, Mixtral, GPT-OSS, and other models.
 
-Speed: 300-800 tokens/second (vs ~50 for OpenAI)
+Speed: 300-1000+ tokens/second (vs ~50 for OpenAI)
 Cost: ~10x cheaper than OpenAI
+
+GPT-OSS Models (Apache 2.0 licensed):
+- openai/gpt-oss-120b: 500+ t/s, $0.15 in / $0.75 out per 1M tokens
+- openai/gpt-oss-20b: 1000+ t/s, $0.05 in / $0.15 out per 1M tokens
 
 Rate Limiting: Implements exponential backoff for handling HTTP 429 errors.
 """
@@ -55,6 +59,9 @@ class GroqLLMProvider(LLMProvider):
         "llama-3.1-8b-instant",
         "llama-3.2-1b-preview",
         "llama-3.2-3b-preview",
+        # OpenAI GPT-OSS models (Apache 2.0 licensed)
+        "openai/gpt-oss-120b",
+        "openai/gpt-oss-20b",
         # Mixtral
         "mixtral-8x7b-32768",
         # Gemma
@@ -70,6 +77,10 @@ class GroqLLMProvider(LLMProvider):
         "llama3-70b": "llama-3.3-70b-versatile",
         "llama3-8b": "llama-3.1-8b-instant",
         "mixtral": "mixtral-8x7b-32768",
+        # GPT-OSS models (Apache 2.0 licensed - open source)
+        "gpt-oss": "openai/gpt-oss-120b",
+        "gpt-oss-120b": "openai/gpt-oss-120b",
+        "gpt-oss-20b": "openai/gpt-oss-20b",
     }
 
     def __init__(
@@ -158,6 +169,8 @@ class GroqLLMProvider(LLMProvider):
             "llama-3.3-70b-versatile": 131072,
             "llama-3.3-70b-specdec": 131072,
             "llama-3.1-8b-instant": 131072,
+            "openai/gpt-oss-120b": 131072,
+            "openai/gpt-oss-20b": 131072,
             "mixtral-8x7b-32768": 32768,
             "gemma2-9b-it": 8192,
         }
@@ -189,6 +202,8 @@ class GroqLLMProvider(LLMProvider):
             "meta-llama/llama-4-maverick-17b-128e-instruct": {"input": 0.20, "output": 0.60},
             "llama-3.3-70b-versatile": {"input": 0.59, "output": 0.79},
             "llama-3.1-8b-instant": {"input": 0.05, "output": 0.08},
+            "openai/gpt-oss-120b": {"input": 0.15, "output": 0.75},
+            "openai/gpt-oss-20b": {"input": 0.05, "output": 0.15},
             "mixtral-8x7b-32768": {"input": 0.24, "output": 0.24},
         }
         return pricing.get(self._model, {"input": 0.20, "output": 0.60})
@@ -200,6 +215,8 @@ class GroqLLMProvider(LLMProvider):
             "meta-llama/llama-4-maverick-17b-128e-instruct": "~600 tok/s",
             "llama-3.3-70b-versatile": "~250 tok/s",
             "llama-3.1-8b-instant": "~1000 tok/s",
+            "openai/gpt-oss-120b": "~500 tok/s",
+            "openai/gpt-oss-20b": "~1000 tok/s",
             "mixtral-8x7b-32768": "~400 tok/s",
         }
         return speeds.get(self._model, "~500 tok/s")

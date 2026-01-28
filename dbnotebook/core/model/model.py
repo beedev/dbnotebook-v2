@@ -1,9 +1,11 @@
 import logging
 import os
-from typing import Optional
+from pathlib import Path
+from typing import Optional, Set
 
 import backoff
 import requests
+import yaml
 from llama_index.llms.ollama import Ollama
 from llama_index.llms.openai import OpenAI
 from dotenv import load_dotenv
@@ -13,6 +15,61 @@ from ...setting import get_settings, RAGSettings
 load_dotenv()
 
 logger = logging.getLogger(__name__)
+
+
+def _load_models_from_yaml() -> dict[str, Set[str]]:
+    """Load model sets from config/models.yaml.
+
+    Returns:
+        Dictionary mapping provider names to sets of model names.
+    """
+    # Find config/models.yaml relative to project root
+    config_path = Path(__file__).parent.parent.parent.parent / "config" / "models.yaml"
+
+    model_sets = {
+        "openai": set(),
+        "claude": set(),
+        "gemini": set(),
+        "groq": set(),
+    }
+
+    if not config_path.exists():
+        logger.warning(f"models.yaml not found at {config_path}, using empty model sets")
+        return model_sets
+
+    try:
+        with open(config_path, "r") as f:
+            config = yaml.safe_load(f)
+
+        providers = config.get("providers", {})
+
+        # Map YAML provider names to internal names
+        provider_mapping = {
+            "openai": "openai",
+            "google": "gemini",  # Google/Gemini models
+            "anthropic": "claude",
+            "groq": "groq",
+        }
+
+        for yaml_provider, internal_name in provider_mapping.items():
+            provider_config = providers.get(yaml_provider, {})
+            if provider_config.get("enabled", False):
+                models = provider_config.get("models", [])
+                for model in models:
+                    model_name = model.get("name") if isinstance(model, dict) else model
+                    if model_name:
+                        model_sets[internal_name].add(model_name)
+
+        logger.debug(f"Loaded models from YAML: {model_sets}")
+        return model_sets
+
+    except Exception as e:
+        logger.error(f"Error loading models.yaml: {e}")
+        return model_sets
+
+
+# Load model sets from models.yaml at module initialization
+_MODEL_SETS = _load_models_from_yaml()
 
 
 def _log_groq_backoff(details: dict) -> None:
@@ -121,50 +178,37 @@ class GroqWithBackoff:
 
 
 class LocalRAGModel:
-    """Manages LLM model initialization and caching."""
+    """Manages LLM model initialization and caching.
 
-    OPENAI_MODELS = {
-        # GPT-3.5 and GPT-4 models
-        "gpt-3.5-turbo", "gpt-4", "gpt-4-turbo", "gpt-4o", "gpt-4.1", "gpt-4.1-mini", "gpt-4.1-nano",
-        "gpt-4o-mini", "gpt-4-turbo-preview",
-        "gpt-4-0125-preview", "gpt-4-1106-preview",  # GPT-4 Turbo versions
-        "gpt-4o-2024-11-20", "gpt-4o-2024-08-06",     # GPT-4o versions
-        # GPT-5 models (400K context)
-        "gpt-5", "gpt-5-mini", "gpt-5-nano", "gpt-5-pro",
-        "gpt-5.1", "gpt-5.1-chat-latest",
-        "gpt-5.2", "gpt-5.2-pro",
-        # O-series reasoning models
-        "o1", "o1-mini", "o1-preview",
-        "o3", "o3-mini", "o4-mini"
-    }
-    CLAUDE_MODELS = {
-        "claude-sonnet-4-20250514", "claude-3-5-sonnet-20241022",
-        "claude-3-5-haiku-20241022", "claude-3-opus-20240229"
-    }
-    GEMINI_MODELS = {
-        "gemini-3-pro-preview", "gemini-2.5-pro", "gemini-2.5-flash",
-        "gemini-2.0-flash-exp", "gemini-1.5-pro", "gemini-1.5-flash"
-    }
-    GROQ_MODELS = {
-        # Llama 4 series
-        "meta-llama/llama-4-scout-17b-16e-instruct",
-        "meta-llama/llama-4-maverick-17b-128e-instruct",
-        # Llama 3.x series
-        "llama-3.3-70b-versatile",
-        "llama-3.3-70b-specdec",
-        "llama-3.1-8b-instant",
-        "llama-3.2-1b-preview",
-        "llama-3.2-3b-preview",
-        # Mixtral
-        "mixtral-8x7b-32768",
-        # Gemma
-        "gemma2-9b-it",
-        # Qwen
-        "qwen-qwq-32b",
-    }
+    Model sets are loaded dynamically from config/models.yaml.
+    """
 
-    @staticmethod
+    # Class-level properties that access the dynamically loaded model sets
+    @classmethod
+    def _get_openai_models(cls) -> Set[str]:
+        return _MODEL_SETS.get("openai", set())
+
+    @classmethod
+    def _get_claude_models(cls) -> Set[str]:
+        return _MODEL_SETS.get("claude", set())
+
+    @classmethod
+    def _get_gemini_models(cls) -> Set[str]:
+        return _MODEL_SETS.get("gemini", set())
+
+    @classmethod
+    def _get_groq_models(cls) -> Set[str]:
+        return _MODEL_SETS.get("groq", set())
+
+    # Keep class attributes for backward compatibility (property-like access)
+    OPENAI_MODELS = property(lambda self: _MODEL_SETS.get("openai", set()))
+    CLAUDE_MODELS = property(lambda self: _MODEL_SETS.get("claude", set()))
+    GEMINI_MODELS = property(lambda self: _MODEL_SETS.get("gemini", set()))
+    GROQ_MODELS = property(lambda self: _MODEL_SETS.get("groq", set()))
+
+    @classmethod
     def set(
+        cls,
         model_name: str = "",
         system_prompt: Optional[str] = None,
         host: str = "host.docker.internal",
@@ -185,14 +229,14 @@ class LocalRAGModel:
         setting = setting or get_settings()
         model_name = model_name or setting.ollama.llm
 
-        # Detect provider
-        if model_name in LocalRAGModel.OPENAI_MODELS:
+        # Detect provider using dynamically loaded model sets
+        if model_name in cls._get_openai_models():
             provider = "openai"
-        elif model_name in LocalRAGModel.CLAUDE_MODELS:
+        elif model_name in cls._get_claude_models():
             provider = "claude"
-        elif model_name in LocalRAGModel.GEMINI_MODELS:
+        elif model_name in cls._get_gemini_models():
             provider = "gemini"
-        elif model_name in LocalRAGModel.GROQ_MODELS:
+        elif model_name in cls._get_groq_models():
             provider = "groq"
         else:
             provider = "ollama"
@@ -351,3 +395,28 @@ class LocalRAGModel:
         except requests.RequestException as e:
             logger.warning(f"Error listing models: {e}")
             return []
+
+    @classmethod
+    def reload_models(cls) -> None:
+        """Reload model sets from models.yaml.
+
+        Call this if models.yaml has been modified and you want to
+        pick up the changes without restarting the server.
+        """
+        global _MODEL_SETS
+        _MODEL_SETS = _load_models_from_yaml()
+        logger.info(f"Reloaded models from YAML: {list(_MODEL_SETS.keys())}")
+
+    @classmethod
+    def get_all_known_models(cls) -> dict[str, Set[str]]:
+        """Get all known models by provider.
+
+        Returns:
+            Dictionary mapping provider names to sets of model names.
+        """
+        return {
+            "openai": cls._get_openai_models(),
+            "claude": cls._get_claude_models(),
+            "gemini": cls._get_gemini_models(),
+            "groq": cls._get_groq_models(),
+        }

@@ -2,26 +2,34 @@
  * Retrieval Settings Component
  *
  * Shared settings panel for RAG retrieval configuration:
- * - Reranker: enable/disable and model selection
+ * - Reranker: enable/disable and model selection (local + Groq if enabled)
  * - RAPTOR: enable/disable hierarchical summaries
  * - Top-K: number of results to retrieve
  *
  * Used by both RAG Chat and SQL Chat.
+ * Fetches available reranker models from API based on config/models.yaml
  */
 
-import { useState, useCallback } from 'react';
-import { ChevronDown, ChevronUp, Sliders, Zap, TreePine, Hash } from 'lucide-react';
+import { useState, useCallback, useEffect } from 'react';
+import { ChevronDown, ChevronUp, Sliders, Zap, TreePine, Hash, Cloud } from 'lucide-react';
+
+interface RerankerModel {
+  id: string;
+  name: string;
+  type: 'local' | 'groq' | 'disabled';
+  description: string;
+}
 
 export interface RetrievalConfig {
   rerankerEnabled: boolean;
-  rerankerModel: 'xsmall' | 'base' | 'large';
+  rerankerModel: string;  // Now accepts any model id including groq:*
   raptorEnabled: boolean;
   topK: number;
 }
 
 export const DEFAULT_RETRIEVAL_CONFIG: RetrievalConfig = {
   rerankerEnabled: true,
-  rerankerModel: 'large',
+  rerankerModel: 'base',
   raptorEnabled: true,
   topK: 6,
 };
@@ -34,11 +42,12 @@ interface RetrievalSettingsProps {
   className?: string;
 }
 
-const RERANKER_MODELS = [
-  { value: 'xsmall', label: 'XSmall', description: 'Fastest, basic accuracy' },
-  { value: 'base', label: 'Base', description: 'Balanced speed/accuracy' },
-  { value: 'large', label: 'Large', description: 'Best accuracy, slower' },
-] as const;
+// Fallback models if API fails
+const FALLBACK_MODELS: RerankerModel[] = [
+  { id: 'xsmall', name: 'XSmall', type: 'local', description: 'Fastest' },
+  { id: 'base', name: 'Base', type: 'local', description: 'Balanced' },
+  { id: 'large', name: 'Large', type: 'local', description: 'Best local' },
+];
 
 export function RetrievalSettings({
   config,
@@ -48,17 +57,42 @@ export function RetrievalSettings({
   className = '',
 }: RetrievalSettingsProps) {
   const [isExpanded, setIsExpanded] = useState(false);
+  const [availableModels, setAvailableModels] = useState<RerankerModel[]>(FALLBACK_MODELS);
+
+  // Fetch available models from API on mount
+  useEffect(() => {
+    fetch('/api/settings/reranker')
+      .then(res => res.json())
+      .then(data => {
+        if (data.success && data.available_models) {
+          // Filter out 'disabled' type for the model list (we handle disable via toggle)
+          const models = data.available_models.filter(
+            (m: RerankerModel) => m.type !== 'disabled'
+          );
+          if (models.length > 0) {
+            setAvailableModels(models);
+          }
+        }
+      })
+      .catch(err => {
+        console.warn('Failed to fetch reranker models:', err);
+      });
+  }, []);
 
   const handleRerankerToggle = useCallback(() => {
     onChange({ ...config, rerankerEnabled: !config.rerankerEnabled });
   }, [config, onChange]);
 
   const handleRerankerModelChange = useCallback(
-    (model: RetrievalConfig['rerankerModel']) => {
+    (model: string) => {
       onChange({ ...config, rerankerModel: model });
     },
     [config, onChange]
   );
+
+  // Group models by type for display
+  const localModels = availableModels.filter(m => m.type === 'local');
+  const groqModels = availableModels.filter(m => m.type === 'groq');
 
   const handleRaptorToggle = useCallback(() => {
     onChange({ ...config, raptorEnabled: !config.raptorEnabled });
@@ -130,24 +164,56 @@ export function RetrievalSettings({
         </div>
 
         {config.rerankerEnabled && (
-          <div className="flex gap-1 p-1 bg-void-surface/50 rounded-lg">
-            {RERANKER_MODELS.map((model) => (
-              <button
-                key={model.value}
-                onClick={() => handleRerankerModelChange(model.value)}
-                title={model.description}
-                className={`
-                  flex-1 py-1.5 px-2 text-xs font-medium rounded-md transition-all
-                  ${
-                    config.rerankerModel === model.value
-                      ? 'bg-glow text-void shadow-sm'
-                      : 'text-text-muted hover:text-text hover:bg-void-lighter'
-                  }
-                `}
-              >
-                {model.label}
-              </button>
-            ))}
+          <div className="space-y-2">
+            {/* Local Models */}
+            <div className="flex gap-1 p-1 bg-void-surface/50 rounded-lg">
+              {localModels.map((model) => (
+                <button
+                  key={model.id}
+                  onClick={() => handleRerankerModelChange(model.id)}
+                  title={model.description}
+                  className={`
+                    flex-1 py-1.5 px-2 text-xs font-medium rounded-md transition-all
+                    ${
+                      config.rerankerModel === model.id
+                        ? 'bg-glow text-void shadow-sm'
+                        : 'text-text-muted hover:text-text hover:bg-void-lighter'
+                    }
+                  `}
+                >
+                  {model.name}
+                </button>
+              ))}
+            </div>
+
+            {/* Groq Models (if available) */}
+            {groqModels.length > 0 && (
+              <>
+                <div className="flex items-center gap-2 mt-2">
+                  <Cloud size={12} className="text-cyan-400" />
+                  <span className="text-[10px] text-text-dim">Groq Cloud (faster)</span>
+                </div>
+                <div className="flex gap-1 p-1 bg-void-surface/50 rounded-lg">
+                  {groqModels.map((model) => (
+                    <button
+                      key={model.id}
+                      onClick={() => handleRerankerModelChange(model.id)}
+                      title={model.description}
+                      className={`
+                        flex-1 py-1.5 px-2 text-xs font-medium rounded-md transition-all
+                        ${
+                          config.rerankerModel === model.id
+                            ? 'bg-cyan-500 text-void shadow-sm'
+                            : 'text-text-muted hover:text-text hover:bg-void-lighter'
+                        }
+                      `}
+                    >
+                      {model.name.replace('Groq ', '')}
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
           </div>
         )}
       </div>

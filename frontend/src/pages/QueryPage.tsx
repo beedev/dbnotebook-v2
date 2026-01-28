@@ -81,15 +81,21 @@ interface QueryResponse {
   error?: string;
 }
 
-// Reranker model options
-type RerankerOption = 'default' | 'xsmall' | 'base' | 'large' | 'disabled';
+// Reranker model fetched from API
+interface RerankerModel {
+  id: string;
+  name: string;
+  type: 'local' | 'groq' | 'disabled';
+  description: string;
+}
 
-const RERANKER_OPTIONS: { value: RerankerOption; label: string; description: string }[] = [
-  { value: 'default', label: 'Default', description: 'Use server default' },
-  { value: 'xsmall', label: 'XSmall', description: 'Fastest (~0.5s)' },
-  { value: 'base', label: 'Base', description: 'Balanced (~1.5s)' },
-  { value: 'large', label: 'Large', description: 'Best quality (~4s)' },
-  { value: 'disabled', label: 'Disabled', description: 'No reranking' },
+// Fallback models if API fails
+const FALLBACK_RERANKER_MODELS: RerankerModel[] = [
+  { id: 'default', name: 'Default', type: 'local', description: 'Use server default' },
+  { id: 'xsmall', name: 'XSmall', type: 'local', description: 'Fastest' },
+  { id: 'base', name: 'Base', type: 'local', description: 'Balanced' },
+  { id: 'large', name: 'Large', type: 'local', description: 'Best local' },
+  { id: 'disabled', name: 'Disabled', type: 'disabled', description: 'No reranking' },
 ];
 
 export function QueryPage() {
@@ -110,7 +116,9 @@ export function QueryPage() {
   // Response format: default|analytical|detailed|brief
   const [responseFormat, setResponseFormat] = useState<'default' | 'analytical' | 'detailed' | 'brief'>('default');
   // Reranker model selection
-  const [rerankerModel, setRerankerModel] = useState<RerankerOption>('default');
+  const [rerankerModel, setRerankerModel] = useState<string>('default');
+  // Available reranker models from API
+  const [rerankerModels, setRerankerModels] = useState<RerankerModel[]>(FALLBACK_RERANKER_MODELS);
 
   // Use global model selection from app context (header selector)
   const { selectedModel, selectedProvider } = useApp();
@@ -129,6 +137,26 @@ export function QueryPage() {
   useEffect(() => {
     loadNotebooks();
   }, [apiKey]);
+
+  // Load reranker models from API
+  useEffect(() => {
+    fetch('/api/settings/reranker')
+      .then(res => res.json())
+      .then(data => {
+        if (data.success && data.available_models) {
+          // Add default and disabled options to the fetched models
+          const models: RerankerModel[] = [
+            { id: 'default', name: 'Default', type: 'local', description: 'Use server default' },
+            ...data.available_models.filter((m: RerankerModel) => m.type !== 'disabled'),
+            { id: 'disabled', name: 'Disabled', type: 'disabled', description: 'No reranking' },
+          ];
+          setRerankerModels(models);
+        }
+      })
+      .catch(err => {
+        console.warn('Failed to fetch reranker models:', err);
+      });
+  }, []);
 
   const loadNotebooks = async () => {
     if (!apiKey) {
@@ -294,13 +322,28 @@ export function QueryPage() {
               <Filter className="w-4 h-4 text-glow" />
               <select
                 value={rerankerModel}
-                onChange={(e) => setRerankerModel(e.target.value as RerankerOption)}
+                onChange={(e) => setRerankerModel(e.target.value)}
                 className="bg-transparent text-sm text-text border-none outline-none cursor-pointer"
                 title="Reranker model - controls retrieval quality vs speed"
               >
-                {RERANKER_OPTIONS.map((opt) => (
-                  <option key={opt.value} value={opt.value} className="bg-void-surface text-text">
-                    {opt.label} {opt.value !== 'default' && `(${opt.description})`}
+                {/* Group models by type */}
+                {rerankerModels.filter(m => m.type === 'local' || m.id === 'default').map((opt) => (
+                  <option key={opt.id} value={opt.id} className="bg-void-surface text-text">
+                    {opt.name} {opt.id !== 'default' && `(${opt.description})`}
+                  </option>
+                ))}
+                {rerankerModels.filter(m => m.type === 'groq').length > 0 && (
+                  <optgroup label="Groq Cloud (faster)">
+                    {rerankerModels.filter(m => m.type === 'groq').map((opt) => (
+                      <option key={opt.id} value={opt.id} className="bg-void-surface text-text">
+                        {opt.name} ({opt.description})
+                      </option>
+                    ))}
+                  </optgroup>
+                )}
+                {rerankerModels.filter(m => m.type === 'disabled').map((opt) => (
+                  <option key={opt.id} value={opt.id} className="bg-void-surface text-text">
+                    {opt.name}
                   </option>
                 ))}
               </select>

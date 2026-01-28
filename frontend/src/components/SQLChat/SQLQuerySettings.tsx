@@ -12,7 +12,7 @@ import { ChevronDown, ChevronUp, Settings2, ToggleLeft, ToggleRight } from 'luci
 
 export interface SQLQueryConfig {
   rerankerEnabled: boolean;
-  rerankerModel: 'xsmall' | 'base' | 'large';
+  rerankerModel: string;  // Supports local (xsmall, base, large) and groq:* models
   topK: number;
   hybridEnabled: boolean;
 }

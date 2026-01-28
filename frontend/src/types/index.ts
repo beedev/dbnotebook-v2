@@ -122,7 +122,7 @@ export interface ChatV2Request {
   provider?: string;
   // Retrieval settings (per-request tuning)
   use_reranker?: boolean;
-  reranker_model?: 'xsmall' | 'base' | 'large';
+  reranker_model?: string;  // Supports local (xsmall, base, large) and groq:* models
   use_raptor?: boolean;
   top_k?: number;
 }
