@@ -13,7 +13,7 @@ and Groq LLM-based reranking for fast cloud-based inference.
 ### Groq LLM Reranker
 - Ultra-fast cloud-based reranking (~300ms)
 - Uses Groq's Structured Outputs for reliable JSON scoring
-- Models: groq:scout (recommended), groq:maverick, groq:llama70b, groq:gpt-oss
+- Models: groq:scout (recommended), groq:maverick, groq:llama70b
 
 ## Usage Examples
 
@@ -69,6 +69,7 @@ MODEL_ALIASES = {
 
 # Groq model aliases for LLM-based reranking
 # Use with "groq:" prefix, e.g., "groq:scout"
+# Note: GPT-OSS models are NOT supported for reranking (incompatible with JSON modes)
 GROQ_MODEL_ALIASES = {
     # Llama 4 models (recommended for reranking - fast, cheap)
     "scout": "meta-llama/llama-4-scout-17b-16e-instruct",
@@ -76,18 +77,12 @@ GROQ_MODEL_ALIASES = {
     # Llama 3.x models
     "llama70b": "llama-3.3-70b-versatile",
     "llama8b": "llama-3.1-8b-instant",
-    # OpenAI GPT-OSS models (maximum accuracy, higher cost)
-    "gpt-oss": "openai/gpt-oss-120b",
-    "gpt-oss-120b": "openai/gpt-oss-120b",
-    "gpt-oss-20b": "openai/gpt-oss-20b",
 }
 
 # Models that support Groq's Structured Outputs (json_schema mode)
 GROQ_STRUCTURED_OUTPUT_MODELS = {
     "meta-llama/llama-4-scout-17b-16e-instruct",
     "meta-llama/llama-4-maverick-17b-128e-instruct",
-    "openai/gpt-oss-120b",
-    "openai/gpt-oss-20b",
 }
 
 
@@ -222,14 +217,14 @@ class GroqReranker:
     - groq:scout: ~300ms, $0.0001/query (recommended)
     - groq:maverick: ~400ms, $0.0002/query
     - groq:llama70b: ~600ms, $0.0004/query
-    - groq:gpt-oss: ~600ms, $0.001/query (best accuracy)
+    - groq:llama70b: ~600ms (high quality)
     """
 
     def __init__(self, model: str = "scout", top_n: int = 10):
         """Initialize Groq reranker.
 
         Args:
-            model: Groq model alias (scout, maverick, llama70b, gpt-oss) or full ID
+            model: Groq model alias (scout, maverick, llama70b) or full ID
             top_n: Number of top results to return after reranking
         """
         self._model_alias = model
@@ -456,7 +451,7 @@ def get_shared_reranker(
     - Local aliases: "base", "large", "xsmall", "disabled"
     - Local paths: "models/rerankers/mxbai-rerank-base-v1"
     - HuggingFace IDs: "mixedbread-ai/mxbai-rerank-base-v1"
-    - Groq models: "groq:scout", "groq:maverick", "groq:llama70b", "groq:gpt-oss"
+    - Groq models: "groq:scout", "groq:maverick", "groq:llama70b"
 
     Environment variables:
     - RERANKER_MODEL: Default model (overrides parameter default)
@@ -560,7 +555,7 @@ def set_reranker_config(
     Args:
         model: Reranker model name. If None, keeps current model.
                Local options: "xsmall", "base", "large", "disabled"
-               Groq options: "groq:scout", "groq:maverick", "groq:llama70b", "groq:gpt-oss"
+               Groq options: "groq:scout", "groq:maverick", "groq:llama70b"
         enabled: Whether reranking is enabled. If False, get_shared_reranker returns None.
         top_n: Default top_n for reranking. If None, keeps current value.
 

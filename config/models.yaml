@@ -135,13 +135,8 @@ rerankers:
       description: "Best local (~60s CPU)"
 
   # Groq rerankers (uses groq provider config above)
+  # Note: GPT-OSS models are NOT supported for reranking (incompatible with JSON modes)
   groq:
-    - id: "groq:gpt-oss"
-      name: "GPT-OSS 120B"
-      description: "Best accuracy (~600ms)"
-    - id: "groq:gpt-oss-20b"
-      name: "GPT-OSS 20B"
-      description: "Fast GPT-OSS (~400ms)"
     - id: "groq:scout"
       name: "Llama 4 Scout"
       description: "Fast (~300ms)"
