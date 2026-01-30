@@ -143,16 +143,13 @@ start_app() {
     # Run migrations
     run_migrations
 
-    # Start Flask with threading
+    # Start Flask server using the same entry point as dev.sh and Docker
     print_status "Starting Flask server on port $APP_PORT..."
 
     nohup env PYTHONPATH="$SCRIPT_DIR" \
-        python3 -m flask \
-        --app "dbnotebook.ui.web:create_app()" \
-        run \
+        python3 -m dbnotebook \
         --host 0.0.0.0 \
         --port "$APP_PORT" \
-        --with-threads \
         >> "$LOG_FILE" 2>> "$ERROR_LOG" &
 
     PID=$!
