@@ -240,12 +240,12 @@ def create_web_content_routes(app, web_ingestion: WebContentIngestion, pipeline)
             {
                 "success": true,
                 "search": {
-                    "name": "firecrawl",
+                    "name": "tavily",
                     "available": true,
                     ...
                 },
                 "scraper": {
-                    "name": "jina_reader",
+                    "name": "tavily",
                     "available": true,
                     ...
                 }

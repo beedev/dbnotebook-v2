@@ -116,12 +116,24 @@ start_local() {
         export POSTGRES_HOST="${POSTGRES_HOST//host.docker.internal/localhost}"
     fi
 
-    # Activate venv
+    # Activate venv and sync dependencies
     if [ -d "venv" ]; then
         source venv/bin/activate
+        print_status "Syncing Python dependencies..."
+        python3 -m pip install -q -r requirements.txt
     else
         print_error "Virtual environment not found. Run: python3 -m venv venv && pip install -r requirements.txt"
         exit 1
+    fi
+
+    # Build frontend
+    if [ -d "frontend" ]; then
+        print_status "Building frontend..."
+        cd frontend
+        npm install --silent
+        npm run build
+        cd "$SCRIPT_DIR"
+        print_success "Frontend built"
     fi
 
     # Run migrations

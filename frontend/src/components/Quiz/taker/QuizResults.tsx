@@ -1,5 +1,7 @@
-import { Trophy, XCircle, CheckCircle, RotateCcw, X, Code } from 'lucide-react';
+import { Trophy, XCircle, CheckCircle, RotateCcw, X, Code, ChevronDown, ChevronUp } from 'lucide-react';
+import { useState } from 'react';
 import type { QuizAttempt, AnswerRecord, QuestionType } from '../../../types/quiz';
+import { ImprovementSuggestions } from './ImprovementSuggestions';
 
 // Helper functions for code snippets
 function detectLanguage(codeBlock: string): string {
@@ -23,13 +25,19 @@ function formatQuestionType(type: QuestionType): string {
 
 interface QuizResultsProps {
   attempt: QuizAttempt;
+  attemptId?: string;  // For fetching improvement suggestions
   onRetry?: () => void;
   onClose?: () => void;
 }
 
-export function QuizResults({ attempt, onRetry, onClose }: QuizResultsProps) {
+export function QuizResults({ attempt, attemptId, onRetry, onClose }: QuizResultsProps) {
   const isPassed = attempt.passed;
   const percentage = attempt.percentage;
+  const [showAnswers, setShowAnswers] = useState(false);
+
+  // Show suggestions if there are wrong answers
+  const hasWrongAnswers = attempt.answers?.some(a => !a.correct) ?? false;
+  const effectiveAttemptId = attemptId || attempt.id;
 
   return (
     <div className="min-h-screen bg-void flex items-center justify-center p-4">
@@ -84,15 +92,39 @@ export function QuizResults({ attempt, onRetry, onClose }: QuizResultsProps) {
             </div>
           </div>
 
-          {/* Answer Breakdown */}
+          {/* Improvement Suggestions */}
+          {hasWrongAnswers && effectiveAttemptId && (
+            <div className="mb-8">
+              <ImprovementSuggestions attemptId={effectiveAttemptId} />
+            </div>
+          )}
+
+          {/* Answer Breakdown - Collapsible */}
           {attempt.answers && attempt.answers.length > 0 && (
             <div className="mb-8">
-              <h2 className="text-lg font-medium text-text mb-4">Answer Breakdown</h2>
-              <div className="space-y-3">
-                {attempt.answers.map((answer, index) => (
-                  <AnswerRow key={index} answer={answer} questionNum={index + 1} />
-                ))}
-              </div>
+              <button
+                onClick={() => setShowAnswers(!showAnswers)}
+                className="w-full flex items-center justify-between px-4 py-3 bg-void rounded-xl border border-void-lighter hover:bg-void-lighter transition-colors"
+              >
+                <h2 className="text-lg font-medium text-text">Answer Breakdown</h2>
+                <div className="flex items-center gap-2 text-text-muted">
+                  <span className="text-sm">
+                    {attempt.score}/{attempt.total} correct
+                  </span>
+                  {showAnswers ? (
+                    <ChevronUp className="w-5 h-5" />
+                  ) : (
+                    <ChevronDown className="w-5 h-5" />
+                  )}
+                </div>
+              </button>
+              {showAnswers && (
+                <div className="mt-3 space-y-3">
+                  {attempt.answers.map((answer, index) => (
+                    <AnswerRow key={index} answer={answer} questionNum={index + 1} />
+                  ))}
+                </div>
+              )}
             </div>
           )}
 

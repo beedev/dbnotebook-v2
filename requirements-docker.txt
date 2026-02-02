@@ -41,7 +41,6 @@ einops==0.7.0
 fastapi==0.127.0
 filelock==3.20.1
 filetype==1.2.0
-firecrawl-py==1.17.0
 Flask==3.1.2
 flatbuffers==25.12.19
 frozenlist==1.8.0
@@ -202,3 +201,4 @@ Werkzeug==3.1.4
 wrapt==1.17.3
 yarl==1.22.0
 zipp==3.23.0
+tavily-python>=0.5.0

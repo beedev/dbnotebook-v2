@@ -148,7 +148,7 @@ export function Sidebar({
                   <div className="space-y-3">
                     <p className="text-sm text-text-dim">No documents yet</p>
                     <button
-                      onClick={() => navigate(`/notebook/${selectedNotebook.id}/documents`)}
+                      onClick={() => navigate('/documents')}
                       className="flex items-center gap-2 text-sm text-glow hover:underline"
                     >
                       <ExternalLink className="w-4 h-4" />
@@ -180,7 +180,7 @@ export function Sidebar({
                     </div>
                     {/* Manage link */}
                     <button
-                      onClick={() => navigate(`/notebook/${selectedNotebook.id}/documents`)}
+                      onClick={() => navigate('/documents')}
                       className="flex items-center gap-2 text-sm text-glow hover:underline"
                     >
                       <ExternalLink className="w-4 h-4" />

@@ -8,8 +8,7 @@ from .huggingface import HuggingFaceEmbeddingProvider
 from .gemini_image import GeminiImageProvider
 from .gemini_vision import GeminiVisionProvider
 from .openai_vision import OpenAIVisionProvider
-from .firecrawl import FirecrawlSearchProvider
-from .jina_reader import JinaReaderProvider
+from .tavily import TavilyProvider
 
 __all__ = [
     "OllamaLLMProvider",
@@ -20,6 +19,5 @@ __all__ = [
     "GeminiImageProvider",
     "GeminiVisionProvider",
     "OpenAIVisionProvider",
-    "FirecrawlSearchProvider",
-    "JinaReaderProvider",
+    "TavilyProvider",
 ]

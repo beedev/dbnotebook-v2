@@ -67,35 +67,25 @@ The system:
 
 ---
 
-## Providers
+## Provider
 
-### Firecrawl (Search)
+### Tavily (Search & Scraping)
 
-Used for web searching:
+Tavily provides AI-optimized web search and content extraction:
 
 ```bash
-FIRECRAWL_API_KEY=your_key_here
+TAVILY_API_KEY=your_key_here
 ```
+
+Get your API key at [https://tavily.com/](https://tavily.com/)
 
 Features:
 
-- Web search with relevance scoring
-- Clean content extraction
-- Rate-limited API
-
-### Jina Reader (Scraping)
-
-Used for page content extraction:
-
-```bash
-JINA_API_KEY=your_key_here  # Optional - higher rate limits
-```
-
-Features:
-
-- Clean HTML-to-text conversion
-- Handles JavaScript-rendered pages
-- Removes boilerplate content
+- AI-optimized search results designed for LLM/RAG applications
+- Clean content extraction with markdown formatting
+- Fast response times
+- Built-in answer generation (optional)
+- Domain filtering (include/exclude specific sites)
 
 ---
 
@@ -175,15 +165,15 @@ curl http://localhost:7860/api/web/providers \
 
 ### "Search failed"
 
-- Check Firecrawl API key is set
-- Verify API quota not exceeded
+- Check TAVILY_API_KEY is set in your .env file
+- Verify API quota not exceeded at [tavily.com](https://tavily.com/)
 - Try a simpler search query
 
 ### "Scrape failed"
 
 - Site may block scraping
-- Try with Jina API key for better success
 - Some sites require authentication
+- Try a different URL or source
 
 ### "Content is empty/garbled"
 

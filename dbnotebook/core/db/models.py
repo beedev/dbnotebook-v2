@@ -22,7 +22,7 @@ RBAC (Role-Based Access Control):
 """
 
 from sqlalchemy import Column, String, Integer, Text, TIMESTAMP, ForeignKey, BigInteger, Index, TypeDecorator, Boolean
-from sqlalchemy.orm import relationship, declarative_base
+from sqlalchemy.orm import relationship, declarative_base, backref
 from sqlalchemy.dialects.postgresql import UUID as PostgreSQL_UUID, JSONB
 import uuid
 from datetime import datetime
@@ -558,9 +558,9 @@ class Quiz(Base):
     question_source = Column(String(20), default='notebook_only', nullable=False)  # notebook_only|extended
     include_code_questions = Column(Boolean, default=False, nullable=False)  # Enable code-based questions
 
-    # Relationships
-    notebook = relationship("Notebook", backref="quizzes")
-    creator = relationship("User", backref="created_quizzes")
+    # Relationships - passive_deletes=True lets database CASCADE handle deletion
+    notebook = relationship("Notebook", backref=backref("quizzes", passive_deletes=True))
+    creator = relationship("User", backref=backref("created_quizzes", passive_deletes=True))
     attempts = relationship("QuizAttempt", back_populates="quiz", cascade="all, delete-orphan")
 
     def __repr__(self):

@@ -191,6 +191,108 @@ export interface AttemptStatusResponse {
   results?: QuizResults;
 }
 
+// === Improvement Suggestions ===
+
+/**
+ * LLM-generated suggestion for extended quizzes
+ */
+export interface LLMSuggestion {
+  title: string;
+  description: string;
+  priority: 'high' | 'medium' | 'low';
+  topics: string[];
+}
+
+/**
+ * Study resource recommendation
+ */
+export interface StudyResource {
+  type: 'concept' | 'practice' | 'reference';
+  title: string;
+  description: string;
+}
+
+/**
+ * Document section for notebook_only quizzes
+ */
+export interface DocumentSection {
+  topic: string;
+  source_id: string;
+  filename: string;
+  preview: string;
+  relevance_score: number;
+}
+
+/**
+ * Topic with related document sections
+ */
+export interface TopicSections {
+  topic: string;
+  documents: DocumentSection[];
+}
+
+/**
+ * Base improvement suggestions response
+ */
+export interface BaseImprovementSuggestions {
+  type: 'llm_generated' | 'document_linked' | 'perfect_score';
+  wrong_count?: number;
+  message?: string;
+  summary?: string;
+  weak_areas?: string[];
+}
+
+/**
+ * LLM-generated suggestions response (for extended quizzes)
+ */
+export interface LLMImprovementSuggestions extends BaseImprovementSuggestions {
+  type: 'llm_generated';
+  total_topics?: string[];
+  suggestions: LLMSuggestion[];
+  resources: StudyResource[];
+}
+
+/**
+ * Document-linked suggestions response (for notebook_only quizzes)
+ */
+export interface DocumentImprovementSuggestions extends BaseImprovementSuggestions {
+  type: 'document_linked';
+  sections: TopicSections[];
+  total_sections?: number;
+}
+
+/**
+ * Perfect score response (no suggestions needed)
+ */
+export interface PerfectScoreSuggestions extends BaseImprovementSuggestions {
+  type: 'perfect_score';
+  message: string;
+  suggestions: never[];
+}
+
+/**
+ * Union type for all suggestion responses
+ */
+export type ImprovementSuggestions =
+  | LLMImprovementSuggestions
+  | DocumentImprovementSuggestions
+  | PerfectScoreSuggestions;
+
+/**
+ * API response for improvement suggestions
+ */
+export interface ImprovementSuggestionsResponse extends QuizApiResponse {
+  type?: 'llm_generated' | 'document_linked' | 'perfect_score';
+  wrong_count?: number;
+  message?: string;
+  summary?: string;
+  weak_areas?: string[];
+  suggestions?: LLMSuggestion[];
+  resources?: StudyResource[];
+  sections?: TopicSections[];
+  total_sections?: number;
+}
+
 // === Request types ===
 
 export interface CreateQuizRequest {

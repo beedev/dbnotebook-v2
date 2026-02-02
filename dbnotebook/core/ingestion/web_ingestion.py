@@ -2,6 +2,7 @@
 
 import logging
 import hashlib
+import os
 import re
 from typing import List, Dict, Any, Optional
 from datetime import datetime
@@ -11,8 +12,7 @@ from llama_index.core.schema import BaseNode
 from llama_index.core.node_parser import SentenceSplitter
 
 from ..interfaces.web_content import WebSearchProvider, WebScraperProvider, WebSearchResult, ScrapedContent
-from ..providers.firecrawl import FirecrawlSearchProvider
-from ..providers.jina_reader import JinaReaderProvider
+from ..providers.tavily import TavilyProvider
 from ..notebook import NotebookManager
 from ...setting import get_settings, RAGSettings
 
@@ -61,19 +61,33 @@ class WebContentIngestion:
         logger.info("WebContentIngestion initialized")
 
     def _get_search_provider(self) -> WebSearchProvider:
-        """Get or create search provider (lazy initialization)."""
+        """Get or create search provider (lazy initialization).
+
+        Uses Tavily for AI-optimized web search.
+        """
         if self._search_provider is None:
-            try:
-                self._search_provider = FirecrawlSearchProvider(setting=self._setting)
-            except ValueError as e:
-                logger.error(f"Failed to initialize Firecrawl: {e}")
-                raise RuntimeError("Search provider not available. Set FIRECRAWL_API_KEY.") from e
+            if not os.getenv("TAVILY_API_KEY"):
+                raise RuntimeError(
+                    "TAVILY_API_KEY environment variable required for web search. "
+                    "Get your API key at https://tavily.com"
+                )
+            self._search_provider = TavilyProvider()
+            logger.info("Using Tavily for web search")
         return self._search_provider
 
     def _get_scraper_provider(self) -> WebScraperProvider:
-        """Get or create scraper provider (lazy initialization)."""
+        """Get or create scraper provider (lazy initialization).
+
+        Uses Tavily for AI-optimized content extraction.
+        """
         if self._scraper_provider is None:
-            self._scraper_provider = JinaReaderProvider(setting=self._setting)
+            if not os.getenv("TAVILY_API_KEY"):
+                raise RuntimeError(
+                    "TAVILY_API_KEY environment variable required for web scraping. "
+                    "Get your API key at https://tavily.com"
+                )
+            self._scraper_provider = TavilyProvider()
+            logger.info("Using Tavily for web scraping")
         return self._scraper_provider
 
     def search(

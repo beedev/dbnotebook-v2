@@ -18,6 +18,7 @@ function QuizTakeContent() {
   const {
     phase,
     quizInfo,
+    attemptId,
     currentQuestion,
     questionNum,
     totalQuestions,
@@ -129,6 +130,7 @@ function QuizTakeContent() {
     return (
       <QuizResults
         attempt={attempt}
+        attemptId={attemptId || undefined}
         onRetry={resetQuiz}
         onClose={() => window.close()}
       />

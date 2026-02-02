@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import React, { useState } from 'react';
 import { Loader2, Code } from 'lucide-react';
 import type { DifficultyLevel, QuestionType } from '../../../types/quiz';
 import { QuizTimer } from './QuizTimer';
@@ -35,6 +35,51 @@ function formatQuestionType(type: QuestionType): string {
     'code_bug_fix': 'Bug Identification'
   };
   return labels[type] || 'Code Question';
+}
+
+// Render question text with inline code blocks properly formatted
+function renderQuestionWithCode(text: string): React.ReactNode {
+  // Split by code blocks (```language\ncode```)
+  const codeBlockRegex = /```(\w*)\n?([\s\S]*?)```/g;
+  const parts: React.ReactNode[] = [];
+  let lastIndex = 0;
+  let match;
+  let key = 0;
+
+  while ((match = codeBlockRegex.exec(text)) !== null) {
+    // Add text before code block
+    if (match.index > lastIndex) {
+      parts.push(
+        <span key={key++}>{text.slice(lastIndex, match.index)}</span>
+      );
+    }
+
+    // Add formatted code block
+    const language = match[1] || 'plaintext';
+    const code = match[2].trim();
+    parts.push(
+      <div key={key++} className="my-4 rounded-xl bg-gray-900 border border-void-lighter overflow-hidden">
+        <div className="flex items-center px-4 py-2 bg-gray-800/50 border-b border-void-lighter">
+          <span className="text-xs text-text-muted font-mono">{language}</span>
+        </div>
+        <pre className="p-4 overflow-x-auto">
+          <code className="text-sm font-mono text-gray-300 whitespace-pre">
+            {code}
+          </code>
+        </pre>
+      </div>
+    );
+
+    lastIndex = match.index + match[0].length;
+  }
+
+  // Add remaining text after last code block
+  if (lastIndex < text.length) {
+    parts.push(<span key={key++}>{text.slice(lastIndex)}</span>);
+  }
+
+  // If no code blocks found, return original text
+  return parts.length > 0 ? parts : text;
 }
 
 const optionLabels = ['A', 'B', 'C', 'D'] as const;
@@ -117,9 +162,9 @@ export function QuizQuestion({
           </div>
 
           {/* Question */}
-          <h2 className="text-xl md:text-2xl font-medium text-text mb-6 leading-relaxed">
-            {question}
-          </h2>
+          <div className="text-xl md:text-2xl font-medium text-text mb-6 leading-relaxed">
+            {renderQuestionWithCode(question)}
+          </div>
 
           {/* Code Snippet (if present) */}
           {isCodeQuestion && extractedCode && (

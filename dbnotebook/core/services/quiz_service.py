@@ -62,11 +62,12 @@ CONTENT:
 
 Generate a NEW, UNIQUE question in this EXACT JSON format (no markdown, just pure JSON):
 {{
-  "question": "The question text",
+  "question": "The question text (do NOT include code here - use code_snippet instead)",
   "options": ["Option A text", "Option B text", "Option C text", "Option D text"],
   "correct_answer": "A",
   "explanation": "Brief explanation of why this is correct and why others are wrong",
-  "topic": "Short topic/concept this question tests (2-4 words)"
+  "topic": "Short topic/concept this question tests (2-4 words)",
+  "code_snippet": "```language\\ncode here\\n```"
 }}
 
 Requirements:
@@ -79,6 +80,8 @@ Requirements:
 - Topic should be a brief descriptor for tracking purposes
 - MUST be different from all previous questions listed above
 - DO NOT use phrases like "According to the text", "Based on the passage", "The text states" - ask DIRECT questions
+- CODE FORMATTING: If the question involves code, put the code in "code_snippet" field with markdown code blocks (```language), NOT in the question text
+- If no code is needed, omit the code_snippet field entirely
 - RESPOND ONLY WITH THE JSON, NO MARKDOWN FORMATTING"""
 
 
@@ -109,11 +112,12 @@ CONTENT FROM NOTEBOOK (for context):
 Generate a NEW, UNIQUE question in this EXACT JSON format (no markdown, just pure JSON):
 {{
   "type": "multiple_choice",
-  "question": "The question text",
+  "question": "The question text (do NOT include code here - use code_snippet instead)",
   "options": ["Option A text", "Option B text", "Option C text", "Option D text"],
   "correct_answer": "A",
   "explanation": "Brief explanation of why this is correct and why others are wrong",
-  "topic": "Short topic/concept this question tests (2-4 words)"
+  "topic": "Short topic/concept this question tests (2-4 words)",
+  "code_snippet": "```language\\ncode here\\n```"
 }}
 
 Requirements:
@@ -124,6 +128,8 @@ Requirements:
 - Question can test related knowledge beyond what's explicitly in the content
 - Explanation should be educational (2-3 sentences)
 - MUST be different from all previous questions
+- CODE FORMATTING: If the question involves code, put the code in "code_snippet" field with markdown code blocks (```language), NOT in the question text
+- If no code is needed, omit the code_snippet field entirely
 - RESPOND ONLY WITH THE JSON, NO MARKDOWN FORMATTING"""
 
 
@@ -1165,4 +1171,354 @@ class QuizService(BaseService):
             'correct_answer': 'A',
             'explanation': 'Most educational content covers multiple related topics to provide comprehensive understanding.',
             'topic': 'General Understanding'
+        }
+
+    # === Improvement Suggestions ===
+
+    def generate_improvement_suggestions(
+        self,
+        attempt_id: str
+    ) -> Dict[str, Any]:
+        """Generate improvement suggestions based on quiz attempt results.
+
+        For 'extended' quizzes: Uses LLM to generate personalized study recommendations.
+        For 'notebook_only' quizzes: Links to specific document sections for review.
+
+        Args:
+            attempt_id: UUID of the completed quiz attempt
+
+        Returns:
+            Dictionary with suggestions based on question_source type
+        """
+        self._validate_database_available()
+
+        with self.db_manager.get_session() as session:
+            # Get attempt
+            attempt = session.execute(
+                select(QuizAttempt).where(QuizAttempt.id == attempt_id)
+            ).scalar_one_or_none()
+
+            if not attempt:
+                raise ValueError(f"Attempt {attempt_id} not found")
+
+            if attempt.completed_at is None:
+                raise ValueError("Quiz attempt not yet completed")
+
+            # Get quiz for settings
+            quiz = session.execute(
+                select(Quiz).where(Quiz.id == attempt.quiz_id)
+            ).scalar_one_or_none()
+
+            if not quiz:
+                raise ValueError("Quiz not found")
+
+            # Get wrong answers
+            answers = attempt.answers_json or []
+            wrong_answers = [a for a in answers if not a.get('correct', True)]
+
+            if not wrong_answers:
+                return {
+                    'type': 'perfect_score',
+                    'message': 'Congratulations! You answered all questions correctly.',
+                    'suggestions': []
+                }
+
+            # Generate suggestions based on question_source
+            if quiz.question_source == 'extended':
+                return self._generate_llm_suggestions(
+                    wrong_answers,
+                    quiz.llm_model,
+                    str(quiz.notebook_id),
+                    str(quiz.user_id)
+                )
+            else:  # notebook_only
+                return self._generate_document_suggestions(
+                    wrong_answers,
+                    str(quiz.notebook_id)
+                )
+
+    def _generate_llm_suggestions(
+        self,
+        wrong_answers: List[Dict[str, Any]],
+        llm_model: Optional[str],
+        notebook_id: str,
+        user_id: str
+    ) -> Dict[str, Any]:
+        """Generate LLM-powered improvement suggestions for extended quizzes.
+
+        Args:
+            wrong_answers: List of incorrectly answered questions
+            llm_model: Optional LLM model to use
+            notebook_id: For logging purposes
+            user_id: For logging purposes
+
+        Returns:
+            Dictionary with LLM-generated suggestions
+        """
+        # Build context from wrong answers
+        wrong_topics = []
+        wrong_details = []
+        for i, wa in enumerate(wrong_answers, 1):
+            topic = wa.get('topic', 'Unknown Topic')
+            question = wa.get('question', '')
+            explanation = wa.get('explanation', '')
+            wrong_topics.append(topic)
+            wrong_details.append(
+                f"{i}. Topic: {topic}\n"
+                f"   Question: {question[:200]}...\n"
+                f"   Explanation: {explanation}"
+            )
+
+        prompt = f"""Based on the following quiz results, provide personalized study recommendations.
+
+The student answered these questions incorrectly:
+
+{chr(10).join(wrong_details)}
+
+Topics needing improvement: {', '.join(set(wrong_topics))}
+
+Generate 3-5 specific, actionable study recommendations in this JSON format:
+{{
+  "summary": "Brief overall assessment (1-2 sentences)",
+  "weak_areas": ["area1", "area2", ...],
+  "suggestions": [
+    {{
+      "title": "Recommendation title",
+      "description": "Detailed actionable advice (2-3 sentences)",
+      "priority": "high|medium|low",
+      "topics": ["related", "topics"]
+    }}
+  ],
+  "resources": [
+    {{
+      "type": "concept|practice|reference",
+      "title": "Resource or action name",
+      "description": "What to study or practice"
+    }}
+  ]
+}}
+
+Focus on:
+- Specific concepts the student should review
+- Practical exercises to reinforce understanding
+- Common misconceptions revealed by wrong answers
+- Building from foundational to advanced understanding
+
+RESPOND ONLY WITH JSON, NO MARKDOWN FORMATTING."""
+
+        try:
+            import time
+            start_time = time.time()
+            llm = self._get_llm_for_quiz(llm_model)
+            response = llm.complete(prompt)
+            response_text = str(response).strip()
+            response_time_ms = int((time.time() - start_time) * 1000)
+
+            # Log query metrics
+            if hasattr(self.pipeline, '_query_logger') and self.pipeline._query_logger:
+                try:
+                    from ..observability.token_counter import get_token_counter
+                    token_counter = get_token_counter()
+                    prompt_tokens = token_counter.count_tokens(prompt)
+                    completion_tokens = token_counter.count_tokens(response_text)
+                    model_name = llm.model if hasattr(llm, 'model') else (llm_model or 'unknown')
+
+                    self.pipeline._query_logger.log_query(
+                        notebook_id=notebook_id,
+                        user_id=user_id,
+                        query_text="[Quiz Improvement Suggestions Generation]",
+                        model_name=model_name,
+                        prompt_tokens=prompt_tokens,
+                        completion_tokens=completion_tokens,
+                        response_time_ms=response_time_ms
+                    )
+                except Exception as log_err:
+                    self.logger.warning(f"Failed to log suggestion query metrics: {log_err}")
+
+            # Parse response
+            suggestions_data = self._parse_suggestion_response(response_text)
+
+            return {
+                'type': 'llm_generated',
+                'wrong_count': len(wrong_answers),
+                'total_topics': list(set(t.get('topic', 'Unknown') for t in wrong_answers)),
+                **suggestions_data
+            }
+
+        except Exception as e:
+            self.logger.error(f"Error generating LLM suggestions: {e}")
+            # Return basic suggestions on error
+            topics = list(set(wa.get('topic', 'Unknown Topic') for wa in wrong_answers))
+            return {
+                'type': 'llm_generated',
+                'wrong_count': len(wrong_answers),
+                'summary': f"You missed {len(wrong_answers)} questions. Focus on reviewing the topics below.",
+                'weak_areas': topics,
+                'suggestions': [
+                    {
+                        'title': f'Review: {topic}',
+                        'description': 'Review this topic thoroughly and practice related exercises.',
+                        'priority': 'high',
+                        'topics': [topic]
+                    }
+                    for topic in topics[:3]
+                ],
+                'resources': []
+            }
+
+    def _generate_document_suggestions(
+        self,
+        wrong_answers: List[Dict[str, Any]],
+        notebook_id: str
+    ) -> Dict[str, Any]:
+        """Generate document-linked suggestions for notebook_only quizzes.
+
+        Finds relevant document sections that cover the topics the student
+        struggled with.
+
+        Args:
+            wrong_answers: List of incorrectly answered questions
+            notebook_id: UUID of the notebook
+
+        Returns:
+            Dictionary with document section links
+        """
+        # Extract topics from wrong answers
+        topics = list(set(wa.get('topic', 'Unknown Topic') for wa in wrong_answers))
+
+        # Get document sources for the notebook
+        document_sections = []
+
+        try:
+            with self.db_manager.get_session() as session:
+                # Get active notebook sources
+                sources = session.execute(
+                    select(NotebookSource)
+                    .where(NotebookSource.notebook_id == notebook_id)
+                    .where(NotebookSource.active == True)
+                ).scalars().all()
+
+                source_info = {str(s.source_id): s.filename for s in sources}
+
+            # Switch to notebook context for retrieval
+            self.pipeline.switch_notebook(notebook_id, "00000000-0000-0000-0000-000000000001")
+
+            # For each wrong answer, find relevant document sections
+            for wa in wrong_answers:
+                topic = wa.get('topic', '')
+                question = wa.get('question', '')
+
+                # Use the question text to find relevant chunks
+                search_query = f"{topic}: {question[:100]}"
+
+                if hasattr(self.pipeline, '_vector_store') and self.pipeline._vector_store:
+                    # Search for relevant nodes
+                    try:
+                        from llama_index.core import VectorStoreIndex
+                        from llama_index.core.retrievers import VectorIndexRetriever
+
+                        # Get a few relevant nodes
+                        nodes = self.pipeline._vector_store.get_nodes_by_notebook_sql(
+                            notebook_id, limit=100
+                        )
+
+                        if nodes:
+                            # Create a quick index for semantic search
+                            index = VectorStoreIndex(nodes=nodes)
+                            retriever = VectorIndexRetriever(
+                                index=index,
+                                similarity_top_k=2
+                            )
+                            retrieved = retriever.retrieve(search_query)
+
+                            for node_with_score in retrieved:
+                                node = node_with_score.node
+                                metadata = node.metadata or {}
+                                source_id = metadata.get('source_id', '')
+                                filename = source_info.get(source_id, metadata.get('filename', 'Unknown'))
+
+                                # Get content preview
+                                content = node.get_content() if hasattr(node, 'get_content') else node.text
+                                preview = content[:200] + '...' if len(content) > 200 else content
+
+                                document_sections.append({
+                                    'topic': topic,
+                                    'source_id': source_id,
+                                    'filename': filename,
+                                    'preview': preview,
+                                    'relevance_score': round(node_with_score.score or 0, 3)
+                                })
+
+                    except Exception as retrieve_err:
+                        self.logger.warning(f"Error retrieving sections for topic '{topic}': {retrieve_err}")
+
+        except Exception as e:
+            self.logger.error(f"Error generating document suggestions: {e}")
+
+        # Deduplicate and sort by relevance
+        seen = set()
+        unique_sections = []
+        for section in sorted(document_sections, key=lambda x: x.get('relevance_score', 0), reverse=True):
+            key = (section['source_id'], section['preview'][:50])
+            if key not in seen:
+                seen.add(key)
+                unique_sections.append(section)
+
+        # Group by topic
+        topics_with_sections = {}
+        for section in unique_sections:
+            topic = section['topic']
+            if topic not in topics_with_sections:
+                topics_with_sections[topic] = []
+            topics_with_sections[topic].append(section)
+
+        return {
+            'type': 'document_linked',
+            'wrong_count': len(wrong_answers),
+            'summary': f"You missed {len(wrong_answers)} questions across {len(topics)} topics. Review the suggested document sections below.",
+            'weak_areas': topics,
+            'sections': [
+                {
+                    'topic': topic,
+                    'documents': sections[:2]  # Max 2 sections per topic
+                }
+                for topic, sections in topics_with_sections.items()
+            ],
+            'total_sections': len(unique_sections)
+        }
+
+    def _parse_suggestion_response(self, response_text: str) -> Dict[str, Any]:
+        """Parse LLM suggestion response into structured format.
+
+        Args:
+            response_text: Raw LLM response
+
+        Returns:
+            Parsed suggestion dictionary
+        """
+        # Try to extract JSON from the response
+        json_match = re.search(r'\{[\s\S]*\}', response_text)
+
+        if json_match:
+            try:
+                return json.loads(json_match.group())
+            except json.JSONDecodeError:
+                pass
+
+        # Try parsing the entire response
+        try:
+            clean_text = response_text.strip()
+            if clean_text.startswith('```'):
+                clean_text = re.sub(r'^```(?:json)?\n?', '', clean_text)
+                clean_text = re.sub(r'\n?```$', '', clean_text)
+            return json.loads(clean_text)
+        except json.JSONDecodeError:
+            pass
+
+        # Return basic structure on parse failure
+        return {
+            'summary': 'Review the topics where you made mistakes.',
+            'weak_areas': [],
+            'suggestions': [],
+            'resources': []
         }

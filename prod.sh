@@ -101,14 +101,28 @@ load_env() {
     fi
 }
 
-# Activate virtual environment
+# Activate virtual environment and sync dependencies
 activate_venv() {
     if [ -d "$SCRIPT_DIR/venv" ]; then
         source "$SCRIPT_DIR/venv/bin/activate"
+        print_status "Syncing Python dependencies..."
+        python3 -m pip install -q -r "$SCRIPT_DIR/requirements.txt"
     else
         print_error "Virtual environment not found"
         echo "  Run: python3 -m venv venv && pip install -r requirements.txt"
         exit 1
+    fi
+}
+
+# Build frontend
+build_frontend() {
+    if [ -d "$SCRIPT_DIR/frontend" ]; then
+        print_status "Building frontend..."
+        cd "$SCRIPT_DIR/frontend"
+        npm install --silent
+        npm run build
+        cd "$SCRIPT_DIR"
+        print_success "Frontend built"
     fi
 }
 
@@ -137,8 +151,11 @@ start_app() {
     # Check PostgreSQL
     check_postgres || exit 1
 
-    # Activate venv
+    # Activate venv and sync dependencies
     activate_venv
+
+    # Build frontend
+    build_frontend
 
     # Run migrations
     run_migrations

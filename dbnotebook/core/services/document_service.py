@@ -197,6 +197,13 @@ class DocumentService(BaseService, IDocumentService):
                         "but PostgreSQL deletion succeeded"
                     )
 
+            # Clear retriever cache to ensure deleted document isn't used in follow-up queries
+            if self.pipeline._engine and hasattr(self.pipeline._engine, '_retriever'):
+                retriever = self.pipeline._engine._retriever
+                if retriever and hasattr(retriever, 'clear_cache'):
+                    retriever.clear_cache()
+                    self.logger.debug(f"Cleared retriever cache after deleting document {source_id}")
+
             self.logger.info(f"Deleted document {source_id} from notebook {notebook_id}")
             return True
 
@@ -245,6 +252,13 @@ class DocumentService(BaseService, IDocumentService):
             if not updated_doc:
                 self.logger.warning(f"Document {source_id} not found")
                 return False
+
+            # Clear retriever cache since active documents affect retrieval
+            if self.pipeline._engine and hasattr(self.pipeline._engine, '_retriever'):
+                retriever = self.pipeline._engine._retriever
+                if retriever and hasattr(retriever, 'clear_cache'):
+                    retriever.clear_cache()
+                    self.logger.debug(f"Cleared retriever cache after toggling document {source_id}")
 
             self.logger.info(f"Updated document {source_id} active status to {active}")
             return True

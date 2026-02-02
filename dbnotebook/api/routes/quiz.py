@@ -450,4 +450,77 @@ def create_quiz_routes(app, pipeline, db_manager, notebook_manager):
                 'error': str(e)
             }), 500
 
+    @app.route('/api/quiz/attempt/<attempt_id>/suggestions', methods=['GET'])
+    def get_improvement_suggestions(attempt_id):
+        """Get personalized improvement suggestions for a completed quiz attempt.
+
+        For 'extended' quizzes: Returns LLM-generated study recommendations.
+        For 'notebook_only' quizzes: Returns links to relevant document sections.
+
+        Response JSON (LLM-generated):
+            {
+                "success": true,
+                "type": "llm_generated",
+                "wrong_count": 3,
+                "summary": "Brief assessment...",
+                "weak_areas": ["topic1", "topic2"],
+                "suggestions": [
+                    {
+                        "title": "Review fundamentals",
+                        "description": "Focus on...",
+                        "priority": "high",
+                        "topics": ["topic1"]
+                    }
+                ],
+                "resources": [
+                    {
+                        "type": "concept",
+                        "title": "Resource name",
+                        "description": "What to study"
+                    }
+                ]
+            }
+
+        Response JSON (Document-linked):
+            {
+                "success": true,
+                "type": "document_linked",
+                "wrong_count": 3,
+                "summary": "Review these sections...",
+                "weak_areas": ["topic1", "topic2"],
+                "sections": [
+                    {
+                        "topic": "topic1",
+                        "documents": [
+                            {
+                                "source_id": "uuid",
+                                "filename": "document.pdf",
+                                "preview": "Content preview...",
+                                "relevance_score": 0.85
+                            }
+                        ]
+                    }
+                ]
+            }
+        """
+        try:
+            suggestions = quiz_service.generate_improvement_suggestions(attempt_id)
+
+            return jsonify({
+                'success': True,
+                **suggestions
+            })
+
+        except ValueError as e:
+            return jsonify({
+                'success': False,
+                'error': str(e)
+            }), 400
+        except Exception as e:
+            logger.error(f"Error generating improvement suggestions: {e}")
+            return jsonify({
+                'success': False,
+                'error': str(e)
+            }), 500
+
     return app
