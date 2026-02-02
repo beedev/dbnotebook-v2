@@ -143,6 +143,8 @@ Design guidelines:
 - Ensure the layout is balanced and easy to follow
 - Make connections between related concepts visible
 - Use size variation to show importance hierarchy
+- DO NOT include any source attributions, citations, or "Source:" labels in the image
+- DO NOT add metadata or footnotes about where the content came from
 
 The mind map should help visualize the structure and relationships between ideas in the content."""
 

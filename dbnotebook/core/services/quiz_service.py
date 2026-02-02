@@ -47,17 +47,23 @@ class QuestionType(str, Enum):
 # Question generation prompt template
 QUESTION_GENERATION_PROMPT = """Based on the following content from a notebook, generate ONE multiple-choice question.
 
+**CRITICAL: DOCUMENT-ONLY QUESTIONS**
+⛔ You MUST ONLY create questions that can be answered from the CONTENT provided below
+⛔ You MUST NOT use any external knowledge, general facts, or information not in this content
+⛔ The correct answer MUST be verifiable from the content provided
+⛔ If you cannot create a question from this content, respond with an error
+
 DIFFICULTY LEVEL: {difficulty}
-- Easy: Basic recall, definitions, simple facts that are directly stated
-- Medium: Understanding concepts, applying knowledge, connecting ideas
-- Hard: Analysis, synthesis, edge cases, nuanced understanding, implications
+- Easy: Basic recall, definitions, simple facts that are directly stated in the content
+- Medium: Understanding concepts and connecting ideas within the content
+- Hard: Analysis, synthesis, and nuanced understanding of the content
 
 TOPICS ALREADY ASKED (avoid these): {asked_topics}
 
 PREVIOUS QUESTIONS (DO NOT repeat or ask similar questions):
 {previous_questions}
 
-CONTENT:
+CONTENT (ONLY use information from this content):
 {content}
 
 Generate a NEW, UNIQUE question in this EXACT JSON format (no markdown, just pure JSON):
@@ -75,8 +81,8 @@ Requirements:
 - correct_answer must be one of: "A", "B", "C", "D"
 - Only ONE correct answer
 - Options should be plausible (no obviously wrong answers)
-- Question should test understanding from the content, not general knowledge
-- Explanation should be educational (2-3 sentences explaining WHY the answer is correct)
+- **CRITICAL: Question AND correct answer MUST come from the content above - NO external knowledge**
+- Explanation should be educational (2-3 sentences explaining WHY the answer is correct based on the content)
 - Topic should be a brief descriptor for tracking purposes
 - MUST be different from all previous questions listed above
 - DO NOT use phrases like "According to the text", "Based on the passage", "The text states" - ask DIRECT questions

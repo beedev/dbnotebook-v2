@@ -97,7 +97,8 @@ class ContentGenerator(ABC):
         if user_prompt:
             parts.append(f"\nAdditional instructions: {user_prompt}")
 
-        parts.append(f"\n\nSource content:\n{content[:2000]}")  # Limit content length
+        # Add content without "Source" label to avoid it appearing in generated image
+        parts.append(f"\n\nCONTENT TO VISUALIZE (do not include this header in image):\n{content[:2000]}")
 
         return "\n".join(parts)
 

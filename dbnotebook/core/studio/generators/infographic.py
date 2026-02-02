@@ -163,7 +163,8 @@ class InfographicGenerator(ContentGenerator):
         if user_prompt:
             parts.append(f"\nAdditional instructions: {user_prompt}")
 
-        parts.append(f"\n\nSource content:\n{content[:3500]}")  # Increased limit
+        # Add content without "Source" label to avoid it appearing in generated image
+        parts.append(f"\n\nCONTENT TO VISUALIZE (do not include this header in image):\n{content[:3500]}")
 
         return "\n".join(parts)
 
@@ -201,6 +202,8 @@ Design guidelines:
 - Highlight the most important information
 - Include section headers for different topics
 - Use charts or diagrams where appropriate
+- DO NOT include any source attributions, citations, or "Source:" labels in the image
+- DO NOT add metadata or footnotes about where the content came from
 
 The infographic should be informative, easy to understand at a glance, and visually engaging."""
 
