@@ -10,7 +10,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { MessageSquare, BarChart3, Database, Cpu, Sparkles, Bot, Cloud, Zap, Terminal, User, Settings, LogOut, ChevronDown, ClipboardCheck, FolderOpen } from 'lucide-react';
+import { MessageSquare, BarChart3, Database, Cpu, Sparkles, Bot, Cloud, Zap, Terminal, User, Settings, LogOut, ChevronDown, ClipboardCheck, FolderOpen, Palette } from 'lucide-react';
 import { useApp, type AppView } from '../../contexts/AppContext';
 import { useAuth } from '../../contexts/AuthContext';
 import type { ModelProvider } from '../../types';
@@ -58,6 +58,13 @@ const navTabs: NavTab[] = [
     icon: <FolderOpen className="w-4 h-4" />,
     color: 'text-emerald-400',
     hoverColor: 'hover:bg-emerald-500/10',
+  },
+  {
+    id: 'studio',
+    label: 'Studio',
+    icon: <Palette className="w-4 h-4" />,
+    color: 'text-pink-400',
+    hoverColor: 'hover:bg-pink-500/10',
   },
   {
     id: 'analytics',
