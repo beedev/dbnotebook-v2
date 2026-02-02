@@ -257,6 +257,23 @@ export function ContentStudio({ notebookId, notebookName, isFullScreen = false }
   };
 
   if (!notebookId) {
+    // Show helpful message in full-screen mode when no notebook selected
+    if (isFullScreen) {
+      return (
+        <div className="flex flex-col items-center justify-center h-full bg-void text-center p-8">
+          <Sparkles className="w-16 h-16 text-glow/30 mb-6" />
+          <h2 className="text-xl font-semibold text-text mb-2 font-[family-name:var(--font-display)]">
+            Content Studio
+          </h2>
+          <p className="text-text-muted max-w-md mb-4">
+            Select a notebook with documents to generate infographics and mind maps from your content.
+          </p>
+          <p className="text-sm text-text-dim">
+            Use the sidebar to select a notebook →
+          </p>
+        </div>
+      );
+    }
     return null;
   }
 
