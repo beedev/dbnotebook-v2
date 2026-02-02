@@ -80,6 +80,7 @@
 | Retrieval logic | `dbnotebook/core/engine/retriever.py` |
 | RAPTOR trees | `dbnotebook/core/raptor/` |
 | SQL generation | `dbnotebook/core/sql_chat/service.py` |
+| Quiz system | `dbnotebook/core/services/quiz_service.py` |
 | API endpoints | `dbnotebook/api/routes/` |
 | Frontend components | `frontend/src/components/` |
 | Database models | `dbnotebook/core/db/models.py` |
@@ -137,6 +138,7 @@ dbnotebook/
 │       ├── analytics.py     # /api/analytics/*
 │       ├── agents.py        # /api/agents/*
 │       ├── sql_chat.py      # /api/sql-chat/*
+│       ├── quiz.py          # /api/quiz/*
 │       └── settings.py      # /api/settings/*
 │
 ├── core/
@@ -271,6 +273,13 @@ frontend/
 | `sql_connections` | DB credentials (encrypted) |
 | `sql_sessions` | Chat sessions |
 | `sql_query_history` | Query telemetry |
+
+### Quiz Tables
+
+| Table | Purpose | Key Columns |
+|-------|---------|-------------|
+| `quizzes` | Quiz configuration | `notebook_id`, `title`, `difficulty_mode`, `llm_model`, `is_active` |
+| `quiz_attempts` | Attempt tracking | `quiz_id`, `taker_name`, `taker_email`, `score`, `answers` (JSONB) |
 
 ### Relationships
 
@@ -656,6 +665,140 @@ Content Studio generation is currently UI-only. Potential API additions:
 
 ---
 
+## 3.10 Quiz System (Adaptive Q&A)
+
+Generate quizzes from notebook content with LLM-powered question generation and adaptive difficulty.
+
+### Architecture
+
+```
+Quiz Creation (Admin)                      Quiz Taking (Public)
+       │                                          │
+       ▼                                          ▼
+┌──────────────┐                         ┌───────────────┐
+│ Select LLM   │                         │ Enter Name +  │
+│ Model (opt)  │                         │ Email (opt)   │
+└──────┬───────┘                         └───────┬───────┘
+       │                                         │
+       ▼                                         ▼
+┌──────────────┐                         ┌───────────────┐
+│ QuizService  │                         │ Session Check │──▶ Resume if exists
+│ create_quiz()│                         │ (by email)    │
+└──────┬───────┘                         └───────┬───────┘
+       │                                         │
+       ▼                                         ▼
+┌──────────────┐    Generates on     ┌───────────────────┐
+│ Store Quiz   │◀─────demand────────▶│ Adaptive Question │
+│ Config (DB)  │                     │ Generation (LLM)  │
+└──────────────┘                     └─────────┬─────────┘
+                                               │
+                                               ▼
+                                     ┌───────────────────┐
+                                     │ Difficulty Adjust │
+                                     │ Easy ⇄ Medium ⇄ Hard│
+                                     └───────────────────┘
+```
+
+### Key Features
+
+| Feature | Description |
+|---------|-------------|
+| **Adaptive Difficulty** | Correct → harder, incorrect → easier |
+| **Per-Quiz LLM Selection** | Choose model for question generation |
+| **Email-Based Resumption** | Resume from any browser via email |
+| **Shareable Links** | Public `/quiz/{id}` URLs (no auth required) |
+| **Real-time Feedback** | Explanation after each answer |
+| **Time Limits** | Optional per-quiz time constraints |
+
+### Difficulty Modes
+
+| Mode | Behavior |
+|------|----------|
+| `adaptive` | Starts medium, adjusts based on performance |
+| `easy` | All questions use 6 context nodes |
+| `medium` | All questions use 10 context nodes |
+| `hard` | All questions use 15 context nodes |
+
+### API Endpoints
+
+**Admin Routes** (auth required):
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/quiz/create` | POST | Create quiz from notebook |
+| `/api/quiz/list` | GET | List user's quizzes |
+| `/api/quiz/{id}` | DELETE | Delete quiz |
+| `/api/quiz/{id}/results` | GET | View attempt results |
+
+**Public Routes** (no auth):
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/quiz/{id}/info` | GET | Get quiz metadata |
+| `/api/quiz/{id}/start` | POST | Start attempt (name, email) |
+| `/api/quiz/attempt/{id}/answer` | POST | Submit answer |
+
+### Database Tables
+
+| Table | Purpose |
+|-------|---------|
+| `quizzes` | Quiz config (notebook_id, title, difficulty_mode, llm_model) |
+| `quiz_attempts` | Attempt tracking (taker_name, taker_email, score, answers JSONB) |
+
+### Frontend Components
+
+| Component | Path | Purpose |
+|-----------|------|---------|
+| `QuizConfigForm` | `Quiz/admin/` | Create quiz with LLM selection |
+| `QuizDashboard` | `Quiz/admin/` | List quizzes, view stats |
+| `QuizResultsTable` | `Quiz/admin/` | View attempt details |
+| `QuizLanding` | `Quiz/taker/` | Enter name/email, start quiz |
+| `QuizQuestion` | `Quiz/taker/` | Display question with timer |
+| `QuizFeedback` | `Quiz/taker/` | Show correct answer + explanation |
+| `QuizResults` | `Quiz/taker/` | Final score and review |
+
+---
+
+## 3.11 Document Management
+
+Dedicated UI for managing notebook documents with upload, toggle, and delete capabilities.
+
+### Features
+
+| Feature | Description |
+|---------|-------------|
+| **Document Upload** | Drag-and-drop or click to upload |
+| **Toggle Active** | Enable/disable documents for RAG queries |
+| **Delete Documents** | Remove documents from notebook |
+| **Web Sources** | Add content from web search/scraping |
+| **Status Display** | Show RAPTOR build status, file type, size |
+
+### Frontend Components
+
+| Component | Path | Purpose |
+|-----------|------|---------|
+| `DocumentsPage` | `Documents/` | Main management view |
+| `DocumentUploader` | `Documents/` | Drag-and-drop upload zone |
+| `DocumentCard` | `Documents/` | Individual document with actions |
+
+### Pages
+
+| Page | Route | Purpose |
+|------|-------|---------|
+| `DocumentsLandingPage` | `/documents` | Prompt to select notebook |
+| `DocumentsManagementPage` | `/documents/:notebookId` | Full document management |
+
+### Document States
+
+```
+Upload → Processing → Embedding → RAPTOR Building → Ready
+                                       │
+                                       ▼
+                              Active (in RAG) ⇄ Inactive (excluded)
+```
+
+---
+
 # Part 4: Infrastructure
 
 ## 4.1 Authentication & RBAC
@@ -724,9 +867,31 @@ Processes document transformation jobs in background.
 }
 ```
 
-### QueryLogger
+### QueryLogger & Admin Token Metrics
 
-Token usage tracking and cost estimation per model.
+Token usage tracking and cost estimation per model with admin dashboard visualization.
+
+**Token Metrics Dashboard** (`/api/admin/metrics/tokens`):
+
+| Metric | Description |
+|--------|-------------|
+| **Total Tokens** | Sum of input + output tokens |
+| **Total Cost** | Estimated cost based on model pricing |
+| **Total Queries** | Number of queries in time period |
+| **Avg Response Time** | Average response time in ms |
+
+**Breakdowns**:
+- **By Model**: Token/cost/query distribution per LLM model
+- **By User**: Token/cost/query distribution per user
+- **By Day**: Daily usage trend (bar chart)
+
+**API Endpoint**:
+```bash
+GET /api/admin/metrics/tokens?days=30
+# Returns: summary, by_model, by_user, by_day
+```
+
+**Frontend**: Admin Dashboard → "Usage Metrics" tab
 
 ---
 
@@ -997,6 +1162,8 @@ Throughput: 2.17 req/s
 | Auth not working | `FLASK_SECRET_KEY` set? | Session cookies |
 | SQL Chat fails | Connection credentials | Read-only enforcement |
 | Frontend not updating | `npm run build` | Browser cache |
+| Quiz LLM model fails | Check provider API key | Fallback to default LLM |
+| Quiz session not resuming | Email must match exactly | Check `taker_email` in DB |
 
 ---
 
@@ -1350,4 +1517,4 @@ DBNotebook evolved from a simple RAG chatbot into a multi-modal knowledge assist
 
 ---
 
-*Last updated: January 2025*
+*Last updated: February 1, 2026*

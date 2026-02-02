@@ -256,8 +256,7 @@ Complete Excel/CSV analysis pipeline with LLM-powered dashboard generation.
 ├── Retrieval Strategies: Hybrid, Semantic, Keyword
 ├── Image Providers: Gemini/Imagen
 ├── Vision Providers: OpenAI GPT-4V, Gemini Vision
-├── Web Search: Firecrawl
-└── Web Scraper: Jina Reader
+└── Web Search & Scraper: Tavily
 ```
 
 **Groq Provider** (`core/providers/groq.py`): Ultra-fast inference (300-800 tok/s), supports Llama 4, Llama 3.x, Mixtral. Implements exponential backoff for rate limits.
@@ -361,9 +360,8 @@ VISION_PROVIDER=gemini           # gemini|openai
 IMAGE_GENERATION_PROVIDER=gemini
 GEMINI_IMAGE_MODEL=gemini-3-pro-image-preview  # or imagen-4.0-generate-001
 
-# Web Search (optional)
-FIRECRAWL_API_KEY=...           # Required for web search
-JINA_API_KEY=...                # Optional (higher rate limits)
+# Web Search & Scraping (optional)
+TAVILY_API_KEY=...              # Required for web search - https://tavily.com/
 
 # SQL Chat (optional)
 SQL_CHAT_SKIP_READONLY_CHECK=false  # Set true for dev/testing only

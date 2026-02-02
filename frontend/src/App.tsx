@@ -3,7 +3,7 @@ import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import { MainLayout } from './components/Layout';
 import { Header } from './components/Header';
 import { Sidebar } from './components/Sidebar';
-import { ChatArea, ContentStudio } from './components/Chat';
+import { ChatArea } from './components/Chat';
 import { ToastContainer } from './components/ui';
 import { ProtectedRoute } from './components/ProtectedRoute';
 import { AppProviders, useNotebook, useDocument, SQLChatProvider, useApp } from './contexts';
@@ -135,29 +135,6 @@ function AppContent() {
     return (
       <MainLayout header={<Header />}>
         <QueryPage />
-        <ToastContainer toasts={toasts} onDismiss={removeToast} />
-      </MainLayout>
-    );
-  }
-
-  // Render Studio page
-  if (currentView === 'studio') {
-    return (
-      <MainLayout
-        header={<Header />}
-        sidebar={
-          <Sidebar
-            onSelectNotebook={selectNotebook}
-            onDeleteNotebook={deleteNotebook}
-            onUpdateNotebook={updateNotebook}
-          />
-        }
-      >
-        <ContentStudio
-          notebookId={selectedNotebook?.id ?? null}
-          notebookName={selectedNotebook?.name}
-          isFullScreen={true}
-        />
         <ToastContainer toasts={toasts} onDismiss={removeToast} />
       </MainLayout>
     );

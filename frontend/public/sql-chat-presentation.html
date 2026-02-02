@@ -1,0 +1,1229 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DBNotebook SQL Chat | Enterprise Text-to-SQL</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --void: #0a0a0f;
+            --void-surface: #12121a;
+            --void-lighter: #1a1a25;
+            --void-border: #2a2a3a;
+            --primary: #6366f1;
+            --primary-glow: rgba(99, 102, 241, 0.4);
+            --accent-cyan: #22d3ee;
+            --accent-emerald: #10b981;
+            --accent-amber: #f59e0b;
+            --accent-rose: #f43f5e;
+            --text: #e4e4e7;
+            --text-muted: #71717a;
+            --gradient-1: linear-gradient(135deg, #6366f1 0%, #8b5cf6 50%, #d946ef 100%);
+            --gradient-2: linear-gradient(135deg, #22d3ee 0%, #6366f1 100%);
+            --gradient-3: linear-gradient(180deg, rgba(99, 102, 241, 0.1) 0%, transparent 100%);
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        html {
+            scroll-behavior: smooth;
+        }
+
+        body {
+            font-family: 'Outfit', sans-serif;
+            background: var(--void);
+            color: var(--text);
+            line-height: 1.6;
+            overflow-x: hidden;
+        }
+
+        /* Noise texture overlay */
+        body::before {
+            content: '';
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)'/%3E%3C/svg%3E");
+            opacity: 0.03;
+            pointer-events: none;
+            z-index: 1000;
+        }
+
+        /* Grid background */
+        .grid-bg {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-image:
+                linear-gradient(rgba(99, 102, 241, 0.03) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(99, 102, 241, 0.03) 1px, transparent 1px);
+            background-size: 60px 60px;
+            pointer-events: none;
+            z-index: -1;
+        }
+
+        /* Navigation */
+        nav {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            padding: 1.5rem 3rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            z-index: 100;
+            background: linear-gradient(180deg, var(--void) 0%, transparent 100%);
+        }
+
+        .logo {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 1.25rem;
+            font-weight: 600;
+            background: var(--gradient-1);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .nav-links {
+            display: flex;
+            gap: 2rem;
+        }
+
+        .nav-links a {
+            color: var(--text-muted);
+            text-decoration: none;
+            font-size: 0.9rem;
+            font-weight: 500;
+            transition: color 0.3s ease;
+        }
+
+        .nav-links a:hover {
+            color: var(--text);
+        }
+
+        /* Hero Section */
+        .hero {
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            padding: 6rem 2rem;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .hero-glow {
+            position: absolute;
+            width: 800px;
+            height: 800px;
+            background: radial-gradient(circle, var(--primary-glow) 0%, transparent 70%);
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            animation: pulse 8s ease-in-out infinite;
+            z-index: -1;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 0.3; transform: translate(-50%, -50%) scale(1); }
+            50% { opacity: 0.5; transform: translate(-50%, -50%) scale(1.1); }
+        }
+
+        .hero-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.5rem 1rem;
+            background: var(--void-surface);
+            border: 1px solid var(--void-border);
+            border-radius: 100px;
+            font-size: 0.85rem;
+            color: var(--text-muted);
+            margin-bottom: 2rem;
+            animation: fadeInUp 0.8s ease-out;
+        }
+
+        .hero-badge .dot {
+            width: 8px;
+            height: 8px;
+            background: var(--accent-emerald);
+            border-radius: 50%;
+            animation: blink 2s ease-in-out infinite;
+        }
+
+        @keyframes blink {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.4; }
+        }
+
+        .hero h1 {
+            font-size: clamp(3rem, 8vw, 6rem);
+            font-weight: 800;
+            text-align: center;
+            line-height: 1.1;
+            margin-bottom: 1.5rem;
+            animation: fadeInUp 0.8s ease-out 0.1s backwards;
+        }
+
+        .hero h1 .gradient {
+            background: var(--gradient-1);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .hero-subtitle {
+            font-size: 1.25rem;
+            color: var(--text-muted);
+            text-align: center;
+            max-width: 600px;
+            margin-bottom: 3rem;
+            animation: fadeInUp 0.8s ease-out 0.2s backwards;
+        }
+
+        @keyframes fadeInUp {
+            from {
+                opacity: 0;
+                transform: translateY(30px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        /* Architecture Diagram */
+        .architecture {
+            width: 100%;
+            max-width: 1200px;
+            margin: 3rem auto;
+            padding: 2rem;
+            background: var(--void-surface);
+            border: 1px solid var(--void-border);
+            border-radius: 24px;
+            position: relative;
+            animation: fadeInUp 0.8s ease-out 0.3s backwards;
+        }
+
+        .arch-title {
+            text-align: center;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.8rem;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            margin-bottom: 2rem;
+        }
+
+        .arch-flow {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 1rem;
+            flex-wrap: wrap;
+            padding: 2rem 0;
+        }
+
+        .arch-node {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 0.75rem;
+            animation: nodeAppear 0.5s ease-out backwards;
+        }
+
+        .arch-node:nth-child(1) { animation-delay: 0.4s; }
+        .arch-node:nth-child(2) { animation-delay: 0.5s; }
+        .arch-node:nth-child(3) { animation-delay: 0.6s; }
+        .arch-node:nth-child(4) { animation-delay: 0.7s; }
+        .arch-node:nth-child(5) { animation-delay: 0.8s; }
+        .arch-node:nth-child(6) { animation-delay: 0.9s; }
+        .arch-node:nth-child(7) { animation-delay: 1.0s; }
+
+        @keyframes nodeAppear {
+            from {
+                opacity: 0;
+                transform: scale(0.8);
+            }
+            to {
+                opacity: 1;
+                transform: scale(1);
+            }
+        }
+
+        .arch-icon {
+            width: 70px;
+            height: 70px;
+            border-radius: 16px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.75rem;
+            position: relative;
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+        }
+
+        .arch-icon:hover {
+            transform: translateY(-4px);
+        }
+
+        .arch-icon.user { background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%); }
+        .arch-icon.intent { background: linear-gradient(135deg, #f43f5e 0%, #be123c 100%); }
+        .arch-icon.schema { background: linear-gradient(135deg, #22d3ee 0%, #0891b2 100%); }
+        .arch-icon.rag { background: linear-gradient(135deg, #a855f7 0%, #7c3aed 100%); }
+        .arch-icon.llm { background: linear-gradient(135deg, #10b981 0%, #047857 100%); }
+        .arch-icon.validate { background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%); }
+        .arch-icon.result { background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%); }
+
+        .arch-label {
+            font-size: 0.75rem;
+            font-weight: 600;
+            color: var(--text);
+            text-align: center;
+        }
+
+        .arch-sublabel {
+            font-size: 0.65rem;
+            color: var(--text-muted);
+            text-align: center;
+            max-width: 80px;
+        }
+
+        .arch-arrow {
+            color: var(--void-border);
+            font-size: 1.5rem;
+            animation: arrowPulse 2s ease-in-out infinite;
+        }
+
+        @keyframes arrowPulse {
+            0%, 100% { opacity: 0.4; }
+            50% { opacity: 1; color: var(--primary); }
+        }
+
+        /* Comparison Section */
+        .comparison {
+            padding: 6rem 2rem;
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        .section-header {
+            text-align: center;
+            margin-bottom: 4rem;
+        }
+
+        .section-label {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.8rem;
+            color: var(--primary);
+            text-transform: uppercase;
+            letter-spacing: 3px;
+            margin-bottom: 1rem;
+        }
+
+        .section-title {
+            font-size: clamp(2rem, 5vw, 3.5rem);
+            font-weight: 700;
+            margin-bottom: 1rem;
+        }
+
+        .section-subtitle {
+            color: var(--text-muted);
+            font-size: 1.1rem;
+            max-width: 600px;
+            margin: 0 auto;
+        }
+
+        .comparison-table {
+            width: 100%;
+            border-collapse: separate;
+            border-spacing: 0;
+            background: var(--void-surface);
+            border-radius: 20px;
+            overflow: hidden;
+            border: 1px solid var(--void-border);
+        }
+
+        .comparison-table th,
+        .comparison-table td {
+            padding: 1.25rem 1.5rem;
+            text-align: left;
+            border-bottom: 1px solid var(--void-border);
+        }
+
+        .comparison-table th {
+            background: var(--void-lighter);
+            font-weight: 600;
+            font-size: 0.9rem;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .comparison-table th:first-child {
+            border-top-left-radius: 20px;
+        }
+
+        .comparison-table th:last-child {
+            border-top-right-radius: 20px;
+        }
+
+        .comparison-table tr:last-child td {
+            border-bottom: none;
+        }
+
+        .comparison-table td:first-child {
+            font-weight: 500;
+            color: var(--text);
+        }
+
+        .comparison-table tr:hover td {
+            background: rgba(99, 102, 241, 0.05);
+        }
+
+        .check {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 28px;
+            height: 28px;
+            background: rgba(16, 185, 129, 0.15);
+            color: var(--accent-emerald);
+            border-radius: 50%;
+            font-weight: bold;
+        }
+
+        .cross {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 28px;
+            height: 28px;
+            background: rgba(244, 63, 94, 0.15);
+            color: var(--accent-rose);
+            border-radius: 50%;
+            font-weight: bold;
+        }
+
+        .partial {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 28px;
+            height: 28px;
+            background: rgba(245, 158, 11, 0.15);
+            color: var(--accent-amber);
+            border-radius: 50%;
+            font-weight: bold;
+        }
+
+        .feature-tag {
+            display: inline-block;
+            padding: 0.25rem 0.75rem;
+            background: var(--void-lighter);
+            border-radius: 100px;
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            margin-left: 0.5rem;
+        }
+
+        .feature-tag.new {
+            background: rgba(99, 102, 241, 0.2);
+            color: var(--primary);
+        }
+
+        /* Features Grid */
+        .features {
+            padding: 6rem 2rem;
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        .features-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
+            gap: 1.5rem;
+        }
+
+        .feature-card {
+            background: var(--void-surface);
+            border: 1px solid var(--void-border);
+            border-radius: 20px;
+            padding: 2rem;
+            position: relative;
+            overflow: hidden;
+            transition: transform 0.3s ease, border-color 0.3s ease;
+        }
+
+        .feature-card:hover {
+            transform: translateY(-4px);
+            border-color: var(--primary);
+        }
+
+        .feature-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 3px;
+            background: var(--gradient-1);
+            opacity: 0;
+            transition: opacity 0.3s ease;
+        }
+
+        .feature-card:hover::before {
+            opacity: 1;
+        }
+
+        .feature-icon {
+            width: 56px;
+            height: 56px;
+            border-radius: 14px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.5rem;
+            margin-bottom: 1.25rem;
+        }
+
+        .feature-icon.purple { background: linear-gradient(135deg, rgba(139, 92, 246, 0.2) 0%, rgba(139, 92, 246, 0.1) 100%); }
+        .feature-icon.cyan { background: linear-gradient(135deg, rgba(34, 211, 238, 0.2) 0%, rgba(34, 211, 238, 0.1) 100%); }
+        .feature-icon.emerald { background: linear-gradient(135deg, rgba(16, 185, 129, 0.2) 0%, rgba(16, 185, 129, 0.1) 100%); }
+        .feature-icon.amber { background: linear-gradient(135deg, rgba(245, 158, 11, 0.2) 0%, rgba(245, 158, 11, 0.1) 100%); }
+        .feature-icon.rose { background: linear-gradient(135deg, rgba(244, 63, 94, 0.2) 0%, rgba(244, 63, 94, 0.1) 100%); }
+        .feature-icon.blue { background: linear-gradient(135deg, rgba(59, 130, 246, 0.2) 0%, rgba(59, 130, 246, 0.1) 100%); }
+
+        .feature-card h3 {
+            font-size: 1.25rem;
+            font-weight: 600;
+            margin-bottom: 0.75rem;
+        }
+
+        .feature-card p {
+            color: var(--text-muted);
+            font-size: 0.95rem;
+            line-height: 1.7;
+        }
+
+        .feature-stats {
+            display: flex;
+            gap: 1.5rem;
+            margin-top: 1.25rem;
+            padding-top: 1.25rem;
+            border-top: 1px solid var(--void-border);
+        }
+
+        .feature-stat {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .feature-stat-value {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 1.5rem;
+            font-weight: 600;
+            background: var(--gradient-2);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .feature-stat-label {
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        /* Document Architecture Section */
+        .doc-arch {
+            padding: 6rem 2rem;
+            background: var(--void-surface);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .doc-arch::before {
+            content: '';
+            position: absolute;
+            top: -50%;
+            right: -20%;
+            width: 600px;
+            height: 600px;
+            background: radial-gradient(circle, rgba(99, 102, 241, 0.1) 0%, transparent 70%);
+            pointer-events: none;
+        }
+
+        .doc-arch-content {
+            max-width: 1200px;
+            margin: 0 auto;
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 4rem;
+            align-items: center;
+        }
+
+        .doc-tree {
+            background: var(--void);
+            border: 1px solid var(--void-border);
+            border-radius: 16px;
+            padding: 2rem;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.9rem;
+        }
+
+        .doc-tree-title {
+            color: var(--accent-cyan);
+            margin-bottom: 1rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .doc-tree-item {
+            padding: 0.5rem 0;
+            padding-left: 1.5rem;
+            color: var(--text-muted);
+            position: relative;
+        }
+
+        .doc-tree-item::before {
+            content: '├──';
+            position: absolute;
+            left: 0;
+            color: var(--void-border);
+        }
+
+        .doc-tree-item:last-child::before {
+            content: '└──';
+        }
+
+        .doc-tree-item .icon {
+            margin-right: 0.5rem;
+        }
+
+        .doc-tree-item.highlight {
+            color: var(--accent-emerald);
+        }
+
+        .doc-tree-item .tag {
+            font-size: 0.7rem;
+            padding: 0.15rem 0.5rem;
+            background: rgba(99, 102, 241, 0.2);
+            color: var(--primary);
+            border-radius: 4px;
+            margin-left: 0.5rem;
+        }
+
+        /* Code Block */
+        .code-block {
+            background: var(--void);
+            border: 1px solid var(--void-border);
+            border-radius: 12px;
+            overflow: hidden;
+            margin-top: 2rem;
+        }
+
+        .code-header {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.75rem 1rem;
+            background: var(--void-lighter);
+            border-bottom: 1px solid var(--void-border);
+        }
+
+        .code-dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+        }
+
+        .code-dot.red { background: #f43f5e; }
+        .code-dot.yellow { background: #f59e0b; }
+        .code-dot.green { background: #10b981; }
+
+        .code-content {
+            padding: 1.25rem;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.85rem;
+            line-height: 1.8;
+            overflow-x: auto;
+        }
+
+        .code-content .comment { color: var(--text-muted); }
+        .code-content .keyword { color: var(--accent-rose); }
+        .code-content .string { color: var(--accent-emerald); }
+        .code-content .property { color: var(--accent-cyan); }
+
+        /* Stats Section */
+        .stats {
+            padding: 6rem 2rem;
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 2rem;
+        }
+
+        .stat-card {
+            text-align: center;
+            padding: 2rem;
+            background: var(--void-surface);
+            border: 1px solid var(--void-border);
+            border-radius: 20px;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .stat-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 60%;
+            height: 2px;
+            background: var(--gradient-1);
+        }
+
+        .stat-value {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 3rem;
+            font-weight: 700;
+            background: var(--gradient-1);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            line-height: 1;
+            margin-bottom: 0.5rem;
+        }
+
+        .stat-label {
+            color: var(--text-muted);
+            font-size: 0.9rem;
+            font-weight: 500;
+        }
+
+        /* Footer CTA */
+        .cta {
+            padding: 8rem 2rem;
+            text-align: center;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .cta::before {
+            content: '';
+            position: absolute;
+            bottom: 0;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 800px;
+            height: 400px;
+            background: radial-gradient(ellipse, var(--primary-glow) 0%, transparent 70%);
+            pointer-events: none;
+        }
+
+        .cta h2 {
+            font-size: clamp(2rem, 5vw, 3.5rem);
+            font-weight: 700;
+            margin-bottom: 1.5rem;
+        }
+
+        .cta p {
+            color: var(--text-muted);
+            font-size: 1.1rem;
+            max-width: 500px;
+            margin: 0 auto 2.5rem;
+        }
+
+        .cta-button {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.75rem;
+            padding: 1rem 2rem;
+            background: var(--gradient-1);
+            color: white;
+            font-weight: 600;
+            font-size: 1rem;
+            border: none;
+            border-radius: 12px;
+            cursor: pointer;
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+        }
+
+        .cta-button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 20px 40px -10px var(--primary-glow);
+        }
+
+        /* Responsive */
+        @media (max-width: 1024px) {
+            .doc-arch-content {
+                grid-template-columns: 1fr;
+            }
+
+            .stats-grid {
+                grid-template-columns: repeat(2, 1fr);
+            }
+        }
+
+        @media (max-width: 768px) {
+            nav {
+                padding: 1rem 1.5rem;
+            }
+
+            .nav-links {
+                display: none;
+            }
+
+            .arch-flow {
+                flex-direction: column;
+            }
+
+            .arch-arrow {
+                transform: rotate(90deg);
+            }
+
+            .comparison-table {
+                display: block;
+                overflow-x: auto;
+            }
+
+            .features-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .stats-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        /* Scroll animations */
+        .animate-on-scroll {
+            opacity: 0;
+            transform: translateY(40px);
+            transition: opacity 0.8s ease, transform 0.8s ease;
+        }
+
+        .animate-on-scroll.visible {
+            opacity: 1;
+            transform: translateY(0);
+        }
+    </style>
+</head>
+<body>
+    <div class="grid-bg"></div>
+
+    <nav>
+        <div class="logo">DBNotebook</div>
+        <div class="nav-links">
+            <a href="#architecture">Architecture</a>
+            <a href="#comparison">Comparison</a>
+            <a href="#features">Features</a>
+            <a href="#documents">Documents</a>
+        </div>
+    </nav>
+
+    <!-- Hero Section -->
+    <section class="hero">
+        <div class="hero-glow"></div>
+        <div class="hero-badge">
+            <span class="dot"></span>
+            Enterprise-Grade Text-to-SQL
+        </div>
+        <h1>
+            <span class="gradient">SQL Chat</span><br>
+            Natural Language to SQL
+        </h1>
+        <p class="hero-subtitle">
+            Transform natural language queries into precise SQL with confidence scoring,
+            adaptive learning, and multi-database support.
+        </p>
+
+        <!-- Architecture Diagram -->
+        <div class="architecture" id="architecture">
+            <div class="arch-title">Query Processing Pipeline</div>
+            <div class="arch-flow">
+                <div class="arch-node">
+                    <div class="arch-icon user">👤</div>
+                    <span class="arch-label">User</span>
+                    <span class="arch-sublabel">Natural Language</span>
+                </div>
+                <span class="arch-arrow">→</span>
+                <div class="arch-node">
+                    <div class="arch-icon intent">🎯</div>
+                    <span class="arch-label">Intent</span>
+                    <span class="arch-sublabel">Classification</span>
+                </div>
+                <span class="arch-arrow">→</span>
+                <div class="arch-node">
+                    <div class="arch-icon schema">📊</div>
+                    <span class="arch-label">Schema</span>
+                    <span class="arch-sublabel">+ Documents</span>
+                </div>
+                <span class="arch-arrow">→</span>
+                <div class="arch-node">
+                    <div class="arch-icon rag">🔮</div>
+                    <span class="arch-label">RAG</span>
+                    <span class="arch-sublabel">100K Examples</span>
+                </div>
+                <span class="arch-arrow">→</span>
+                <div class="arch-node">
+                    <div class="arch-icon llm">🧠</div>
+                    <span class="arch-label">Multi-LLM</span>
+                    <span class="arch-sublabel">Generation</span>
+                </div>
+                <span class="arch-arrow">→</span>
+                <div class="arch-node">
+                    <div class="arch-icon validate">✓</div>
+                    <span class="arch-label">Validate</span>
+                    <span class="arch-sublabel">+ Confidence</span>
+                </div>
+                <span class="arch-arrow">→</span>
+                <div class="arch-node">
+                    <div class="arch-icon result">📋</div>
+                    <span class="arch-label">Results</span>
+                    <span class="arch-sublabel">+ Learning</span>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Comparison Section -->
+    <section class="comparison" id="comparison">
+        <div class="section-header animate-on-scroll">
+            <div class="section-label">Side by Side</div>
+            <h2 class="section-title">DBNotebook vs Uber QueryGPT</h2>
+            <p class="section-subtitle">
+                How our open architecture compares to Uber's enterprise solution
+            </p>
+        </div>
+
+        <table class="comparison-table animate-on-scroll">
+            <thead>
+                <tr>
+                    <th>Feature</th>
+                    <th>DBNotebook SQL Chat</th>
+                    <th>Uber QueryGPT</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td>Intent Classification</td>
+                    <td><span class="check">✓</span> <span class="feature-tag">intent_classifier.py</span></td>
+                    <td><span class="check">✓</span> Intent Agent</td>
+                </tr>
+                <tr>
+                    <td>Schema Management</td>
+                    <td><span class="check">✓</span> Fingerprinting + Caching <span class="feature-tag new">Enhanced</span></td>
+                    <td><span class="check">✓</span> Metadata Gateway</td>
+                </tr>
+                <tr>
+                    <td>Few-Shot RAG</td>
+                    <td><span class="check">✓</span> Gretel Dataset <span class="feature-tag new">100K examples</span></td>
+                    <td><span class="check">✓</span> SQL Samples</td>
+                </tr>
+                <tr>
+                    <td>Multi-Database Support</td>
+                    <td><span class="check">✓</span> PostgreSQL, MySQL, SQLite</td>
+                    <td><span class="cross">✗</span> Single vendor</td>
+                </tr>
+                <tr>
+                    <td>Query Learning</td>
+                    <td><span class="check">✓</span> Learns JOIN patterns <span class="feature-tag new">Adaptive</span></td>
+                    <td><span class="cross">✗</span> Not shown</td>
+                </tr>
+                <tr>
+                    <td>Confidence Scoring</td>
+                    <td><span class="check">✓</span> Per-query confidence</td>
+                    <td><span class="cross">✗</span> Not shown</td>
+                </tr>
+                <tr>
+                    <td>Result Validation</td>
+                    <td><span class="check">✓</span> Pre-return validation</td>
+                    <td><span class="cross">✗</span> Not shown</td>
+                </tr>
+                <tr>
+                    <td>Custom Instructions</td>
+                    <td><span class="check">✓</span> Via Documents <span class="feature-tag new">Flexible</span></td>
+                    <td><span class="check">✓</span> Dedicated Agent</td>
+                </tr>
+                <tr>
+                    <td>Column Pruning</td>
+                    <td><span class="partial">~</span> Document-guided</td>
+                    <td><span class="check">✓</span> Dedicated Agent</td>
+                </tr>
+                <tr>
+                    <td>LLM Providers</td>
+                    <td><span class="check">✓</span> 5+ providers (Ollama, OpenAI, etc.)</td>
+                    <td><span class="partial">~</span> Azure OpenAI only</td>
+                </tr>
+                <tr>
+                    <td>Read-Only Enforcement</td>
+                    <td><span class="check">✓</span> Safety feature</td>
+                    <td><span class="cross">✗</span> Not shown</td>
+                </tr>
+                <tr>
+                    <td>Credential Encryption</td>
+                    <td><span class="check">✓</span> Fernet encryption</td>
+                    <td><span class="cross">✗</span> Not shown</td>
+                </tr>
+            </tbody>
+        </table>
+    </section>
+
+    <!-- Features Section -->
+    <section class="features" id="features">
+        <div class="section-header animate-on-scroll">
+            <div class="section-label">Capabilities</div>
+            <h2 class="section-title">Key Differentiators</h2>
+            <p class="section-subtitle">
+                Features that set DBNotebook SQL Chat apart
+            </p>
+        </div>
+
+        <div class="features-grid">
+            <div class="feature-card animate-on-scroll">
+                <div class="feature-icon purple">🗄️</div>
+                <h3>Multi-Database Support</h3>
+                <p>Connect to PostgreSQL, MySQL, and SQLite with a unified interface. No vendor lock-in, seamless switching between databases.</p>
+                <div class="feature-stats">
+                    <div class="feature-stat">
+                        <span class="feature-stat-value">3+</span>
+                        <span class="feature-stat-label">Databases</span>
+                    </div>
+                    <div class="feature-stat">
+                        <span class="feature-stat-value">1</span>
+                        <span class="feature-stat-label">Unified API</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="feature-card animate-on-scroll">
+                <div class="feature-icon cyan">🧠</div>
+                <h3>Query Learning</h3>
+                <p>Learns from successful queries to improve JOIN patterns and relationships. The system gets smarter with every interaction.</p>
+                <div class="feature-stats">
+                    <div class="feature-stat">
+                        <span class="feature-stat-value">∞</span>
+                        <span class="feature-stat-label">Adaptive</span>
+                    </div>
+                    <div class="feature-stat">
+                        <span class="feature-stat-value">Auto</span>
+                        <span class="feature-stat-label">Improvement</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="feature-card animate-on-scroll">
+                <div class="feature-icon emerald">📊</div>
+                <h3>Confidence Scoring</h3>
+                <p>Every generated SQL query comes with a confidence score, helping you understand when to trust the result or request clarification.</p>
+                <div class="feature-stats">
+                    <div class="feature-stat">
+                        <span class="feature-stat-value">0-100</span>
+                        <span class="feature-stat-label">Score Range</span>
+                    </div>
+                    <div class="feature-stat">
+                        <span class="feature-stat-value">Real</span>
+                        <span class="feature-stat-label">Time</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="feature-card animate-on-scroll">
+                <div class="feature-icon amber">✓</div>
+                <h3>Result Validation</h3>
+                <p>SQL queries are validated before execution. Syntax errors, dangerous operations, and edge cases are caught before they reach your database.</p>
+                <div class="feature-stats">
+                    <div class="feature-stat">
+                        <span class="feature-stat-value">Pre</span>
+                        <span class="feature-stat-label">Execution</span>
+                    </div>
+                    <div class="feature-stat">
+                        <span class="feature-stat-value">Safe</span>
+                        <span class="feature-stat-label">By Default</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="feature-card animate-on-scroll">
+                <div class="feature-icon rose">🔮</div>
+                <h3>100K Few-Shot Examples</h3>
+                <p>Powered by the Gretel synthetic dataset with 100,000 curated SQL examples. RAG retrieval finds the most relevant patterns for your query.</p>
+                <div class="feature-stats">
+                    <div class="feature-stat">
+                        <span class="feature-stat-value">100K</span>
+                        <span class="feature-stat-label">Examples</span>
+                    </div>
+                    <div class="feature-stat">
+                        <span class="feature-stat-value">Vector</span>
+                        <span class="feature-stat-label">Search</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="feature-card animate-on-scroll">
+                <div class="feature-icon blue">🔌</div>
+                <h3>Multi-Provider LLM</h3>
+                <p>Choose from Ollama, OpenAI, Anthropic, Gemini, or Groq. Run locally or in the cloud. No vendor lock-in for your AI backbone.</p>
+                <div class="feature-stats">
+                    <div class="feature-stat">
+                        <span class="feature-stat-value">5+</span>
+                        <span class="feature-stat-label">Providers</span>
+                    </div>
+                    <div class="feature-stat">
+                        <span class="feature-stat-value">Local</span>
+                        <span class="feature-stat-label">Or Cloud</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Document Architecture Section -->
+    <section class="doc-arch" id="documents">
+        <div class="doc-arch-content">
+            <div class="animate-on-scroll">
+                <div class="section-label">Document-Driven</div>
+                <h2 class="section-title">Custom Instructions<br>Without Code</h2>
+                <p class="section-subtitle" style="margin-top: 1rem;">
+                    Add business rules, column definitions, and domain knowledge as simple documents.
+                    The RAG system automatically incorporates them into every query.
+                </p>
+
+                <div class="code-block">
+                    <div class="code-header">
+                        <span class="code-dot red"></span>
+                        <span class="code-dot yellow"></span>
+                        <span class="code-dot green"></span>
+                    </div>
+                    <div class="code-content">
+<span class="comment"># Business Rules.md</span>
+
+<span class="keyword">## Date Handling</span>
+<span class="string">- Fiscal year starts April 1st</span>
+<span class="string">- "Last month" = previous calendar month</span>
+
+<span class="keyword">## Column Definitions</span>
+<span class="property">revenue</span> = gross_amount - refunds - discounts
+<span class="property">active_customer</span> = order in last 90 days
+
+<span class="keyword">## Important JOINs</span>
+<span class="string">- Always join orders → customers via customer_id</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="doc-tree animate-on-scroll">
+                <div class="doc-tree-title">
+                    📁 Sales Database Notebook
+                </div>
+                <div class="doc-tree-item">
+                    <span class="icon">📄</span> Schema Dictionary <span class="tag">auto-generated</span>
+                </div>
+                <div class="doc-tree-item highlight">
+                    <span class="icon">📄</span> Business Rules.md <span class="tag">custom</span>
+                </div>
+                <div class="doc-tree-item highlight">
+                    <span class="icon">📄</span> Date Conventions.md <span class="tag">custom</span>
+                </div>
+                <div class="doc-tree-item highlight">
+                    <span class="icon">📄</span> Column Definitions.md <span class="tag">custom</span>
+                </div>
+                <div class="doc-tree-item highlight">
+                    <span class="icon">📄</span> Domain Glossary.md <span class="tag">custom</span>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Stats Section -->
+    <section class="stats">
+        <div class="stats-grid">
+            <div class="stat-card animate-on-scroll">
+                <div class="stat-value">100K</div>
+                <div class="stat-label">Few-Shot Examples</div>
+            </div>
+            <div class="stat-card animate-on-scroll">
+                <div class="stat-value">5+</div>
+                <div class="stat-label">LLM Providers</div>
+            </div>
+            <div class="stat-card animate-on-scroll">
+                <div class="stat-value">3</div>
+                <div class="stat-label">Database Types</div>
+            </div>
+            <div class="stat-card animate-on-scroll">
+                <div class="stat-value">∞</div>
+                <div class="stat-label">Custom Documents</div>
+            </div>
+        </div>
+    </section>
+
+    <!-- CTA Section -->
+    <section class="cta">
+        <h2 class="animate-on-scroll">Ready to Query Naturally?</h2>
+        <p class="animate-on-scroll">
+            Transform how your team interacts with data. No SQL expertise required.
+        </p>
+        <button class="cta-button animate-on-scroll">
+            Get Started
+            <span>→</span>
+        </button>
+    </section>
+
+    <script>
+        // Scroll animation observer
+        const observerOptions = {
+            threshold: 0.1,
+            rootMargin: '0px 0px -50px 0px'
+        };
+
+        const observer = new IntersectionObserver((entries) => {
+            entries.forEach(entry => {
+                if (entry.isIntersecting) {
+                    entry.target.classList.add('visible');
+                }
+            });
+        }, observerOptions);
+
+        document.querySelectorAll('.animate-on-scroll').forEach(el => {
+            observer.observe(el);
+        });
+
+        // Smooth scroll for nav links
+        document.querySelectorAll('a[href^="#"]').forEach(anchor => {
+            anchor.addEventListener('click', function (e) {
+                e.preventDefault();
+                const target = document.querySelector(this.getAttribute('href'));
+                if (target) {
+                    target.scrollIntoView({
+                        behavior: 'smooth',
+                        block: 'start'
+                    });
+                }
+            });
+        });
+    </script>
+</body>
+</html>
