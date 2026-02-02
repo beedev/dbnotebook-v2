@@ -227,49 +227,36 @@ def create_studio_routes(
                     "error": f"Generator {content_type} is not available. Check API keys."
                 }), 503
 
-            # Get notebook content using retrieval (same mechanism as Chat)
+            # Get notebook content - simple and robust approach
             content = ""
-            retrieval_query = prompt or f"Generate a {content_type} about the main topics and key information"
 
-            # Primary: Use pipeline retriever for prompt-based content selection
+            # Primary: Get nodes directly from vector store (same data as Chat uses)
             if pipeline and hasattr(pipeline, '_vector_store') and pipeline._vector_store:
                 try:
-                    from llama_index.core.schema import QueryBundle
-                    from llama_index.core import Settings
-
-                    # Get nodes for this notebook
+                    # Get all nodes for this notebook (respects active document toggle)
                     nodes = pipeline._vector_store.get_nodes_by_notebook_sql(notebook_id)
 
                     if nodes:
-                        # Configure retriever with notebook filter (same as Chat)
-                        pipeline.set_engine(offering_filter=[notebook_id], force_reset=True)
+                        # Extract text from nodes, prioritizing variety
+                        node_texts = []
+                        seen_prefixes = set()  # Avoid duplicate content
 
-                        # Get retriever and retrieve relevant chunks based on prompt
-                        retriever = pipeline._engine._retriever.get_retrievers(
-                            llm=Settings.llm,
-                            language="eng",
-                            nodes=nodes,
-                            offering_filter=[notebook_id],
-                            vector_store=pipeline._vector_store
-                        )
+                        for node in nodes:
+                            text = node.get_content() if hasattr(node, 'get_content') else str(node.text)
+                            # Skip near-duplicates (same first 100 chars)
+                            prefix = text[:100] if text else ""
+                            if prefix and prefix not in seen_prefixes:
+                                seen_prefixes.add(prefix)
+                                node_texts.append(text)
 
-                        # Retrieve relevant chunks based on the generation prompt
-                        query_bundle = QueryBundle(query_str=retrieval_query)
-                        retrieval_results = retriever.retrieve(query_bundle)
+                        # Combine content, limit to 6000 chars for generation
+                        content = "\n\n".join(node_texts)[:6000]
+                        logger.info(f"Content Studio: extracted {len(content)} chars from {len(node_texts)} unique chunks (notebook: {notebook_id})")
+                    else:
+                        logger.warning(f"No nodes found for notebook {notebook_id}")
 
-                        logger.info(f"Retrieved {len(retrieval_results)} relevant chunks for Content Studio (query: '{retrieval_query[:50]}...')")
-
-                        # Combine retrieved chunks, limit to 6000 chars for generation
-                        retrieved_text = "\n\n".join([
-                            node_with_score.node.get_content()
-                            if hasattr(node_with_score.node, 'get_content')
-                            else str(node_with_score.node.text)
-                            for node_with_score in retrieval_results
-                        ])
-                        content = retrieved_text[:6000]
-                        logger.info(f"Content Studio using {len(content)} chars from {len(retrieval_results)} retrieved chunks")
                 except Exception as e:
-                    logger.warning(f"Could not retrieve content using pipeline: {e}")
+                    logger.warning(f"Could not get nodes from vector store: {e}")
                     import traceback
                     logger.warning(traceback.format_exc())
 
