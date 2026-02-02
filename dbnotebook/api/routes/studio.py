@@ -227,40 +227,60 @@ def create_studio_routes(
                     "error": f"Generator {content_type} is not available. Check API keys."
                 }), 503
 
-            # Get notebook content - simple and robust approach
+            # Get notebook content using RAG pipeline (same as Chat)
+            # Two-step process: 1) RAG retrieval + LLM synthesis, 2) Image generation
             content = ""
 
-            # Primary: Get nodes directly from vector store (same data as Chat uses)
-            if pipeline and hasattr(pipeline, '_vector_store') and pipeline._vector_store:
+            # Build a query for the RAG pipeline to extract key information
+            rag_query = prompt if prompt else f"Provide a comprehensive summary of the key topics, main points, and important information that would be suitable for creating a visual {content_type}. Focus on the most important facts, relationships, and insights."
+
+            # Use RAG pipeline to get synthesized content (same as Chat uses)
+            if pipeline:
                 try:
-                    # Get all nodes for this notebook (respects active document toggle)
+                    # Switch pipeline to this notebook
+                    pipeline.switch_notebook(notebook_id)
+
+                    # Check if we have a query engine
+                    if hasattr(pipeline, '_query_engine') and pipeline._query_engine:
+                        # Use sync chat to get RAG-enhanced response
+                        logger.info(f"Content Studio: Running RAG query for notebook {notebook_id}")
+
+                        # Use .chat() for synchronous response (not streaming)
+                        rag_response = pipeline._query_engine.chat(rag_query)
+
+                        if rag_response and hasattr(rag_response, 'response'):
+                            content = str(rag_response.response)
+                            logger.info(f"Content Studio: RAG returned {len(content)} chars of synthesized content")
+                        elif rag_response:
+                            content = str(rag_response)
+                            logger.info(f"Content Studio: RAG returned {len(content)} chars")
+                    else:
+                        logger.warning("Query engine not available, falling back to direct node extraction")
+
+                except Exception as e:
+                    logger.warning(f"RAG query failed: {e}, falling back to direct extraction")
+                    import traceback
+                    logger.warning(traceback.format_exc())
+
+            # Fallback: Direct node extraction if RAG fails
+            if not content and pipeline and hasattr(pipeline, '_vector_store') and pipeline._vector_store:
+                try:
                     nodes = pipeline._vector_store.get_nodes_by_notebook_sql(notebook_id)
-
                     if nodes:
-                        # Extract text from nodes, prioritizing variety
                         node_texts = []
-                        seen_prefixes = set()  # Avoid duplicate content
-
+                        seen_prefixes = set()
                         for node in nodes:
                             text = node.get_content() if hasattr(node, 'get_content') else str(node.text)
-                            # Skip near-duplicates (same first 100 chars)
                             prefix = text[:100] if text else ""
                             if prefix and prefix not in seen_prefixes:
                                 seen_prefixes.add(prefix)
                                 node_texts.append(text)
-
-                        # Combine content, limit to 6000 chars for generation
                         content = "\n\n".join(node_texts)[:6000]
-                        logger.info(f"Content Studio: extracted {len(content)} chars from {len(node_texts)} unique chunks (notebook: {notebook_id})")
-                    else:
-                        logger.warning(f"No nodes found for notebook {notebook_id}")
-
+                        logger.info(f"Content Studio: Fallback - extracted {len(content)} chars from {len(node_texts)} chunks")
                 except Exception as e:
-                    logger.warning(f"Could not get nodes from vector store: {e}")
-                    import traceback
-                    logger.warning(traceback.format_exc())
+                    logger.warning(f"Fallback extraction failed: {e}")
 
-            # Fallback: Try synopsis manager for legacy offerings
+            # Last resort: Synopsis manager
             if not content and synopsis_manager:
                 try:
                     synopsis = synopsis_manager.get_synopsis(notebook_id)
@@ -271,8 +291,11 @@ def create_studio_routes(
                     logger.warning(f"Could not get synopsis: {e}")
 
             if not content:
-                logger.warning(f"No content found for notebook {notebook_id}, using generic prompt")
-                content = f"Generate a {content_type} about the notebook content."
+                logger.warning(f"No content found for notebook {notebook_id}")
+                return jsonify({
+                    "success": False,
+                    "error": "No content found in notebook. Please add documents first."
+                }), 400
 
             # Generate the content
             kwargs = {}
