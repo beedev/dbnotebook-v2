@@ -243,6 +243,26 @@ def create_chat_v2_routes(app, pipeline, db_manager, notebook_manager, conversat
             )
             timings["7_llm_completion_ms"] = int((time.time() - t7) * 1000)
 
+            # Step 7b: Log query to QueryLogger for metrics
+            if pipeline._query_logger:
+                try:
+                    from dbnotebook.core.observability.token_counter import get_token_counter
+                    token_counter = get_token_counter()
+                    prompt_tokens = token_counter.count_tokens(query + context)
+                    completion_tokens = token_counter.count_tokens(response_text)
+
+                    pipeline._query_logger.log_query(
+                        notebook_id=notebook_id,
+                        user_id=user_id,
+                        query_text=query,
+                        model_name=used_model,
+                        prompt_tokens=prompt_tokens,
+                        completion_tokens=completion_tokens,
+                        response_time_ms=timings["7_llm_completion_ms"]
+                    )
+                except Exception as log_err:
+                    logger.warning(f"Failed to log query metrics: {log_err}")
+
             # Step 8: Save conversation turn to database
             t8 = time.time()
             save_conversation_turn(
@@ -447,6 +467,26 @@ def create_chat_v2_routes(app, pipeline, db_manager, notebook_manager, conversat
                         assistant_response=response_text,
                     )
                     timings["7_save_history_ms"] = int((time_module.time() - t7) * 1000)
+
+                    # Log query to QueryLogger for metrics
+                    if pipeline._query_logger:
+                        try:
+                            from dbnotebook.core.observability.token_counter import get_token_counter
+                            token_counter = get_token_counter()
+                            prompt_tokens = token_counter.count_tokens(query + context)
+                            completion_tokens = token_counter.count_tokens(response_text)
+
+                            pipeline._query_logger.log_query(
+                                notebook_id=notebook_id,
+                                user_id=user_id,
+                                query_text=query,
+                                model_name=used_model,
+                                prompt_tokens=prompt_tokens,
+                                completion_tokens=completion_tokens,
+                                response_time_ms=timings["6_llm_stream_ms"]
+                            )
+                        except Exception as log_err:
+                            logger.warning(f"Failed to log query metrics: {log_err}")
 
                     # Calculate total execution time
                     execution_time_ms = int((time_module.time() - start_time) * 1000)

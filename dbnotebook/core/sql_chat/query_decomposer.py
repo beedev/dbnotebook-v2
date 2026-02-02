@@ -14,12 +14,16 @@ This approach improves accuracy for complex queries like:
 import json
 import logging
 import re
+import time
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import List, Optional, TYPE_CHECKING
 
 from llama_index.core.llms.llm import LLM
 
 from dbnotebook.core.sql_chat.types import SchemaInfo
+
+if TYPE_CHECKING:
+    from dbnotebook.core.observability.query_logger import QueryLogger
 
 logger = logging.getLogger(__name__)
 
@@ -109,7 +113,10 @@ class QueryDecomposer:
         self,
         query: str,
         schema: SchemaInfo,
-        max_sub_queries: int = 5
+        max_sub_queries: int = 5,
+        query_logger: Optional["QueryLogger"] = None,
+        user_id: Optional[str] = None,
+        session_id: Optional[str] = None
     ) -> List[SubQuery]:
         """Break complex query into sub-questions.
 
@@ -117,6 +124,9 @@ class QueryDecomposer:
             query: Natural language query
             schema: Database schema for context
             max_sub_queries: Maximum number of sub-queries to generate
+            query_logger: Optional query logger for metrics
+            user_id: Optional user ID for metrics
+            session_id: Optional session ID for metrics
 
         Returns:
             List of SubQuery objects with dependencies
@@ -146,8 +156,33 @@ class QueryDecomposer:
 Only output the JSON array, no other text."""
 
         try:
+            start_time = time.time()
             response = self._llm.complete(prompt)
-            sub_queries = self._parse_decomposition(response.text, query)
+            response_time_ms = int((time.time() - start_time) * 1000)
+            response_text = response.text
+
+            # Log query metrics
+            if query_logger:
+                try:
+                    from dbnotebook.core.observability.token_counter import get_token_counter
+                    token_counter = get_token_counter()
+                    prompt_tokens = token_counter.count_tokens(prompt)
+                    completion_tokens = token_counter.count_tokens(response_text)
+                    model_name = self._llm.model if hasattr(self._llm, 'model') else 'unknown'
+
+                    query_logger.log_query(
+                        notebook_id=session_id or "sql-chat",
+                        user_id=user_id or "sql-chat-system",
+                        query_text=f"[SQL Chat - Query Decomposition]",
+                        model_name=model_name,
+                        prompt_tokens=prompt_tokens,
+                        completion_tokens=completion_tokens,
+                        response_time_ms=response_time_ms
+                    )
+                except Exception as log_err:
+                    logger.warning(f"Failed to log query decomposition metrics: {log_err}")
+
+            sub_queries = self._parse_decomposition(response_text, query)
 
             # Limit number of sub-queries
             if len(sub_queries) > max_sub_queries:
@@ -257,7 +292,10 @@ Only output the JSON array, no other text."""
     def generate_combination_query(
         self,
         sub_queries: List[SubQuery],
-        original_query: str
+        original_query: str,
+        query_logger: Optional["QueryLogger"] = None,
+        user_id: Optional[str] = None,
+        session_id: Optional[str] = None
     ) -> str:
         """Generate SQL to combine sub-query results.
 
@@ -266,6 +304,9 @@ Only output the JSON array, no other text."""
         Args:
             sub_queries: Sub-queries with SQL populated
             original_query: Original user question
+            query_logger: Optional query logger for metrics
+            user_id: Optional user ID for metrics
+            session_id: Optional session ID for metrics
 
         Returns:
             Final combining SQL query
@@ -294,8 +335,31 @@ Only output the JSON array, no other text."""
 **Output**: Just the SELECT statement, no explanations."""
 
         try:
+            start_time = time.time()
             response = self._llm.complete(prompt)
+            response_time_ms = int((time.time() - start_time) * 1000)
             final_sql = response.text.strip()
+
+            # Log query metrics
+            if query_logger:
+                try:
+                    from dbnotebook.core.observability.token_counter import get_token_counter
+                    token_counter = get_token_counter()
+                    prompt_tokens = token_counter.count_tokens(prompt)
+                    completion_tokens = token_counter.count_tokens(final_sql)
+                    model_name = self._llm.model if hasattr(self._llm, 'model') else 'unknown'
+
+                    query_logger.log_query(
+                        notebook_id=session_id or "sql-chat",
+                        user_id=user_id or "sql-chat-system",
+                        query_text=f"[SQL Chat - Query Combination]",
+                        model_name=model_name,
+                        prompt_tokens=prompt_tokens,
+                        completion_tokens=completion_tokens,
+                        response_time_ms=response_time_ms
+                    )
+                except Exception as log_err:
+                    logger.warning(f"Failed to log query combination metrics: {log_err}")
 
             # Clean up
             if final_sql.lower().startswith('select'):

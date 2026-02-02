@@ -7,9 +7,13 @@ Integrates few-shot learning, intent classification, and semantic inspection.
 """
 
 import logging
-from typing import Dict, List, Optional, Tuple
+import time
+from typing import Dict, List, Optional, Tuple, TYPE_CHECKING
 
 from llama_index.core import SQLDatabase, VectorStoreIndex
+
+if TYPE_CHECKING:
+    from dbnotebook.core.observability.query_logger import QueryLogger
 from llama_index.core.embeddings import BaseEmbedding
 from llama_index.core.indices.struct_store import (
     NLSQLTableQueryEngine,
@@ -331,7 +335,10 @@ ANSI SQL Compliance (MANDATORY - works across PostgreSQL, MySQL, SQLite):
         connection_id: str,
         nl_query: str,
         schema: Optional[SchemaInfo] = None,
-        dictionary_context: Optional[str] = None
+        dictionary_context: Optional[str] = None,
+        query_logger: Optional["QueryLogger"] = None,
+        user_id: Optional[str] = None,
+        session_id: Optional[str] = None
     ) -> Tuple[str, bool, IntentClassification]:
         """Generate SQL with automatic retry on syntax errors.
 
@@ -340,6 +347,9 @@ ANSI SQL Compliance (MANDATORY - works across PostgreSQL, MySQL, SQLite):
             nl_query: Natural language query
             schema: Optional schema
             dictionary_context: Optional dictionary context from RAG (sample values, descriptions)
+            query_logger: Optional query logger for metrics
+            user_id: Optional user ID for metrics
+            session_id: Optional session ID for metrics
 
         Returns:
             Tuple of (sql, success, intent)
@@ -356,18 +366,34 @@ ANSI SQL Compliance (MANDATORY - works across PostgreSQL, MySQL, SQLite):
 
             # Try to correct
             logger.info(f"Attempt {attempt + 1}: Correcting SQL - {error}")
-            sql = self._correct_sql(nl_query, sql, error)
+            sql = self._correct_sql(
+                nl_query, sql, error,
+                query_logger=query_logger,
+                user_id=user_id,
+                session_id=session_id
+            )
 
         # Return last attempt
         return sql, False, intent
 
-    def _correct_sql(self, nl_query: str, sql: str, error: str) -> str:
+    def _correct_sql(
+        self,
+        nl_query: str,
+        sql: str,
+        error: str,
+        query_logger: Optional["QueryLogger"] = None,
+        user_id: Optional[str] = None,
+        session_id: Optional[str] = None
+    ) -> str:
         """Ask LLM to correct SQL based on validation error.
 
         Args:
             nl_query: Original query
             sql: Current SQL
             error: Error message
+            query_logger: Optional query logger for metrics
+            user_id: Optional user ID for metrics
+            session_id: Optional session ID for metrics
 
         Returns:
             Corrected SQL
@@ -384,8 +410,31 @@ Error: {error}
 Generate a corrected SQL query. Return ONLY the SQL, no explanation.
 """
         try:
+            start_time = time.time()
             response = self._llm.complete(prompt)
+            response_time_ms = int((time.time() - start_time) * 1000)
             corrected = response.text.strip()
+
+            # Log query metrics
+            if query_logger:
+                try:
+                    from dbnotebook.core.observability.token_counter import get_token_counter
+                    token_counter = get_token_counter()
+                    prompt_tokens = token_counter.count_tokens(prompt)
+                    completion_tokens = token_counter.count_tokens(corrected)
+                    model_name = self._llm.model if hasattr(self._llm, 'model') else 'unknown'
+
+                    query_logger.log_query(
+                        notebook_id=session_id or "sql-chat",
+                        user_id=user_id or "sql-chat-system",
+                        query_text=f"[SQL Chat - SQL Correction]",
+                        model_name=model_name,
+                        prompt_tokens=prompt_tokens,
+                        completion_tokens=completion_tokens,
+                        response_time_ms=response_time_ms
+                    )
+                except Exception as log_err:
+                    logger.warning(f"Failed to log SQL correction metrics: {log_err}")
 
             # Remove markdown code blocks if present
             if "```sql" in corrected:
@@ -410,7 +459,10 @@ Generate a corrected SQL query. Return ONLY the SQL, no explanation.
         connection_id: str,
         previous_sql: str,
         refinement: str,
-        schema: Optional[SchemaInfo] = None
+        schema: Optional[SchemaInfo] = None,
+        query_logger: Optional["QueryLogger"] = None,
+        user_id: Optional[str] = None,
+        session_id: Optional[str] = None
     ) -> str:
         """Refine previous SQL based on user's modification request.
 
@@ -419,6 +471,9 @@ Generate a corrected SQL query. Return ONLY the SQL, no explanation.
             previous_sql: Previous SQL query
             refinement: User's refinement instruction
             schema: Optional schema
+            query_logger: Optional query logger for metrics
+            user_id: Optional user ID for metrics
+            session_id: Optional session ID for metrics
 
         Returns:
             Modified SQL query
@@ -448,8 +503,31 @@ IMPORTANT: Only use tables and columns from the schema above. Do not invent or a
 Generate the modified SQL query. Return ONLY the SQL, no explanation.
 """
         try:
+            start_time = time.time()
             response = self._llm.complete(prompt)
+            response_time_ms = int((time.time() - start_time) * 1000)
             modified = response.text.strip()
+
+            # Log query metrics
+            if query_logger:
+                try:
+                    from dbnotebook.core.observability.token_counter import get_token_counter
+                    token_counter = get_token_counter()
+                    prompt_tokens = token_counter.count_tokens(prompt)
+                    completion_tokens = token_counter.count_tokens(modified)
+                    model_name = self._llm.model if hasattr(self._llm, 'model') else 'unknown'
+
+                    query_logger.log_query(
+                        notebook_id=session_id or "sql-chat",
+                        user_id=user_id or "sql-chat-system",
+                        query_text=f"[SQL Chat - SQL Refinement]",
+                        model_name=model_name,
+                        prompt_tokens=prompt_tokens,
+                        completion_tokens=completion_tokens,
+                        response_time_ms=response_time_ms
+                    )
+                except Exception as log_err:
+                    logger.warning(f"Failed to log SQL refinement metrics: {log_err}")
 
             # Clean up
             if "```" in modified:
@@ -464,11 +542,20 @@ Generate the modified SQL query. Return ONLY the SQL, no explanation.
             logger.error(f"SQL refinement failed: {e}")
             return previous_sql
 
-    def explain_sql(self, sql: str) -> str:
+    def explain_sql(
+        self,
+        sql: str,
+        query_logger: Optional["QueryLogger"] = None,
+        user_id: Optional[str] = None,
+        session_id: Optional[str] = None
+    ) -> str:
         """Generate natural language explanation of SQL query.
 
         Args:
             sql: SQL query to explain
+            query_logger: Optional query logger for metrics
+            user_id: Optional user ID for metrics
+            session_id: Optional session ID for metrics
 
         Returns:
             Natural language explanation
@@ -480,8 +567,33 @@ Generate the modified SQL query. Return ONLY the SQL, no explanation.
 Provide a brief, clear explanation of what this query does.
 """
         try:
+            start_time = time.time()
             response = self._llm.complete(prompt)
-            return response.text.strip()
+            response_time_ms = int((time.time() - start_time) * 1000)
+            explanation = response.text.strip()
+
+            # Log query metrics
+            if query_logger:
+                try:
+                    from dbnotebook.core.observability.token_counter import get_token_counter
+                    token_counter = get_token_counter()
+                    prompt_tokens = token_counter.count_tokens(prompt)
+                    completion_tokens = token_counter.count_tokens(explanation)
+                    model_name = self._llm.model if hasattr(self._llm, 'model') else 'unknown'
+
+                    query_logger.log_query(
+                        notebook_id=session_id or "sql-chat",
+                        user_id=user_id or "sql-chat-system",
+                        query_text=f"[SQL Chat - SQL Explanation]",
+                        model_name=model_name,
+                        prompt_tokens=prompt_tokens,
+                        completion_tokens=completion_tokens,
+                        response_time_ms=response_time_ms
+                    )
+                except Exception as log_err:
+                    logger.warning(f"Failed to log SQL explanation metrics: {log_err}")
+
+            return explanation
         except Exception as e:
             logger.error(f"SQL explanation failed: {e}")
             return "Unable to generate explanation"

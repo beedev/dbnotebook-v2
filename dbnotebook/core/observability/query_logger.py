@@ -33,6 +33,24 @@ MODEL_PRICING = {
     "llama3.1:70b": {"input": 0.00, "output": 0.00},
     "deepseek-r1:32b": {"input": 0.00, "output": 0.00},
     "deepseek-r1": {"input": 0.00, "output": 0.00},
+
+    # Groq (per 1M tokens - very competitive pricing)
+    "meta-llama/llama-4-maverick-17b-128e-instruct": {"input": 0.20, "output": 0.60},
+    "meta-llama/llama-4-scout-17b-16e-instruct": {"input": 0.11, "output": 0.34},
+    "openai/gpt-oss-120b": {"input": 0.15, "output": 0.60},  # Groq GPT OSS 120B 128k
+    "llama-3.3-70b-versatile": {"input": 0.59, "output": 0.79},
+    "llama-3.1-70b-versatile": {"input": 0.59, "output": 0.79},
+    "llama-3.1-8b-instant": {"input": 0.05, "output": 0.08},
+    "llama3-70b-8192": {"input": 0.59, "output": 0.79},
+    "llama3-8b-8192": {"input": 0.05, "output": 0.08},
+    "mixtral-8x7b-32768": {"input": 0.24, "output": 0.24},
+    "gemma2-9b-it": {"input": 0.20, "output": 0.20},
+
+    # OpenAI newer models (GPT-4.1 series)
+    "gpt-4.1": {"input": 2.00, "output": 8.00},  # Full model
+    "gpt-4.1-mini": {"input": 0.40, "output": 1.60},
+    "gpt-4.1-nano": {"input": 0.10, "output": 0.40},
+
 }
 
 
@@ -293,3 +311,279 @@ class QueryLogger:
             List of model names
         """
         return list(MODEL_PRICING.keys())
+
+    def get_admin_metrics(self, days: int = 30) -> Dict:
+        """
+        Get aggregated metrics for admin dashboard.
+
+        Aggregates token usage, costs, and query counts by model, user, and day
+        from the database (with in-memory fallback).
+
+        Args:
+            days: Number of days to look back (default: 30)
+
+        Returns:
+            Dictionary with:
+            - summary: Total tokens, cost, queries, avg_response_time
+            - by_model: List of metrics grouped by model
+            - by_user: List of metrics grouped by user
+            - by_day: List of metrics grouped by day
+        """
+        from datetime import timedelta
+        from sqlalchemy import func, cast, Date
+
+        cutoff_date = datetime.utcnow() - timedelta(days=days)
+
+        # Default empty response
+        empty_response = {
+            "summary": {
+                "total_tokens": 0,
+                "total_cost": 0.0,
+                "total_queries": 0,
+                "avg_response_time": 0.0
+            },
+            "by_model": [],
+            "by_user": [],
+            "by_day": []
+        }
+
+        # Try database query first
+        if self.db:
+            try:
+                with self.db.get_session() as session:
+                    from ..db.models import QueryLog, User
+
+                    # Base query for time range
+                    base_query = session.query(QueryLog).filter(
+                        QueryLog.timestamp >= cutoff_date
+                    )
+
+                    # Get total count
+                    total_queries = base_query.count()
+                    if total_queries == 0:
+                        return empty_response
+
+                    # Summary aggregation
+                    summary_result = session.query(
+                        func.sum(QueryLog.total_tokens).label('total_tokens'),
+                        func.sum(QueryLog.prompt_tokens).label('prompt_tokens'),
+                        func.sum(QueryLog.completion_tokens).label('completion_tokens'),
+                        func.avg(QueryLog.response_time_ms).label('avg_response_time')
+                    ).filter(QueryLog.timestamp >= cutoff_date).first()
+
+                    # Calculate total cost from token usage
+                    total_prompt = summary_result.prompt_tokens or 0
+                    total_completion = summary_result.completion_tokens or 0
+
+                    # Get model breakdown for accurate cost calculation
+                    model_results = session.query(
+                        QueryLog.model_name,
+                        func.count(QueryLog.log_id).label('query_count'),
+                        func.sum(QueryLog.total_tokens).label('total_tokens'),
+                        func.sum(QueryLog.prompt_tokens).label('prompt_tokens'),
+                        func.sum(QueryLog.completion_tokens).label('completion_tokens')
+                    ).filter(
+                        QueryLog.timestamp >= cutoff_date
+                    ).group_by(QueryLog.model_name).all()
+
+                    by_model = []
+                    total_cost = 0.0
+                    for row in model_results:
+                        model_name = row.model_name or "unknown"
+                        prompt = row.prompt_tokens or 0
+                        completion = row.completion_tokens or 0
+                        cost = self.estimate_cost(model_name, prompt, completion)
+                        total_cost += cost
+                        by_model.append({
+                            "model": model_name,
+                            "tokens": row.total_tokens or 0,
+                            "cost": round(cost, 4),
+                            "queries": row.query_count
+                        })
+
+                    # Sort by tokens descending
+                    by_model.sort(key=lambda x: x["tokens"], reverse=True)
+
+                    # User aggregation with username lookup and accurate cost per model
+                    user_model_results = session.query(
+                        QueryLog.user_id,
+                        User.username,
+                        QueryLog.model_name,
+                        func.count(QueryLog.log_id).label('query_count'),
+                        func.sum(QueryLog.total_tokens).label('total_tokens'),
+                        func.sum(QueryLog.prompt_tokens).label('prompt_tokens'),
+                        func.sum(QueryLog.completion_tokens).label('completion_tokens')
+                    ).join(
+                        User, QueryLog.user_id == User.user_id, isouter=True
+                    ).filter(
+                        QueryLog.timestamp >= cutoff_date
+                    ).group_by(QueryLog.user_id, User.username, QueryLog.model_name).all()
+
+                    # Aggregate by user with accurate per-model cost calculation
+                    user_agg = {}
+                    for row in user_model_results:
+                        user_id = str(row.user_id)
+                        username = row.username or user_id[:8]
+                        model_name = row.model_name or "unknown"
+                        prompt = row.prompt_tokens or 0
+                        completion = row.completion_tokens or 0
+                        cost = self.estimate_cost(model_name, prompt, completion)
+
+                        if user_id not in user_agg:
+                            user_agg[user_id] = {
+                                "username": username,
+                                "tokens": 0,
+                                "cost": 0.0,
+                                "queries": 0
+                            }
+                        user_agg[user_id]["tokens"] += row.total_tokens or 0
+                        user_agg[user_id]["cost"] += cost
+                        user_agg[user_id]["queries"] += row.query_count
+
+                    by_user = [
+                        {
+                            "user_id": uid,
+                            "username": data["username"],
+                            "tokens": data["tokens"],
+                            "cost": round(data["cost"], 4),
+                            "queries": data["queries"]
+                        }
+                        for uid, data in user_agg.items()
+                    ]
+
+                    # Sort by tokens descending
+                    by_user.sort(key=lambda x: x["tokens"], reverse=True)
+
+                    # Daily aggregation
+                    day_results = session.query(
+                        cast(QueryLog.timestamp, Date).label('date'),
+                        func.count(QueryLog.log_id).label('query_count'),
+                        func.sum(QueryLog.total_tokens).label('total_tokens')
+                    ).filter(
+                        QueryLog.timestamp >= cutoff_date
+                    ).group_by(
+                        cast(QueryLog.timestamp, Date)
+                    ).order_by(
+                        cast(QueryLog.timestamp, Date)
+                    ).all()
+
+                    by_day = []
+                    for row in day_results:
+                        by_day.append({
+                            "date": row.date.isoformat() if row.date else None,
+                            "tokens": row.total_tokens or 0,
+                            "queries": row.query_count
+                        })
+
+                    return {
+                        "summary": {
+                            "total_tokens": summary_result.total_tokens or 0,
+                            "total_cost": round(total_cost, 4),
+                            "total_queries": total_queries,
+                            "avg_response_time": round(summary_result.avg_response_time or 0, 2)
+                        },
+                        "by_model": by_model,
+                        "by_user": by_user,
+                        "by_day": by_day
+                    }
+
+            except Exception as e:
+                logger.error(f"Failed to get admin metrics from database: {e}")
+                # Fall through to in-memory fallback
+
+        # In-memory fallback
+        filtered_logs = [
+            log for log in self._in_memory_logs
+            if log["timestamp"] >= cutoff_date
+        ]
+
+        if not filtered_logs:
+            return empty_response
+
+        # Summary
+        total_tokens = sum(log["total_tokens"] for log in filtered_logs)
+        total_cost = sum(log["estimated_cost"] for log in filtered_logs)
+        avg_response_time = sum(log["response_time_ms"] for log in filtered_logs) / len(filtered_logs)
+
+        # By model
+        model_agg = {}
+        for log in filtered_logs:
+            model = log["model_name"]
+            if model not in model_agg:
+                model_agg[model] = {"tokens": 0, "cost": 0.0, "queries": 0}
+            model_agg[model]["tokens"] += log["total_tokens"]
+            model_agg[model]["cost"] += log["estimated_cost"]
+            model_agg[model]["queries"] += 1
+
+        by_model = [
+            {"model": m, "tokens": d["tokens"], "cost": round(d["cost"], 4), "queries": d["queries"]}
+            for m, d in model_agg.items()
+        ]
+        by_model.sort(key=lambda x: x["tokens"], reverse=True)
+
+        # By user (with username lookup from database if available)
+        user_agg = {}
+        for log in filtered_logs:
+            user_id = log["user_id"]
+            if user_id not in user_agg:
+                user_agg[user_id] = {"tokens": 0, "cost": 0.0, "queries": 0}
+            user_agg[user_id]["tokens"] += log["total_tokens"]
+            user_agg[user_id]["cost"] += log["estimated_cost"]
+            user_agg[user_id]["queries"] += 1
+
+        # Lookup usernames from database if available
+        usernames = {}
+        if self.db:
+            try:
+                with self.db.get_session() as session:
+                    from ..db.models import User
+                    from uuid import UUID as UUID_type
+                    for user_id in user_agg.keys():
+                        try:
+                            user = session.query(User).filter(
+                                User.user_id == UUID_type(user_id)
+                            ).first()
+                            if user:
+                                usernames[user_id] = user.username
+                        except (ValueError, Exception):
+                            pass
+            except Exception:
+                pass
+
+        by_user = [
+            {
+                "user_id": u,
+                "username": usernames.get(u, u[:8] if len(u) > 8 else u),
+                "tokens": d["tokens"],
+                "cost": round(d["cost"], 4),
+                "queries": d["queries"]
+            }
+            for u, d in user_agg.items()
+        ]
+        by_user.sort(key=lambda x: x["tokens"], reverse=True)
+
+        # By day
+        day_agg = {}
+        for log in filtered_logs:
+            day = log["timestamp"].date().isoformat()
+            if day not in day_agg:
+                day_agg[day] = {"tokens": 0, "queries": 0}
+            day_agg[day]["tokens"] += log["total_tokens"]
+            day_agg[day]["queries"] += 1
+
+        by_day = [
+            {"date": d, "tokens": data["tokens"], "queries": data["queries"]}
+            for d, data in sorted(day_agg.items())
+        ]
+
+        return {
+            "summary": {
+                "total_tokens": total_tokens,
+                "total_cost": round(total_cost, 4),
+                "total_queries": len(filtered_logs),
+                "avg_response_time": round(avg_response_time, 2)
+            },
+            "by_model": by_model,
+            "by_user": by_user,
+            "by_day": by_day
+        }

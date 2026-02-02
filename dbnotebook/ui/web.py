@@ -26,6 +26,7 @@ from ..api.routes.chat_v2 import create_chat_v2_routes
 from ..api.routes.admin import create_admin_routes
 from ..api.routes.auth import create_auth_routes
 from ..api.routes.settings import create_settings_routes
+from ..api.routes.quiz import create_quiz_routes
 from ..core.ingestion import WebContentIngestion, SynopsisManager
 from ..core.studio import StudioManager
 from ..core.constants import DEFAULT_USER_ID
@@ -697,6 +698,29 @@ Output ONLY valid JSON, nothing else."""
                             except Exception as save_err:
                                 logger.warning(f"Failed to store in session memory: {save_err}")
 
+                        # Log query to QueryLogger for metrics (image generation path)
+                        if hasattr(self._pipeline, '_query_logger') and self._pipeline._query_logger:
+                            try:
+                                from dbnotebook.core.observability.token_counter import get_token_counter
+                                token_counter = get_token_counter()
+                                prompt_tokens = token_counter.count_tokens(message)
+                                completion_tokens = token_counter.count_tokens(document_context)
+                                model_name = self._pipeline.get_model_name() or "unknown"
+                                user_id = data.get("user_id", "00000000-0000-0000-0000-000000000001")
+                                img_execution_time_ms = int((timing_module.time() - start_time) * 1000)
+
+                                self._pipeline._query_logger.log_query(
+                                    notebook_id=notebook_id,
+                                    user_id=user_id,
+                                    query_text=message,
+                                    model_name=model_name,
+                                    prompt_tokens=prompt_tokens,
+                                    completion_tokens=completion_tokens,
+                                    response_time_ms=timings.get("7_llm_completion_ms", img_execution_time_ms)
+                                )
+                            except Exception as log_err:
+                                logger.warning(f"Failed to log query metrics: {log_err}")
+
                         yield f"data: {json.dumps({'done': True})}\n\n"
 
                     elif self._is_image_generation_request(message) and not self._image_provider:
@@ -717,6 +741,29 @@ Output ONLY valid JSON, nothing else."""
                                 )
                             except Exception as save_err:
                                 logger.warning(f"Failed to store in session memory: {save_err}")
+
+                        # Log query to QueryLogger for metrics
+                        if hasattr(self._pipeline, '_query_logger') and self._pipeline._query_logger:
+                            try:
+                                from dbnotebook.core.observability.token_counter import get_token_counter
+                                token_counter = get_token_counter()
+                                prompt_tokens = token_counter.count_tokens(message)
+                                completion_tokens = token_counter.count_tokens(document_context)
+                                model_name = self._pipeline.get_model_name() or "unknown"
+                                user_id = data.get("user_id", "00000000-0000-0000-0000-000000000001")
+                                no_img_execution_time_ms = int((timing_module.time() - start_time) * 1000)
+
+                                self._pipeline._query_logger.log_query(
+                                    notebook_id=notebook_id,
+                                    user_id=user_id,
+                                    query_text=message,
+                                    model_name=model_name,
+                                    prompt_tokens=prompt_tokens,
+                                    completion_tokens=completion_tokens,
+                                    response_time_ms=timings.get("7_llm_completion_ms", no_img_execution_time_ms)
+                                )
+                            except Exception as log_err:
+                                logger.warning(f"Failed to log query metrics: {log_err}")
 
                         yield f"data: {json.dumps({'done': True})}\n\n"
 
@@ -747,6 +794,28 @@ Output ONLY valid JSON, nothing else."""
 
                         # Calculate total execution time
                         execution_time_ms = int((timing_module.time() - start_time) * 1000)
+
+                        # Log query to QueryLogger for metrics
+                        if hasattr(self._pipeline, '_query_logger') and self._pipeline._query_logger:
+                            try:
+                                from dbnotebook.core.observability.token_counter import get_token_counter
+                                token_counter = get_token_counter()
+                                prompt_tokens = token_counter.count_tokens(message)
+                                completion_tokens = token_counter.count_tokens(document_context)
+                                model_name = self._pipeline.get_model_name() or "unknown"
+                                user_id = data.get("user_id", "00000000-0000-0000-0000-000000000001")
+
+                                self._pipeline._query_logger.log_query(
+                                    notebook_id=notebook_id,
+                                    user_id=user_id,
+                                    query_text=message,
+                                    model_name=model_name,
+                                    prompt_tokens=prompt_tokens,
+                                    completion_tokens=completion_tokens,
+                                    response_time_ms=timings.get("7_llm_completion_ms", execution_time_ms)
+                                )
+                            except Exception as log_err:
+                                logger.warning(f"Failed to log query metrics: {log_err}")
 
                         # Send sources and metadata with the done signal
                         metadata = {
@@ -897,15 +966,16 @@ Output ONLY valid JSON, nothing else."""
                 logger.error(f"Error setting model: {e}")
                 return jsonify({"success": False, "error": str(e)})
 
-        @self._app.route("/notebooks")
-        def notebooks_page():
-            """Serve the notebooks management page."""
-            return render_template("notebooks.html")
+        # DEPRECATED: Old Flask templates - React SPA handles these routes now
+        # @self._app.route("/notebooks")
+        # def notebooks_page():
+        #     """Serve the notebooks management page."""
+        #     return render_template("notebooks.html")
 
-        @self._app.route("/documents")
-        def documents_page():
-            """Serve the documents management page."""
-            return render_template("documents.html")
+        # @self._app.route("/documents")
+        # def documents_page():
+        #     """Serve the documents management page."""
+        #     return render_template("documents.html")
 
         @self._app.route("/api/documents/list", methods=["GET"])
         def list_documents():
@@ -1531,7 +1601,8 @@ Output ONLY valid JSON, nothing else."""
             create_admin_routes(
                 self._app,
                 db_manager=self._db_manager,
-                notebook_manager=self._notebook_manager
+                notebook_manager=self._notebook_manager,
+                pipeline=self._pipeline
             )
             logger.info("Admin API routes registered (/api/admin)")
 
@@ -1547,6 +1618,18 @@ Output ONLY valid JSON, nothing else."""
             logger.info("Settings API routes registered (/api/settings)")
         except Exception as e:
             logger.warning(f"Settings API routes not available: {e}")
+
+        # Register Quiz API routes
+        try:
+            create_quiz_routes(
+                self._app,
+                pipeline=self._pipeline,
+                db_manager=self._db_manager,
+                notebook_manager=self._notebook_manager
+            )
+            logger.info("Quiz API routes registered (/api/quiz)")
+        except Exception as e:
+            logger.warning(f"Quiz API routes not available: {e}")
 
         # === Query Logging & Observability Endpoints ===
 

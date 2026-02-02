@@ -9,8 +9,8 @@
 
 import { useState, useRef, useEffect } from 'react';
 import { createPortal } from 'react-dom';
-import { useNavigate } from 'react-router-dom';
-import { MessageSquare, BarChart3, Database, Cpu, Sparkles, Bot, Cloud, Zap, Terminal, User, Settings, LogOut, ChevronDown } from 'lucide-react';
+import { useNavigate, useLocation } from 'react-router-dom';
+import { MessageSquare, BarChart3, Database, Cpu, Sparkles, Bot, Cloud, Zap, Terminal, User, Settings, LogOut, ChevronDown, ClipboardCheck, FolderOpen } from 'lucide-react';
 import { useApp, type AppView } from '../../contexts/AppContext';
 import { useAuth } from '../../contexts/AuthContext';
 import type { ModelProvider } from '../../types';
@@ -53,6 +53,13 @@ const navTabs: NavTab[] = [
     hoverColor: 'hover:bg-glow/10',
   },
   {
+    id: 'documents',
+    label: 'Documents',
+    icon: <FolderOpen className="w-4 h-4" />,
+    color: 'text-emerald-400',
+    hoverColor: 'hover:bg-emerald-500/10',
+  },
+  {
     id: 'analytics',
     label: 'Analytics',
     icon: <BarChart3 className="w-4 h-4" />,
@@ -73,10 +80,18 @@ const navTabs: NavTab[] = [
     color: 'text-amber-400',
     hoverColor: 'hover:bg-amber-500/10',
   },
+  {
+    id: 'quizzes',
+    label: 'Quizzes',
+    icon: <ClipboardCheck className="w-4 h-4" />,
+    color: 'text-purple-400',
+    hoverColor: 'hover:bg-purple-500/10',
+  },
 ];
 
 export function Header() {
   const navigate = useNavigate();
+  const location = useLocation();
   const { user, isAdmin, logout } = useAuth();
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [menuPosition, setMenuPosition] = useState({ top: 0, right: 0 });
@@ -151,10 +166,25 @@ export function Header() {
       <nav className="flex items-center gap-1">
         {navTabs.map((tab) => {
           const isActive = currentView === tab.id;
+          const handleClick = () => {
+            // Some tabs use route-based navigation
+            if (tab.id === 'quizzes') {
+              navigate('/quizzes');
+            } else if (tab.id === 'documents') {
+              navigate('/documents');
+            } else {
+              // For view-based tabs (chat, analytics, sql-chat, query-api),
+              // navigate to / first if we're on a different route
+              if (location.pathname !== '/') {
+                navigate('/');
+              }
+              setCurrentView(tab.id);
+            }
+          };
           return (
             <button
               key={tab.id}
-              onClick={() => setCurrentView(tab.id)}
+              onClick={handleClick}
               className={`
                 flex items-center gap-2 px-4 py-2 rounded-lg
                 font-medium text-sm transition-all duration-200

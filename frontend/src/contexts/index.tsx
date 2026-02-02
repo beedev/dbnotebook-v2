@@ -54,6 +54,9 @@ export type { AppView } from './AppContext';
 // Auth Context
 export { AuthProvider, useAuth } from './AuthContext';
 
+// Quiz Context
+export { QuizProvider, useQuiz } from './QuizContext';
+
 /* eslint-enable react-refresh/only-export-components */
 
 /**

@@ -1,43 +1,28 @@
 import { useState } from 'react';
-import { Menu, X, Settings, Github, ChevronDown, ChevronRight } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { Menu, X, Settings, Github, ChevronDown, ChevronRight, FileText, ExternalLink } from 'lucide-react';
 import { NotebookSelector } from './NotebookSelector';
-import { DocumentsList } from './DocumentsList';
-import { WebSearchPanel } from './WebSearchPanel';
 import { ThemeToggle } from '../ui';
 import { useNotebook, useDocument } from '../../contexts';
 import type { Notebook } from '../../types';
 
 interface SidebarProps {
-  // Document operations (needed for toast notifications in parent)
-  onUploadDocument: (file: File) => Promise<boolean>;
-  onDeleteDocument: (sourceId: string) => Promise<boolean>;
-  onToggleDocument: (sourceId: string, active: boolean) => Promise<boolean>;
-
   // Notebook operations (needed for API calls in parent)
   onSelectNotebook: (notebook: Notebook | null) => void;
-  onCreateNotebook: (name: string, description?: string) => Promise<Notebook | null>;
   onDeleteNotebook: (id: string) => Promise<boolean>;
   onUpdateNotebook: (id: string, data: Partial<Notebook>) => Promise<boolean>;
-
-  // Web Search callback
-  onWebSourcesAdded?: () => void;
 }
 
 export function Sidebar({
-  onUploadDocument,
-  onDeleteDocument,
-  onToggleDocument,
   onSelectNotebook,
-  onCreateNotebook,
   onDeleteNotebook,
   onUpdateNotebook,
-  onWebSourcesAdded,
 }: SidebarProps) {
+  const navigate = useNavigate();
   const [isMobileOpen, setIsMobileOpen] = useState(false);
   const [expandedSections, setExpandedSections] = useState({
     notebooks: true,
     sources: true,
-    webSearch: false,
   });
 
   // Use contexts for notebooks and documents (read-only state)
@@ -47,10 +32,7 @@ export function Sidebar({
     isLoading: isLoadingNotebooks,
   } = useNotebook();
 
-  const {
-    documents,
-    isLoading: isLoadingDocs,
-  } = useDocument();
+  const { documents } = useDocument();
 
   const toggleSection = (section: keyof typeof expandedSections) => {
     setExpandedSections(prev => ({ ...prev, [section]: !prev[section] }));
@@ -126,7 +108,6 @@ export function Sidebar({
                   notebooks={notebooks}
                   selectedNotebook={selectedNotebook}
                   onSelect={onSelectNotebook}
-                  onCreate={onCreateNotebook}
                   onDelete={onDeleteNotebook}
                   onUpdate={onUpdateNotebook}
                   isLoading={isLoadingNotebooks}
@@ -159,39 +140,54 @@ export function Sidebar({
             </button>
             {expandedSections.sources && (
               <div className="px-4 pb-4">
-                <DocumentsList
-                  documents={documents}
-                  onUpload={onUploadDocument}
-                  onDelete={onDeleteDocument}
-                  onToggleActive={onToggleDocument}
-                  isLoading={isLoadingDocs}
-                  notebookSelected={!!selectedNotebook}
-                />
-              </div>
-            )}
-          </div>
-
-          {/* Web Search Section */}
-          <div className="border-b border-void-surface/50">
-            <button
-              onClick={() => toggleSection('webSearch')}
-              className="w-full flex items-center justify-between px-4 py-3 hover:bg-void-surface/50 transition-colors"
-            >
-              <span className="text-xs font-semibold text-text-muted uppercase tracking-wider">
-                Web Search
-              </span>
-              {expandedSections.webSearch ? (
-                <ChevronDown className="w-4 h-4 text-text-dim" />
-              ) : (
-                <ChevronRight className="w-4 h-4 text-text-dim" />
-              )}
-            </button>
-            {expandedSections.webSearch && (
-              <div className="px-4 pb-4">
-                <WebSearchPanel
-                  notebookId={selectedNotebook?.id || null}
-                  onSourcesAdded={onWebSourcesAdded}
-                />
+                {!selectedNotebook ? (
+                  <p className="text-sm text-text-dim">
+                    Select a notebook to view sources
+                  </p>
+                ) : documents.length === 0 ? (
+                  <div className="space-y-3">
+                    <p className="text-sm text-text-dim">No documents yet</p>
+                    <button
+                      onClick={() => navigate(`/notebook/${selectedNotebook.id}/documents`)}
+                      className="flex items-center gap-2 text-sm text-glow hover:underline"
+                    >
+                      <ExternalLink className="w-4 h-4" />
+                      Add Documents
+                    </button>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {/* Read-only document list */}
+                    <div className="space-y-1 max-h-[300px] overflow-y-auto">
+                      {documents.slice(0, 10).map((doc) => (
+                        <div
+                          key={doc.source_id}
+                          className={`flex items-center gap-2 px-2 py-1.5 rounded-md ${
+                            doc.active !== false ? 'bg-void-surface' : 'bg-void-light opacity-50'
+                          }`}
+                        >
+                          <FileText className="w-4 h-4 text-text-muted flex-shrink-0" />
+                          <span className="text-sm text-text truncate" title={doc.filename}>
+                            {doc.filename}
+                          </span>
+                        </div>
+                      ))}
+                      {documents.length > 10 && (
+                        <p className="text-xs text-text-dim px-2">
+                          +{documents.length - 10} more documents
+                        </p>
+                      )}
+                    </div>
+                    {/* Manage link */}
+                    <button
+                      onClick={() => navigate(`/notebook/${selectedNotebook.id}/documents`)}
+                      className="flex items-center gap-2 text-sm text-glow hover:underline"
+                    >
+                      <ExternalLink className="w-4 h-4" />
+                      Manage Documents
+                    </button>
+                  </div>
+                )}
               </div>
             )}
           </div>

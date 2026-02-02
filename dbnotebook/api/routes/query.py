@@ -284,6 +284,27 @@ def create_query_routes(app, pipeline, db_manager, notebook_manager):
                         logger.info(f"Expanded follow-up query: '{query}' → '{retrieval_query}'")
 
                     timings["1c_query_expansion_ms"] = int((time.time() - t1c) * 1000)
+
+                    # Log query expansion to metrics
+                    if pipeline._query_logger:
+                        try:
+                            from dbnotebook.core.observability.token_counter import get_token_counter
+                            token_counter = get_token_counter()
+                            prompt_tokens = token_counter.count_tokens(condense_prompt)
+                            completion_tokens = token_counter.count_tokens(expanded)
+                            used_model = llm.model if hasattr(llm, 'model') else (model_name or 'unknown')
+
+                            pipeline._query_logger.log_query(
+                                notebook_id=notebook_id,
+                                user_id=user_id,
+                                query_text=f"[Query API - Query Expansion]",
+                                model_name=used_model,
+                                prompt_tokens=prompt_tokens,
+                                completion_tokens=completion_tokens,
+                                response_time_ms=timings["1c_query_expansion_ms"]
+                            )
+                        except Exception as log_err:
+                            logger.warning(f"Failed to log query expansion metrics: {log_err}")
                 except Exception as e:
                     logger.warning(f"Query expansion failed, using original: {e}")
                     # Continue with original query
@@ -442,6 +463,27 @@ User question: {query}"""
             response = llm.complete(prompt)
             response_text = response.text
             timings["8_llm_completion_ms"] = int((time.time() - t8) * 1000)
+
+            # Step 8b: Log query to QueryLogger for metrics
+            if pipeline._query_logger:
+                try:
+                    from dbnotebook.core.observability.token_counter import get_token_counter
+                    token_counter = get_token_counter()
+                    prompt_tokens = token_counter.count_tokens(prompt)
+                    completion_tokens = token_counter.count_tokens(response_text)
+                    used_model = llm.model if hasattr(llm, 'model') else (model_name or 'unknown')
+
+                    pipeline._query_logger.log_query(
+                        notebook_id=notebook_id,
+                        user_id=user_id,
+                        query_text=query,
+                        model_name=used_model,
+                        prompt_tokens=prompt_tokens,
+                        completion_tokens=completion_tokens,
+                        response_time_ms=timings["8_llm_completion_ms"]
+                    )
+                except Exception as log_err:
+                    logger.warning(f"Failed to log query metrics: {log_err}")
 
             # Step 9: Save conversation to in-memory session store (ephemeral)
             # Query API does NOT persist to DB - keeps RAG Chat history isolated

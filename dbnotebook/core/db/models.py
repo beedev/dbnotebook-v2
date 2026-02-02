@@ -523,3 +523,77 @@ class SQLConnectionAccess(Base):
 
     def __repr__(self):
         return f"<SQLConnectionAccess(connection_id={self.connection_id}, user_id={self.user_id}, level='{self.access_level}')>"
+
+
+# =============================================================================
+# Quiz Models
+# =============================================================================
+
+class Quiz(Base):
+    """Quiz configuration created by admin/user.
+
+    Quizzes are generated from notebook content and can be shared via link.
+    Supports adaptive difficulty that adjusts based on user performance.
+    Supports extended questions (beyond notebook content) and code-based questions.
+    """
+    __tablename__ = "quizzes"
+    __table_args__ = (
+        Index("idx_quizzes_user", "user_id"),
+        Index("idx_quizzes_notebook", "notebook_id"),
+        Index("idx_quizzes_created", "created_at"),
+    )
+
+    id = Column(UUID(), primary_key=True, default=uuid.uuid4)
+    notebook_id = Column(UUID(), ForeignKey("notebooks.notebook_id", ondelete="CASCADE"), nullable=False)
+    user_id = Column(UUID(), ForeignKey("users.user_id", ondelete="CASCADE"), nullable=False)
+    title = Column(String(255), nullable=False)
+    num_questions = Column(Integer, default=10, nullable=False)
+    difficulty_mode = Column(String(20), default='adaptive', nullable=False)  # adaptive|easy|medium|hard
+    time_limit_minutes = Column(Integer, nullable=True)  # Optional time limit
+    llm_model = Column(String(100), nullable=True)  # Optional LLM model for question generation
+    is_active = Column(Boolean, default=True, nullable=False)
+    created_at = Column(TIMESTAMP, default=datetime.utcnow, nullable=False)
+
+    # Extended question generation options
+    question_source = Column(String(20), default='notebook_only', nullable=False)  # notebook_only|extended
+    include_code_questions = Column(Boolean, default=False, nullable=False)  # Enable code-based questions
+
+    # Relationships
+    notebook = relationship("Notebook", backref="quizzes")
+    creator = relationship("User", backref="created_quizzes")
+    attempts = relationship("QuizAttempt", back_populates="quiz", cascade="all, delete-orphan")
+
+    def __repr__(self):
+        return f"<Quiz(id={self.id}, title='{self.title}', questions={self.num_questions}, mode='{self.difficulty_mode}')>"
+
+
+class QuizAttempt(Base):
+    """Individual quiz attempt by a test-taker.
+
+    Tracks progress through the quiz, answers given, and final score.
+    For adaptive quizzes, current_difficulty adjusts based on performance.
+    """
+    __tablename__ = "quiz_attempts"
+    __table_args__ = (
+        Index("idx_quiz_attempts_quiz", "quiz_id"),
+        Index("idx_quiz_attempts_started", "started_at"),
+        Index("idx_quiz_attempts_email", "taker_email"),
+    )
+
+    id = Column(UUID(), primary_key=True, default=uuid.uuid4)
+    quiz_id = Column(UUID(), ForeignKey("quizzes.id", ondelete="CASCADE"), nullable=False)
+    taker_name = Column(String(255), nullable=False)
+    taker_email = Column(String(255), nullable=True)  # Optional email for session resumption
+    score = Column(Integer, default=0, nullable=False)
+    total_questions = Column(Integer, nullable=False)
+    answers_json = Column(JSONB, nullable=True)  # [{question, user_answer, correct_answer, correct, topic, explanation}]
+    started_at = Column(TIMESTAMP, default=datetime.utcnow, nullable=False)
+    completed_at = Column(TIMESTAMP, nullable=True)
+    current_question = Column(Integer, default=0, nullable=False)  # 0-indexed question number
+    current_difficulty = Column(Integer, default=2, nullable=False)  # 1=easy, 2=medium, 3=hard
+
+    # Relationships
+    quiz = relationship("Quiz", back_populates="attempts")
+
+    def __repr__(self):
+        return f"<QuizAttempt(id={self.id}, taker='{self.taker_name}', score={self.score}/{self.total_questions})>"

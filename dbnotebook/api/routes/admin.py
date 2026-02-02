@@ -28,11 +28,12 @@ logger = logging.getLogger(__name__)
 admin_bp = Blueprint("admin", __name__, url_prefix="/api/admin")
 
 
-def create_admin_routes(app, db_manager, notebook_manager):
+def create_admin_routes(app, db_manager, notebook_manager, pipeline=None):
     """Create admin API routes.
 
     Args:
         app: Flask application instance
+        pipeline: LocalRAGPipeline instance (optional, for metrics)
         db_manager: DatabaseManager instance
         notebook_manager: NotebookManager instance
     """
@@ -584,6 +585,47 @@ def create_admin_routes(app, db_manager, notebook_manager):
 
         except Exception as e:
             logger.error(f"Error revoking SQL connection access: {e}")
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    # ========== Token Metrics ==========
+
+    @admin_bp.route("/metrics/tokens", methods=["GET"])
+    @require_permission(Permission.MANAGE_USERS)
+    def get_token_metrics():
+        """Get token usage metrics for admin dashboard.
+
+        Query params:
+            - days: Number of days to look back (default: 30)
+
+        Returns:
+            {
+                "success": true,
+                "summary": { "total_tokens", "total_cost", "total_queries", "avg_response_time" },
+                "by_model": [...],
+                "by_user": [...],
+                "by_day": [...]
+            }
+        """
+        try:
+            days = request.args.get("days", 30, type=int)
+            days = max(1, min(365, days))  # Clamp to reasonable range
+
+            query_logger = getattr(pipeline, "_query_logger", None) if pipeline else None
+            if not query_logger:
+                return jsonify({
+                    "success": False,
+                    "error": "Query logger not available"
+                }), 500
+
+            metrics = query_logger.get_admin_metrics(days=days)
+            return jsonify({
+                "success": True,
+                "days": days,
+                **metrics
+            })
+
+        except Exception as e:
+            logger.error(f"Error getting token metrics: {e}")
             return jsonify({"success": False, "error": str(e)}), 500
 
     # Register blueprint

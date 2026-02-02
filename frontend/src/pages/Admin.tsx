@@ -1,11 +1,12 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ArrowLeft, Users, BookOpen, Database } from 'lucide-react';
+import { ArrowLeft, Users, BookOpen, Database, Activity } from 'lucide-react';
 import { UserManagement } from '../components/Admin/UserManagement';
 import { NotebookManagement } from '../components/Admin/NotebookManagement';
 import { ConnectionManagement } from '../components/Admin/ConnectionManagement';
+import { TokenMetrics } from '../components/Admin/TokenMetrics';
 
-type AdminTab = 'users' | 'notebooks' | 'connections';
+type AdminTab = 'users' | 'notebooks' | 'connections' | 'metrics';
 
 export function Admin() {
   const [activeTab, setActiveTab] = useState<AdminTab>('users');
@@ -15,6 +16,7 @@ export function Admin() {
     { id: 'users' as const, label: 'Users', icon: Users },
     { id: 'notebooks' as const, label: 'Notebooks', icon: BookOpen },
     { id: 'connections' as const, label: 'DB Connections', icon: Database },
+    { id: 'metrics' as const, label: 'Usage Metrics', icon: Activity },
   ];
 
   return (
@@ -67,6 +69,7 @@ export function Admin() {
         {activeTab === 'users' && <UserManagement />}
         {activeTab === 'notebooks' && <NotebookManagement />}
         {activeTab === 'connections' && <ConnectionManagement />}
+        {activeTab === 'metrics' && <TokenMetrics />}
       </div>
     </div>
   );

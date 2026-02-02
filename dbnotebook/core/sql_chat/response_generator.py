@@ -6,9 +6,13 @@ Generates human-readable explanations of SQL query results.
 
 import json
 import logging
-from typing import Any, Dict, List, Optional
+import time
+from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
 from llama_index.core.llms.llm import LLM
+
+if TYPE_CHECKING:
+    from dbnotebook.core.observability.query_logger import QueryLogger
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +42,10 @@ class ResponseGenerator:
         data: List[Dict[str, Any]],
         columns: List[str],
         row_count: int,
-        error_message: Optional[str] = None
+        error_message: Optional[str] = None,
+        query_logger: Optional["QueryLogger"] = None,
+        user_id: Optional[str] = None,
+        session_id: Optional[str] = None
     ) -> str:
         """Generate natural language explanation of query results.
 
@@ -49,6 +56,9 @@ class ResponseGenerator:
             columns: Column names
             row_count: Total row count
             error_message: Error message if query failed
+            query_logger: Optional query logger for metrics tracking
+            user_id: Optional user ID for metrics
+            session_id: Optional session ID for metrics
 
         Returns:
             Natural language explanation
@@ -83,8 +93,31 @@ Based on these results, provide a clear, conversational answer to the user's que
 Answer:"""
 
         try:
+            start_time = time.time()
             response = self._llm.complete(prompt)
+            response_time_ms = int((time.time() - start_time) * 1000)
             explanation = response.text.strip()
+
+            # Log query metrics
+            if query_logger:
+                try:
+                    from dbnotebook.core.observability.token_counter import get_token_counter
+                    token_counter = get_token_counter()
+                    prompt_tokens = token_counter.count_tokens(prompt)
+                    completion_tokens = token_counter.count_tokens(explanation)
+                    model_name = self._llm.model if hasattr(self._llm, 'model') else 'unknown'
+
+                    query_logger.log_query(
+                        notebook_id=session_id or "sql-chat",
+                        user_id=user_id or "sql-chat-system",
+                        query_text=f"[SQL Chat Response Generation]",
+                        model_name=model_name,
+                        prompt_tokens=prompt_tokens,
+                        completion_tokens=completion_tokens,
+                        response_time_ms=response_time_ms
+                    )
+                except Exception as log_err:
+                    logger.warning(f"Failed to log SQL response generation metrics: {log_err}")
 
             # Clean up any preamble
             explanation = self._clean_response(explanation)

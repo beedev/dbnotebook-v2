@@ -16,7 +16,7 @@ import {
 } from 'react';
 import type { ModelGroup, ModelProvider } from '../types';
 
-export type AppView = 'chat' | 'analytics' | 'sql-chat' | 'query-api';
+export type AppView = 'chat' | 'documents' | 'analytics' | 'sql-chat' | 'query-api' | 'quizzes';
 
 interface AppContextValue {
   // Navigation

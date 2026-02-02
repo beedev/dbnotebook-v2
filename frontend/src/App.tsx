@@ -10,7 +10,7 @@ import { AppProviders, useNotebook, useDocument, SQLChatProvider, useApp } from 
 import { useNotebooks } from './hooks/useNotebooks';
 import { useModels } from './hooks/useModels';
 import { useToast } from './hooks/useToast';
-import { AnalyticsPage, QueryPage } from './pages';
+import { AnalyticsPage, QueryPage, QuizTakePage, QuizCreatePage, QuizResultsPage, QuizPage, DocumentsManagementPage, DocumentsLandingPage } from './pages';
 import { Login } from './pages/Login';
 import { Admin } from './pages/Admin';
 import { Profile } from './pages/Profile';
@@ -28,12 +28,9 @@ function AppContent() {
     isLoadingDocs,
     error: notebooksError,
     selectNotebook,
-    createNotebook,
     updateNotebook,
     deleteNotebook,
     uploadDocument,
-    deleteDocument,
-    toggleDocumentActive,
   } = useNotebooks();
 
   const {
@@ -106,28 +103,11 @@ function AppContent() {
     return result;
   };
 
-  // Handle document deletion with toast
-  const handleDeleteDocument = async (sourceId: string): Promise<boolean> => {
-    const result = await deleteDocument(sourceId);
-    if (result) {
-      success('Document removed');
-    } else {
-      showError('Failed to remove document');
-    }
-    return result;
-  };
 
   // Handle copy to clipboard
   const handleCopy = (content: string) => {
     navigator.clipboard.writeText(content);
     success('Copied to clipboard');
-  };
-
-  // Handle web sources added - refresh documents
-  const handleWebSourcesAdded = () => {
-    if (selectedNotebook) {
-      selectNotebook(selectedNotebook);
-    }
   };
 
   // Render Analytics page
@@ -166,17 +146,10 @@ function AppContent() {
       header={<Header />}
       sidebar={
         <Sidebar
-          // Document operations (still needed for toasts)
-          onUploadDocument={handleFileUpload}
-          onDeleteDocument={handleDeleteDocument}
-          onToggleDocument={toggleDocumentActive}
           // Notebook operations
           onSelectNotebook={selectNotebook}
-          onCreateNotebook={createNotebook}
           onDeleteNotebook={deleteNotebook}
           onUpdateNotebook={updateNotebook}
-          // Web search callback
-          onWebSourcesAdded={handleWebSourcesAdded}
         />
       }
     >
@@ -197,8 +170,9 @@ function AppContent() {
 function AppRoutes() {
   return (
     <Routes>
-      {/* Public route */}
+      {/* Public routes */}
       <Route path="/login" element={<Login />} />
+      <Route path="/quiz/:quizId" element={<QuizTakePage />} />
 
       {/* Protected routes */}
       <Route
@@ -224,6 +198,46 @@ function AppRoutes() {
         element={
           <ProtectedRoute>
             <Profile />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/documents"
+        element={
+          <ProtectedRoute>
+            <DocumentsLandingPage />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/quizzes"
+        element={
+          <ProtectedRoute>
+            <QuizPage />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/quizzes/create"
+        element={
+          <ProtectedRoute>
+            <QuizCreatePage />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/quizzes/:quizId/results"
+        element={
+          <ProtectedRoute>
+            <QuizResultsPage />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/notebook/:notebookId/documents"
+        element={
+          <ProtectedRoute>
+            <DocumentsManagementPage />
           </ProtectedRoute>
         }
       />

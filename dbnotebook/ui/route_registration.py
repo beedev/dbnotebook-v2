@@ -82,7 +82,7 @@ def register_all_routes(
 
     # Admin routes (admin auth required)
     try:
-        create_admin_routes(app, db_manager)
+        create_admin_routes(app, db_manager, notebook_manager, pipeline)
         registered.append("admin")
     except Exception as e:
         logger.warning(f"Failed to register admin routes: {e}")

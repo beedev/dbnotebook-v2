@@ -74,3 +74,42 @@ export interface AccessGrant {
   access_level: 'owner' | 'editor' | 'viewer' | 'user';
   granted_at?: string;
 }
+
+// Token Metrics types
+
+export interface TokenMetricsSummary {
+  total_tokens: number;
+  total_cost: number;
+  total_queries: number;
+  avg_response_time: number;
+}
+
+export interface ModelMetric {
+  model: string;
+  tokens: number;
+  cost: number;
+  queries: number;
+}
+
+export interface UserMetric {
+  user_id: string;
+  username: string;
+  tokens: number;
+  cost: number;
+  queries: number;
+}
+
+export interface DayMetric {
+  date: string;
+  tokens: number;
+  queries: number;
+}
+
+export interface TokenMetricsResponse {
+  success: boolean;
+  days: number;
+  summary: TokenMetricsSummary;
+  by_model: ModelMetric[];
+  by_user: UserMetric[];
+  by_day: DayMetric[];
+}

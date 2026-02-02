@@ -19,6 +19,18 @@ import type {
   GeneratedContent,
 } from '../types';
 
+import type { TokenMetricsResponse } from '../types/auth';
+
+import type {
+  Quiz,
+  QuizPublicInfo,
+  QuizResultsResponse,
+  CreateQuizRequest,
+  StartAttemptResponse,
+  SubmitAnswerResponse,
+  AttemptStatusResponse,
+} from '../types/quiz';
+
 const API_BASE = '/api';
 
 // Generic fetch wrapper with error handling
@@ -901,6 +913,375 @@ export async function clearChatV2History(
     const errorData = await response.json().catch(() => ({}));
     throw {
       error: errorData.error || 'Failed to clear history',
+      message: errorData.message || `HTTP ${response.status}`,
+      status: response.status,
+    };
+  }
+
+  return response.json();
+}
+
+// ============================================
+// Quiz API
+// ============================================
+
+/**
+ * Create a new quiz from notebook content (admin)
+ */
+export async function createQuiz(
+  request: CreateQuizRequest
+): Promise<{ quizId: string; link: string; title: string; questionSource?: string; includeCodeQuestions?: boolean }> {
+  const response = await fetch('/api/quiz/create', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      notebook_id: request.notebookId,
+      title: request.title,
+      num_questions: request.numQuestions || 10,
+      difficulty_mode: request.difficultyMode || 'adaptive',
+      time_limit: request.timeLimit,
+      llm_model: request.llmModel || null,
+      question_source: request.questionSource || 'notebook_only',
+      include_code_questions: request.includeCodeQuestions || false,
+    }),
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw {
+      error: errorData.error || 'Failed to create quiz',
+      message: errorData.message || `HTTP ${response.status}`,
+      status: response.status,
+    };
+  }
+
+  const data = await response.json();
+  return {
+    quizId: data.quiz_id,
+    link: data.link,
+    title: data.title,
+    questionSource: data.question_source,
+    includeCodeQuestions: data.include_code_questions,
+  };
+}
+
+/**
+ * Get available LLM models for quiz question generation
+ */
+export async function getQuizModels(): Promise<{ value: string; label: string }[]> {
+  const response = await fetch('/api/models');
+
+  if (!response.ok) {
+    console.warn('Failed to fetch quiz models, using default');
+    return [{ value: '', label: 'Default' }];
+  }
+
+  const data = await response.json();
+
+  // Transform the models to the expected format
+  const models: { value: string; label: string }[] = [
+    { value: '', label: 'Default' }
+  ];
+
+  if (data.models && Array.isArray(data.models)) {
+    for (const model of data.models) {
+      const provider = (model.provider || '').toLowerCase();
+      const name = model.name || '';
+      const displayName = model.display_name || name;
+
+      // Create value in "provider:model" format
+      const value = `${provider}:${name}`;
+      const label = `${displayName} (${model.provider || 'Unknown'})`;
+
+      models.push({ value, label });
+    }
+  }
+
+  return models;
+}
+
+/**
+ * List all quizzes created by current user (admin)
+ */
+export async function listQuizzes(): Promise<Quiz[]> {
+  const response = await fetch('/api/quiz/list');
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw {
+      error: errorData.error || 'Failed to list quizzes',
+      message: errorData.message || `HTTP ${response.status}`,
+      status: response.status,
+    };
+  }
+
+  const data = await response.json();
+  // Map snake_case to camelCase
+  return (data.quizzes || []).map((q: Record<string, unknown>) => ({
+    id: q.id,
+    notebookId: q.notebook_id,
+    notebookName: q.notebook_name,
+    title: q.title,
+    numQuestions: q.num_questions,
+    difficultyMode: q.difficulty_mode,
+    timeLimitMinutes: q.time_limit,
+    isActive: q.is_active !== false,
+    attemptCount: q.attempt_count || 0,
+    link: q.link,
+    createdAt: q.created_at,
+  }));
+}
+
+/**
+ * Get quiz results and statistics (admin)
+ */
+export async function getQuizResults(quizId: string): Promise<QuizResultsResponse> {
+  const response = await fetch(`/api/quiz/${quizId}/results`);
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw {
+      error: errorData.error || 'Failed to get quiz results',
+      message: errorData.message || `HTTP ${response.status}`,
+      status: response.status,
+    };
+  }
+
+  const data = await response.json();
+  return {
+    quiz: {
+      id: data.quiz.id,
+      notebookId: data.quiz.notebook_id,
+      notebookName: data.quiz.notebook_name,
+      title: data.quiz.title,
+      numQuestions: data.quiz.num_questions,
+      difficultyMode: data.quiz.difficulty_mode,
+      timeLimitMinutes: data.quiz.time_limit,
+      isActive: data.quiz.is_active,
+      attemptCount: data.statistics.total_attempts,
+      link: `/quiz/${data.quiz.id}`,
+      createdAt: data.quiz.created_at,
+    },
+    statistics: {
+      totalAttempts: data.statistics.total_attempts,
+      completedAttempts: data.statistics.completed_attempts,
+      avgScore: data.statistics.avg_score,
+      avgPercentage: data.statistics.avg_percentage,
+      passRate: data.statistics.pass_rate,
+    },
+    attempts: (data.attempts || []).map((a: Record<string, unknown>) => ({
+      id: a.id,
+      quizId: quizId,
+      takerName: a.taker_name,
+      score: a.score,
+      total: a.total,
+      percentage: a.percentage,
+      passed: a.passed,
+      startedAt: a.started_at,
+      completedAt: a.completed_at,
+    })),
+  };
+}
+
+/**
+ * Delete a quiz (admin)
+ */
+export async function deleteQuiz(quizId: string): Promise<void> {
+  const response = await fetch(`/api/quiz/${quizId}`, {
+    method: 'DELETE',
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw {
+      error: errorData.error || 'Failed to delete quiz',
+      message: errorData.message || `HTTP ${response.status}`,
+      status: response.status,
+    };
+  }
+}
+
+/**
+ * Get public quiz info (no auth required)
+ */
+export async function getQuizInfo(quizId: string): Promise<QuizPublicInfo> {
+  const response = await fetch(`/api/quiz/${quizId}/info`);
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw {
+      error: errorData.error || 'Quiz not found',
+      message: errorData.message || `HTTP ${response.status}`,
+      status: response.status,
+    };
+  }
+
+  const data = await response.json();
+  return {
+    quizId: data.quiz_id,
+    title: data.title,
+    numQuestions: data.num_questions,
+    difficultyMode: data.difficulty_mode,
+    timeLimit: data.time_limit,
+    hasTimeLimit: data.has_time_limit,
+    questionSource: data.question_source,
+    includeCodeQuestions: data.include_code_questions,
+  };
+}
+
+/**
+ * Start a quiz attempt (no auth required)
+ * If email is provided and there's an incomplete attempt, resumes it.
+ */
+export async function startQuizAttempt(
+  quizId: string,
+  takerName: string,
+  takerEmail?: string
+): Promise<StartAttemptResponse> {
+  const response = await fetch(`/api/quiz/${quizId}/start`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      taker_name: takerName,
+      taker_email: takerEmail || null,
+    }),
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw {
+      error: errorData.error || 'Failed to start quiz',
+      message: errorData.message || `HTTP ${response.status}`,
+      status: response.status,
+    };
+  }
+
+  const data = await response.json();
+  return {
+    attemptId: data.attempt_id,
+    quizTitle: data.quiz_title,
+    resumed: data.resumed || false,
+    question: data.question ? {
+      text: data.question.question,
+      question: data.question.question,
+      options: data.question.options,
+      difficulty: data.difficulty || 'medium',
+      correctAnswer: data.question.correct_answer,
+      explanation: data.question.explanation,
+      topic: data.question.topic,
+      type: data.question.type || 'multiple_choice',
+      code_snippet: data.question.code_snippet,
+    } : null,
+    questionNum: data.question_num,
+    total: data.total,
+    score: data.score,
+    timeLimit: data.time_limit,
+    difficulty: data.difficulty || 'medium',
+  };
+}
+
+/**
+ * Submit an answer to current question (no auth required)
+ */
+export async function submitQuizAnswer(
+  attemptId: string,
+  answer: 'A' | 'B' | 'C' | 'D'
+): Promise<SubmitAnswerResponse> {
+  const response = await fetch(`/api/quiz/attempt/${attemptId}/answer`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ answer }),
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw {
+      error: errorData.error || 'Failed to submit answer',
+      message: errorData.message || `HTTP ${response.status}`,
+      status: response.status,
+    };
+  }
+
+  const data = await response.json();
+  return {
+    correct: data.correct,
+    explanation: data.explanation,
+    correctAnswer: data.correct_answer,
+    completed: data.completed,
+    nextQuestion: data.next_question ? {
+      question: data.next_question.question,
+      options: data.next_question.options,
+      questionNum: data.next_question.question_num,
+      total: data.next_question.total,
+      difficulty: data.next_question.difficulty,
+      type: data.next_question.type || 'multiple_choice',
+      code_snippet: data.next_question.code_snippet,
+    } : undefined,
+    results: data.results ? {
+      score: data.results.score,
+      total: data.results.total,
+      percentage: data.results.percentage,
+      passed: data.results.passed,
+      answers: data.results.answers,
+    } : undefined,
+  };
+}
+
+/**
+ * Get current status of an attempt (for resuming)
+ */
+export async function getAttemptStatus(attemptId: string): Promise<AttemptStatusResponse> {
+  const response = await fetch(`/api/quiz/attempt/${attemptId}/status`);
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw {
+      error: errorData.error || 'Failed to get attempt status',
+      message: errorData.message || `HTTP ${response.status}`,
+      status: response.status,
+    };
+  }
+
+  const data = await response.json();
+  return {
+    completed: data.completed,
+    quizTitle: data.quiz_title,
+    takerName: data.taker_name,
+    questionNum: data.question_num,
+    total: data.total,
+    score: data.score,
+    currentQuestion: data.current_question ? {
+      question: data.current_question.question,
+      options: data.current_question.options,
+      difficulty: data.current_question.difficulty,
+    } : undefined,
+    results: data.results,
+  };
+}
+
+// ============================================
+// Admin Token Metrics API
+// ============================================
+
+/**
+ * Get token usage metrics for admin dashboard.
+ * @param days Number of days to look back (default: 30)
+ */
+export async function getAdminTokenMetrics(days: number = 30): Promise<TokenMetricsResponse> {
+  const response = await fetch(`/api/admin/metrics/tokens?days=${days}`, {
+    credentials: 'include',
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw {
+      error: errorData.error || 'Failed to fetch token metrics',
       message: errorData.message || `HTTP ${response.status}`,
       status: response.status,
     };

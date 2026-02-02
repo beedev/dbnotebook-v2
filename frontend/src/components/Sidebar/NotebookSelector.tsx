@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Plus, Trash2, Edit2, Check, X, FileText, MessageSquare } from 'lucide-react';
+import { Trash2, Edit2, Check, X, FileText, MessageSquare } from 'lucide-react';
 import type { Notebook } from '../../types';
 
 // Generate a consistent emoji icon based on notebook name
@@ -13,7 +13,6 @@ interface NotebookSelectorProps {
   notebooks: Notebook[];
   selectedNotebook: Notebook | null;
   onSelect: (notebook: Notebook | null) => void;
-  onCreate: (name: string, description?: string) => Promise<Notebook | null>;
   onDelete: (id: string) => Promise<boolean>;
   onUpdate: (id: string, data: Partial<Notebook>) => Promise<boolean>;
   isLoading?: boolean;
@@ -23,26 +22,12 @@ export function NotebookSelector({
   notebooks,
   selectedNotebook,
   onSelect,
-  onCreate,
   onDelete,
   onUpdate,
   isLoading,
 }: NotebookSelectorProps) {
-  const [isCreating, setIsCreating] = useState(false);
-  const [newName, setNewName] = useState('');
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState('');
-
-  const handleCreate = async () => {
-    if (!newName.trim()) return;
-
-    const notebook = await onCreate(newName.trim());
-    if (notebook) {
-      setNewName('');
-      setIsCreating(false);
-      onSelect(notebook);
-    }
-  };
 
   const handleUpdate = async (id: string) => {
     if (!editName.trim()) {
@@ -71,17 +56,6 @@ export function NotebookSelector({
 
   return (
     <div className="space-y-2">
-      {/* Create button */}
-      {!isCreating && (
-        <button
-          onClick={() => setIsCreating(true)}
-          className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg border border-dashed border-void-lighter text-text-dim hover:text-glow hover:border-glow/30 hover:bg-glow/5 transition-all duration-200"
-        >
-          <Plus className="w-4 h-4" />
-          <span className="text-sm">New Notebook</span>
-        </button>
-      )}
-
       {/* General chat option */}
       <button
         onClick={() => onSelect(null)}
@@ -106,43 +80,6 @@ export function NotebookSelector({
           <p className="text-xs text-text-dim">No document context</p>
         </div>
       </button>
-
-      {/* Create new notebook form */}
-      {isCreating && (
-        <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-void-surface">
-          <input
-            type="text"
-            value={newName}
-            onChange={(e) => setNewName(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') handleCreate();
-              if (e.key === 'Escape') {
-                setIsCreating(false);
-                setNewName('');
-              }
-            }}
-            placeholder="Notebook name"
-            autoFocus
-            className="flex-1 bg-transparent text-sm text-text placeholder:text-text-dim focus:outline-none"
-          />
-          <button
-            onClick={handleCreate}
-            disabled={!newName.trim()}
-            className="p-1 rounded text-success hover:bg-success/10 disabled:opacity-50"
-          >
-            <Check className="w-4 h-4" />
-          </button>
-          <button
-            onClick={() => {
-              setIsCreating(false);
-              setNewName('');
-            }}
-            className="p-1 rounded text-text-dim hover:bg-void-lighter"
-          >
-            <X className="w-4 h-4" />
-          </button>
-        </div>
-      )}
 
       {/* Notebook list */}
       <div className="space-y-1.5 max-h-[200px] overflow-y-auto">

@@ -583,7 +583,7 @@ class SQLChatService(BaseService):
         # Step 2: Check if this is a refinement
         memory = self._session_memories.get(session_id)
         if memory and memory.is_follow_up(nl_query):
-            return await self._execute_refinement(session, nl_query, memory)
+            return await self._execute_refinement(session, nl_query, memory, user_id=user_id)
 
         # Step 3: Classify intent
         t2 = time.time()
@@ -658,11 +658,18 @@ class SQLChatService(BaseService):
             # Set the dedicated GPT-4.1 LLM for SQL generation
             t6 = time.time()
             self._query_engine.set_llm(self._get_current_llm())
+
+            # Get query logger from pipeline for metrics tracking
+            query_logger = getattr(self._pipeline, '_query_logger', None)
+
             sql, success, intent = self._query_engine.generate_with_correction(
                 session.connection_id,
                 nl_query,
                 focused_schema,  # Only relevant tables from schema linking
-                dictionary_context=dictionary_context
+                dictionary_context=dictionary_context,
+                query_logger=query_logger,
+                user_id=user_id or session.user_id,
+                session_id=session_id
             )
             timings["6_sql_generation_ms"] = int((time.time() - t6) * 1000)
 
@@ -769,7 +776,10 @@ class SQLChatService(BaseService):
                     data=result.data,
                     columns=column_names,
                     row_count=result.row_count,
-                    error_message=result.error_message
+                    error_message=result.error_message,
+                    query_logger=query_logger,
+                    user_id=user_id or session.user_id,
+                    session_id=session_id
                 )
             timings["11_response_generation_ms"] = int((time.time() - t11) * 1000)
 
@@ -819,7 +829,8 @@ class SQLChatService(BaseService):
         self,
         session: SQLChatSession,
         refinement: str,
-        memory: SQLChatMemory
+        memory: SQLChatMemory,
+        user_id: Optional[str] = None
     ) -> QueryResult:
         """Execute a query refinement.
 
@@ -827,6 +838,7 @@ class SQLChatService(BaseService):
             session: Current session
             refinement: User's refinement instruction
             memory: Conversation memory
+            user_id: Optional user ID for metrics
 
         Returns:
             QueryResult
@@ -842,12 +854,18 @@ class SQLChatService(BaseService):
         request_llm = self._get_current_llm()
         self._query_engine.set_llm(request_llm)
 
+        # Get query logger from pipeline for metrics tracking
+        query_logger = getattr(self._pipeline, '_query_logger', None)
+
         # Generate refined SQL
         refined_sql = self._query_engine.refine_sql(
             session.connection_id,
             previous_sql,
             refinement,
-            session.schema
+            session.schema,
+            query_logger=query_logger,
+            user_id=user_id or session.user_id,
+            session_id=session.session_id
         )
 
         # Execute refined query
@@ -880,7 +898,10 @@ class SQLChatService(BaseService):
                 data=result.data,
                 columns=column_names,
                 row_count=result.row_count,
-                error_message=result.error_message
+                error_message=result.error_message,
+                query_logger=query_logger,
+                user_id=user_id or session.user_id,
+                session_id=session.session_id
             )
 
         # Update memory
