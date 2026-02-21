@@ -131,5 +131,5 @@ docker compose up --build
 
 ## License
 
-Private repo.  All rights reserved.
+Apache 2.0 License
 
